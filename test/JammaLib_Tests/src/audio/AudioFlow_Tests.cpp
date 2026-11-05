@@ -14,6 +14,7 @@
 #include "audio/ChannelMixer.h"
 #include "audio/AudioMixer.h"
 #include "audio/AudioHost.h"
+#include "ninjam/NinjamTimingCoordinator.h"
 #include "midi/MidiLoop.h"
 #include "actions/TriggerAction.h"
 #include "actions/GuiAction.h"
@@ -1872,6 +1873,21 @@ namespace audio
 			host.SetStations(std::move(stations));
 		}
 
+        static void PrepareRateClock(AudioHost& host, const std::shared_ptr<utils::Timer>& clock,
+            unsigned int sampleRate)
+        {
+            host._playbackRate.Configure(sampleRate);
+            host._playbackRateHistory.Prepare(1024u);
+            host._rateHistoryWindow = 512u;
+            host.SetTimingClock(clock);
+            host._tickCallback = [&host, clock](Time time, unsigned int frames,
+                const std::optional<io::UserConfig>& config, const std::optional<AudioStreamParams>& params)
+            { host.AdvanceBlock(clock.get(), time, frames, config, params); };
+        }
+
+        static void LimitRateHistory(AudioHost& host, std::size_t segments)
+        { host._playbackRateHistory.Prepare(segments); }
+
 		static int InvokeCallback(AudioHost& host, float* output, float* input,
 			unsigned int frames) noexcept
 		{
@@ -2116,6 +2132,281 @@ TEST(AudioCallbackRealtime, PreparedCallbackDoesNotAllocateOrFree)
 	EXPECT_EQ(0u, counts.Allocations);
 	EXPECT_EQ(0u, counts.Reallocations);
 	EXPECT_EQ(0u, counts.Frees);
+}
+
+TEST(AudioCallbackRealtime, PlaybackRateTransitionAdvancesPhysicalClockAndSourceOnceWithoutHeap)
+{
+    io::UserConfig config;
+    audio::AudioHost host(config);
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto station = MakeStation(1u);
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    std::array<float, 128u> output{};
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u));
+    ninjam::NinjamTimingCoordinator coordinator;
+    const auto edit = coordinator.SetLocalPlaybackRate(0.5);
+    ASSERT_TRUE(edit.DesiredTransport);
+    host.PublishDesiredTiming(*edit.DesiredTransport);
+    audio::PlaybackRate expected;
+    ASSERT_TRUE(expected.Configure(48000u));
+    ASSERT_TRUE(expected.SetTarget(0.5, edit.DesiredTransport->PlaybackRateRevision));
+    double sourceAdvance = 128.0;
+    for (unsigned int blockIndex = 0u; blockIndex < 8u; ++blockIndex)
+    {
+        const auto block = expected.DescribeBlock(128u);
+        sourceAdvance += block.Advance(128u);
+        ASSERT_TRUE(expected.Commit(block));
+    }
+    AudioCallbackAllocationProbe::Counts counts;
+    int result = 0;
+    {
+        AudioCallbackAllocationProbe::Scope probe;
+        for (unsigned int blockIndex = 0u; blockIndex < 8u; ++blockIndex)
+            result |= audio::AudioHostRealtimeTestAccess::InvokeCallback(host,
+                blockIndex % 2u ? nullptr : output.data(), nullptr, 128u);
+        counts = probe.GetCounts();
+    }
+    EXPECT_EQ(0, result);
+    EXPECT_EQ(9u * 128u, clock->SceneSamplePos());
+    EXPECT_EQ(clock->SceneSamplePos(), host.GetAudioSampleCounter());
+    EXPECT_NEAR(sourceAdvance, static_cast<double>(clock->AbsoluteSamplePos()) + clock->MusicalFractionAtAudioBoundary(), 1e-9);
+    const auto receipt = host.ObservePlaybackRate();
+    ASSERT_TRUE(receipt);
+    EXPECT_DOUBLE_EQ(expected.Current(), receipt->Applied);
+    EXPECT_EQ(168000u, receipt->MasterLength);
+    EXPECT_EQ(24000u, receipt->Grain);
+    EXPECT_EQ(7u, receipt->FullBpi);
+    EXPECT_DOUBLE_EQ(120.0 * expected.Current(), receipt->Tempo);
+    EXPECT_FALSE(receipt->Following);
+    EXPECT_EQ(0u, counts.Allocations);
+    EXPECT_EQ(0u, counts.Reallocations);
+    EXPECT_EQ(0u, counts.Frees);
+}
+
+TEST(AudioCallbackRealtime, FullRateHistoryDefersLatestControlAndContinuesAcceptedRamp)
+{
+    audio::AudioHost host(io::UserConfig{});
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    audio::AudioHostRealtimeTestAccess::LimitRateHistory(host, 2u);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ninjam::NinjamTimingCoordinator coordinator;
+    const auto slow = coordinator.SetLocalPlaybackRate(0.5);
+    ASSERT_TRUE(slow.DesiredTransport);
+    host.PublishDesiredTiming(*slow.DesiredTransport);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto before = host.ObservePlaybackRate();
+    ASSERT_TRUE(before);
+    const auto fast = coordinator.SetLocalPlaybackRate(2.0);
+    ASSERT_TRUE(fast.DesiredTransport);
+    host.PublishDesiredTiming(*fast.DesiredTransport);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto pending = host.ObservePlaybackRate();
+    ASSERT_TRUE(pending);
+    EXPECT_TRUE(pending->ControlPending);
+    EXPECT_FALSE(pending->Settled());
+    EXPECT_DOUBLE_EQ(2.0, pending->Target);
+    EXPECT_LT(pending->Applied, before->Applied);
+    EXPECT_EQ(before->Revision, pending->Revision);
+    for (unsigned int block = 0; block < 6u; ++block)
+        ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto accepted = host.ObservePlaybackRate();
+    ASSERT_TRUE(accepted);
+    EXPECT_FALSE(accepted->ControlPending);
+    EXPECT_EQ(fast.DesiredTransport->PlaybackRateRevision, accepted->Revision);
+    EXPECT_GT(accepted->Applied, pending->Applied);
+    EXPECT_EQ(1152u, clock->SceneSamplePos());
+}
+
+TEST(AudioCallbackRealtime, UnsupportedRemoteRateIsRejectedBeforeReplacingLocalGeometry)
+{
+    audio::AudioHost host(io::UserConfig{});
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto station = MakeStation(1u);
+    station->AddTake(MakeTake());
+    station->CommitChanges();
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    ninjam::NinjamDesiredTransportState desired;
+    desired.Version = desired.Generation = desired.SessionEpoch = desired.FollowRevision = 1u;
+    desired.Intent = ninjam::NinjamDesiredTimingIntent::Replacement;
+    desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::BlockSync;
+    desired.HasRemoteTiming = desired.HasRemotePhaseDeviceSample = true;
+    desired.SourceMasterIntervalLengthSamps = 64000u;
+    desired.RemoteMasterIntervalLengthSamps = 100u;
+    desired.RemoteGridStepSamps = 100u;
+    desired.BeatsPerInterval = 1u;
+    desired.TempoBpm = 120.0f;
+    host.PublishDesiredTiming(desired);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    EXPECT_EQ(168000u, clock->SeedSourceLength());
+    EXPECT_EQ(7u, clock->MasterBeatsPerInterval());
+    const auto receipt = host.ObservePlaybackRate();
+    ASSERT_TRUE(receipt);
+    EXPECT_TRUE(receipt->UnsupportedRemoteRate);
+    EXPECT_FALSE(receipt->Following);
+    EXPECT_EQ(128u, clock->SceneSamplePos());
+
+    desired.Version = desired.Generation = 2u;
+    desired.SourceMasterIntervalLengthSamps = 100u;
+    desired.RemoteMasterIntervalLengthSamps = 64000u;
+    host.PublishDesiredTiming(desired);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto slowReceipt = host.ObservePlaybackRate();
+    ASSERT_TRUE(slowReceipt);
+    EXPECT_TRUE(slowReceipt->UnsupportedRemoteRate);
+    EXPECT_FALSE(slowReceipt->Following);
+    EXPECT_EQ(168000u, clock->SeedSourceLength());
+    EXPECT_EQ(256u, clock->SceneSamplePos());
+}
+
+TEST(AudioCallbackRealtime, ManualDetachRestoresWholeLocalMasterReference)
+{
+    audio::AudioHost host(io::UserConfig{});
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    clock->SetMasterRecordingPlaybackRate(0.5);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    ninjam::NinjamDesiredTransportState follow;
+    follow.Version = follow.Generation = follow.SessionEpoch = follow.FollowRevision = 1u;
+    follow.Intent = ninjam::NinjamDesiredTimingIntent::Replacement;
+    follow.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::BlockSync;
+    follow.HasRemoteTiming = follow.HasRemotePhaseDeviceSample = true;
+    follow.SourceMasterIntervalLengthSamps = 168000u;
+    follow.RemoteMasterIntervalLengthSamps = 336000u;
+    follow.RemoteGridStepSamps = 48000u;
+    follow.BeatsPerInterval = 7u;
+    follow.TempoBpm = 60.0f;
+    follow.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
+    host.PublishDesiredTiming(follow);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ASSERT_EQ(336000u, clock->SeedSourceLength());
+    auto local = follow;
+    local.Version = 2u;
+    local.FollowRevision = 2u;
+    local.Intent = ninjam::NinjamDesiredTimingIntent::NoSync;
+    local.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+    local.HasRemoteTiming = false;
+    local.PlaybackRate = 0.5;
+    local.PlaybackRateRevision = 1u;
+    host.PublishDesiredTiming(local);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    EXPECT_EQ(168000u, clock->SeedSourceLength());
+    EXPECT_EQ(24000u, clock->QuantiseSamps());
+    EXPECT_EQ(7u, clock->MasterBeatsPerInterval());
+    EXPECT_DOUBLE_EQ(0.5, clock->MasterRecordingPlaybackRate());
+    EXPECT_EQ(256u, clock->SceneSamplePos());
+    ASSERT_TRUE(host.ObservePlaybackRate());
+    EXPECT_FALSE(host.ObservePlaybackRate()->Following);
+
+    follow.Version = follow.Generation = follow.FollowRevision = 3u;
+    host.PublishDesiredTiming(follow);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ASSERT_TRUE(host.ObservePlaybackRate()->Following);
+    // Session reset is quiescent and must discard the remembered pre-follow master.
+    clock->Clear();
+    host.InitialisePlaybackRate(1.0);
+    local.Version = local.FollowRevision = 4u;
+    local.PlaybackRate = 1.0;
+    local.PlaybackRateRevision = 2u;
+    host.PublishDesiredTiming(local);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    EXPECT_EQ(0u, clock->SeedSourceLength());
+    ASSERT_TRUE(host.ObservePlaybackRate());
+    EXPECT_DOUBLE_EQ(1.0, host.ObservePlaybackRate()->Applied);
+    EXPECT_FALSE(host.ObservePlaybackRate()->Following);
+}
+
+TEST(AudioCallbackRealtime, PinnedHistoryKeepsRemoteProjectionUntilWholeDetachCanBeAdmitted)
+{
+    audio::AudioHost host(io::UserConfig{});
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    audio::AudioHostRealtimeTestAccess::LimitRateHistory(host, 2u);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ninjam::NinjamDesiredTransportState follow;
+    follow.Version = follow.Generation = follow.SessionEpoch = follow.FollowRevision = 1u;
+    follow.Intent = ninjam::NinjamDesiredTimingIntent::Replacement;
+    follow.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::BlockSync;
+    follow.HasRemoteTiming = follow.HasRemotePhaseDeviceSample = true;
+    follow.SourceMasterIntervalLengthSamps = 168000u;
+    follow.RemoteMasterIntervalLengthSamps = 84000u;
+    follow.RemoteGridStepSamps = 12000u;
+    follow.BeatsPerInterval = 7u;
+    follow.TempoBpm = 240.0f;
+    follow.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
+    host.PublishDesiredTiming(follow);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ASSERT_EQ(84000u, clock->SeedSourceLength());
+    auto phaseEdit = follow;
+    phaseEdit.Version = phaseEdit.Generation = 2u;
+    phaseEdit.Intent = ninjam::NinjamDesiredTimingIntent::PhaseDiscipline;
+    phaseEdit.RemotePhaseDeviceSample = 256u;
+    phaseEdit.RemoteMasterPhaseSamps = 10000u;
+    const auto phaseBefore = clock->SampOffset();
+    host.PublishDesiredTiming(phaseEdit);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ASSERT_TRUE(host.ObservePlaybackRate());
+    EXPECT_TRUE(host.ObservePlaybackRate()->ControlPending);
+    EXPECT_EQ(phaseBefore + 128u, clock->SampOffset());
+    EXPECT_EQ(1u, host.ObservePlaybackRate()->AuthorityVersion);
+    auto local = follow;
+    local.Version = 3u;
+    local.FollowRevision = 2u;
+    local.Intent = ninjam::NinjamDesiredTimingIntent::NoSync;
+    local.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+    local.HasRemoteTiming = false;
+    local.PlaybackRate = 0.5;
+    local.PlaybackRateRevision = 1u;
+    host.PublishDesiredTiming(local);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto pending = host.ObservePlaybackRate();
+    ASSERT_TRUE(pending);
+    EXPECT_TRUE(pending->ControlPending);
+    EXPECT_FALSE(pending->Following);
+    EXPECT_DOUBLE_EQ(1.0, pending->Applied);
+    EXPECT_EQ(84000u, clock->SeedSourceLength());
+    const auto history = host.RateHistory().DescribeAt(256u);
+    ASSERT_TRUE(history);
+    EXPECT_EQ(84000u, history->RemoteIntervalLengthSamps);
+    host.PublishDesiredTiming(follow); // An in-flight older publication cannot resume authority.
+    for (unsigned int block = 0; block < 6u; ++block)
+        ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto accepted = host.ObservePlaybackRate();
+    ASSERT_TRUE(accepted);
+    EXPECT_FALSE(accepted->ControlPending);
+    EXPECT_FALSE(accepted->Following);
+    EXPECT_DOUBLE_EQ(0.5, accepted->Target);
+    EXPECT_LT(accepted->Applied, 1.0);
+    EXPECT_EQ(168000u, clock->SeedSourceLength());
 }
 
 TEST(AudioCallbackRealtime, AllocationProbeDetectsHeapAllocationAndFree)

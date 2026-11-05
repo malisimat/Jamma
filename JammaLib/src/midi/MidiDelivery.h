@@ -65,6 +65,9 @@ namespace midi
 				std::uint64_t Sequence = 0u;
 				MidiPlaybackBinding* Owner = nullptr; // Pinned by QueuedEvents.
 				bool IsRealtime = false;
+                std::uint32_t SourceCrossingSample = 0u, CompensationSamps = 0u;
+                double RevisedSourceDelta = 0.0;
+                bool PendingSourceEndpoint = false;
 			};
 			static constexpr std::size_t ScheduledCapacity = 1024u;
 			static constexpr std::size_t ScheduledReleaseReserve = 256u;

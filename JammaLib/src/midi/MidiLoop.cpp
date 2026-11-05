@@ -333,6 +333,23 @@ bool MidiLoop::NormalizeTriggerCapture(std::uint32_t length, std::int64_t rotati
 	return true;
 }
 
+bool MidiLoop::MapRecordedCaptureSamples(const audio::PlaybackRateHistory& history,
+	std::uint64_t physicalOrigin, const audio::SourcePosition& sourceOrigin, double recordingRate) noexcept
+{
+	if (_state != MidiLoopState::Recording) return false;
+	std::array<std::uint32_t, DefaultCapacity> mapped;
+	for (std::size_t i = 0u; i < _eventCount; ++i)
+	{
+		const auto point = history.Query(physicalOrigin + _events[i].sampleOffset);
+		if (!point) return false;
+		const auto sample = point->Coordinate.Difference(sourceOrigin) / recordingRate;
+		if (!std::isfinite(sample) || sample < 0.0 || sample > (std::numeric_limits<std::uint32_t>::max)()) return false;
+		mapped[i] = static_cast<std::uint32_t>(std::llround(sample));
+	}
+	for (std::size_t i = 0u; i < _eventCount; ++i) _events[i].sampleOffset = mapped[i];
+	return true;
+}
+
 void MidiLoop::ClampFullLoopCaptureNotes(std::uint32_t length, const MidiNoteSnapshot& held) noexcept
 {
 	if (_state != MidiLoopState::Recording || length == 0u || held.Held.none()) return;
@@ -963,9 +980,21 @@ void MidiLoop::ReadBlock(std::uint32_t globalSample,
 
 	std::uint32_t remaining = numSamples;
 	std::uint32_t cursor = globalSample;
+	// Bound repeated short-loop scans independently of source speed. Recovery
+	// retains failed releases for the existing retry path instead of stranding
+	// notes after an event-dense block exceeds the prepared callback budget.
+	std::size_t eventWork = 4u * DefaultCapacity;
+	unsigned int wrapsRemaining = 256u;
+	const auto eventCount = snapshot->PlaybackViewActive ? snapshot->PlaybackEventCount : snapshot->EventCount;
 
 	while (remaining > 0u)
 	{
+		if (eventCount > eventWork || wrapsRemaining-- == 0u)
+		{
+			FlushHeldNotes(cursor, sink);
+			break;
+		}
+		eventWork -= eventCount;
 		const std::uint32_t loopOffset =
 			static_cast<std::uint32_t>(cursor % loopLength);
 		const std::uint32_t roomInLoop = loopLength - loopOffset;
@@ -1345,9 +1374,14 @@ bool MidiLoop::SetQuantisation(const MidiQuantisationSettings& inherited,
 		_forcedQuantisationEnabled = forcedEnabled;
 		return true;
 	}
+	auto previousWithoutPhase = _quantisation;
+	previousWithoutPhase.PhaseOffsetSamps = settings.PhaseOffsetSamps;
+	const bool sharedPhaseOnly = _takePhaseTrajectory && previousWithoutPhase == settings
+		&& transportStartSamps == _quantisationTransportStartSamps;
 	if (_state == MidiLoopState::Playing &&
 		!PublishCompletedEvents(_events.data(), _eventCount, _loopLengthSamps,
-			_revision + 1u, settings, transportStartSamps, false, false, true))
+			_revision + 1u, settings, transportStartSamps, false, false, true,
+			sharedPhaseOnly ? PublicationKind::EditorEdit : PublicationKind::Recovery))
 		return false;
 	_quantisation = settings;
 	_inheritedQuantisation = inherited;
@@ -1435,7 +1469,7 @@ bool MidiLoop::MergePlaybackSeamNotes(PlaybackSnapshot& snapshot)
 	const auto length = static_cast<std::int64_t>(snapshot.LoopLengthSamps);
 	std::vector<Span> spans;
 	spans.reserve(count / 2u);
-	const auto& grid = snapshot.Quantisation;
+	const auto& grid = snapshot.PlaybackQuantisation;
 	const auto projected = MidiQuantisation::ProjectNotes(snapshot.Raw.data(), count,
 		snapshot.LoopLengthSamps, grid, snapshot.QuantisationTransportStartSamps);
 	std::vector<bool> pairedRelease(count, false);
@@ -1789,13 +1823,15 @@ bool MidiLoop::PublishCompletedEvents(const MidiEvent* raw, std::size_t count,
 	snapshot.Revision = revision;
 	snapshot.SourceRevision = sourceChanged ? revision : _sourceRevision;
 	snapshot.Quantisation = effectiveQuantisation;
+	snapshot.PlaybackQuantisation = effectiveQuantisation;
+	if (_takePhaseTrajectory) snapshot.PlaybackQuantisation.PhaseOffsetSamps = _loopQuantisationOverride.PhaseOffsetSamps.value_or(0);
 	snapshot.QuantisationTransportStartSamps = effectiveTransportStart;
 	ClassifyUnmatchedStarts(snapshot);
 	snapshot.QuantisationActive = effectiveQuantisation.Enabled
 		&& effectiveQuantisation.GridInterval() > 0u && effectiveQuantisation.GridDivisions() > 0u && count > 0u;
 	MidiQuantisation::BuildPlaybackEvents(snapshot.Raw.data(), count,
-		length, effectiveQuantisation, effectiveTransportStart, snapshot.Quantised.data(), false);
-	const bool shifted = effectiveQuantisation.PhaseOffsetSamps != 0 && length > 0u;
+		length, snapshot.PlaybackQuantisation, effectiveTransportStart, snapshot.Quantised.data(), false);
+	const bool shifted = snapshot.PlaybackQuantisation.PhaseOffsetSamps != 0 && length > 0u;
 	snapshot.QuantisedUnmatchedStarts.fill(0u);
 	snapshot.QuantisedContinuationRoots.fill(0u);
 	snapshot.PlaybackViewActive = MergePlaybackSeamNotes(snapshot) || snapshot.QuantisationActive || shifted;
@@ -2141,6 +2177,7 @@ std::vector<MidiLoop::ProjectedNote> MidiLoop::BuildEditorNotes(const EditState&
 	snapshot->EventCount = snapshot->PlaybackEventCount = source.EventCount;
 	snapshot->LoopLengthSamps = source.LoopLengthSamps;
 	snapshot->Quantisation = source.Quantisation;
+	snapshot->PlaybackQuantisation = source.Quantisation;
 	snapshot->QuantisationTransportStartSamps = source.QuantisationTransportStartSamps;
 	snapshot->SeamMergeWindowSamps = source.SeamMergeWindowSamps;
 	MidiQuantisation::BuildPlaybackEvents(source.Events.data(), source.EventCount, source.LoopLengthSamps,

@@ -10,6 +10,7 @@
 #include "PerformanceGroupPersistence.h"
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -124,6 +125,16 @@ std::optional<std::vector<int>> JamFile::ParseAllowedMidiChannels(const Json::Js
 	for (auto channel = 0u; channel < enabled.size(); ++channel)
 		if (enabled[channel]) channels.push_back(static_cast<int>(channel) + 1);
 	return channels;
+}
+
+double JamFile::ParsePlaybackRate(const Json::JsonPart& json, const char* key)
+{
+    const auto field = json.KeyValues.find(key);
+    if (field == json.KeyValues.end()) return 1.0;
+    const auto value = ParseFiniteNumber(field->second);
+    if (value && *value >= 0.5 && *value <= 2.0) return *value;
+    std::cout << "JamFile: invalid " << key << "; using 1.0" << std::endl;
+    return 1.0;
 }
 
 std::optional<double> JamFile::ParseFiniteNumber(const Json::JsonValue& value) noexcept
@@ -450,6 +461,10 @@ std::optional<JamFile> JamFile::FromStream(std::stringstream ss)
 				jam.Quantisation = text == "multiple" ? utils::Timer::QUANTISE_MULTIPLE : text == "power" ? utils::Timer::QUANTISE_POWER : utils::Timer::QUANTISE_OFF;
 			}
 		}
+		jam.PlaybackRate = ParsePlaybackRate(transport, "playbackRate");
+		jam.MasterRecordingPlaybackRate = ParsePlaybackRate(transport, "masterRecordingPlaybackRate");
+        if (const auto bpi = Json::GetUnsigned(transport, "masterBeatsPerInterval"); bpi && *bpi > 0u && *bpi <= 8192u)
+            jam.MasterBeatsPerInterval = static_cast<unsigned int>(*bpi);
 		const auto midiStateIter = transport.KeyValues.find("globalMidiQuantState");
 		if (midiStateIter != transport.KeyValues.end() && midiStateIter->second.index() == 4)
 		{
@@ -949,7 +964,10 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 	ss << kvInt("globalPhaseOffsetSamps", jam.GlobalPhaseOffsetSamps) << ",";
 	if (jam.TransportInitialised)
 		ss << kvStr("absoluteSamplePos", std::to_string(jam.AbsoluteSamplePos)) << ",";
-	ss << kvDouble("transportOffsetLoopFrac", transportOffsetLoopFrac);
+	ss << kvDouble("transportOffsetLoopFrac", transportOffsetLoopFrac)
+		<< "," << kvDouble("playbackRate", jam.PlaybackRate)
+		<< "," << kvDouble("masterRecordingPlaybackRate", jam.MasterRecordingPlaybackRate)
+        << "," << kvUlong("masterBeatsPerInterval", jam.MasterBeatsPerInterval);
 	ss << "},";
 	ss << quoted("stations") << ":[";
 
@@ -1024,6 +1042,8 @@ bool JamFile::ToStream(JamFile jam, std::stringstream& ss, std::string* error)
 				&& take.RecordingBeatsPerInterval > 0u && take.RecordingBeatsPerInterval <= take.RecordingMasterLengthSamps)
 				ss << "," << kvUlong("recordingMasterLengthSamps", take.RecordingMasterLengthSamps)
 					<< "," << kvUlong("recordingBeatsPerInterval", take.RecordingBeatsPerInterval);
+			ss << "," << kvDouble("recordingPlaybackRate", take.RecordingPlaybackRate);
+			if (take.MidiSourcePosition) ss << "," << kvStr("midiSourcePosition", std::to_string(*take.MidiSourcePosition));
 			ss << "," << kvUlong("midiPlayIndex", take.MidiPlayIndex)
 				<< "," << kvUlong("midiPlayLength", take.MidiPlayLength)
 				<< "," << kvStr("midiQuantTransportStart", std::to_string(take.MidiQuantTransportStart))
@@ -1649,6 +1669,15 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 	take.MidiQuantFraction = midiQuantFraction;
 	take.TakePhaseOffsetSamps = takePhaseOffsetSamps;
 	take.MidiPlayIndex = midiPlayIndex;
+	if ((iter = json.KeyValues.find("midiSourcePosition")) != json.KeyValues.end())
+	{
+		if (iter->second.index() != 4) return std::nullopt;
+		const auto& text = std::get<std::string>(iter->second);
+		std::int64_t position = 0;
+		const auto parsed = std::from_chars(text.data(), text.data() + text.size(), position);
+		if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size()) return std::nullopt;
+		take.MidiSourcePosition = position;
+	}
 	take.MidiPlayLength = midiPlayLength;
 	take.MidiQuantTransportStart = midiQuantTransportStart;
 	const auto baseIntervalText = Json::GetString(json, "midiBaseIntervalSamps");
@@ -1664,6 +1693,7 @@ std::optional<JamFile::LoopTake> JamFile::LoopTake::FromJson(Json::JsonPart json
 		take.BaseDivisions = static_cast<std::uint32_t>(*baseDivisions);
 	}
 
+	take.RecordingPlaybackRate = ParsePlaybackRate(json, "recordingPlaybackRate");
 	const auto recordingLength = Json::GetUnsigned(json, "recordingMasterLengthSamps");
 	const auto recordingBeats = Json::GetUnsigned(json, "recordingBeatsPerInterval");
 	// Missing or invalid optional geometry retains the legacy source ruler.

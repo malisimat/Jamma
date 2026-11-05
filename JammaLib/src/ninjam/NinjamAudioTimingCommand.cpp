@@ -23,6 +23,10 @@ namespace ninjam
 		_remoteMasterPhaseSamps.store(desired.RemoteMasterPhaseSamps, std::memory_order_relaxed);
 		_hasRemotePhaseDeviceSample.store(desired.HasRemotePhaseDeviceSample, std::memory_order_relaxed);
 		_remotePhaseDeviceSample.store(desired.RemotePhaseDeviceSample, std::memory_order_relaxed);
+		_playbackRate.store(desired.PlaybackRate, std::memory_order_relaxed);
+		_playbackRateRevision.store(desired.PlaybackRateRevision, std::memory_order_relaxed);
+        _gridOriginSamps.store(desired.GridOriginSamps, std::memory_order_relaxed);
+        _preserveRecordedMaster.store(desired.PreserveRecordedMaster, std::memory_order_relaxed);
 		_sequence.store(writingSequence + 1u, std::memory_order_release);
 		_hasPublication.store(true, std::memory_order_release);
 	}
@@ -55,6 +59,10 @@ namespace ninjam
 			desired.RemoteMasterPhaseSamps = _remoteMasterPhaseSamps.load(std::memory_order_relaxed);
 			desired.HasRemotePhaseDeviceSample = _hasRemotePhaseDeviceSample.load(std::memory_order_relaxed);
 			desired.RemotePhaseDeviceSample = _remotePhaseDeviceSample.load(std::memory_order_relaxed);
+			desired.PlaybackRate = _playbackRate.load(std::memory_order_relaxed);
+			desired.PlaybackRateRevision = _playbackRateRevision.load(std::memory_order_relaxed);
+            desired.GridOriginSamps = _gridOriginSamps.load(std::memory_order_relaxed);
+            desired.PreserveRecordedMaster = _preserveRecordedMaster.load(std::memory_order_relaxed);
 			const auto after = _sequence.load(std::memory_order_acquire);
 			if (before == after)
 				return desired;

@@ -37,6 +37,7 @@ namespace engine
 }
 
 namespace midi { class MidiLoop; }
+namespace audio { class PlaybackRateHistory; }
 
 namespace io
 {
@@ -59,7 +60,7 @@ namespace engine
 		std::optional<QuantisationTiming> TapAtSample(std::uint64_t samplePosition,
 			unsigned int sampleRate,
 			unsigned long masterLoopSamps,
-			const QuantisationPolicy& policy);
+			const QuantisationPolicy& policy, std::optional<double> sourceGap = std::nullopt);
 
 		// Returns the current timing estimate without advancing the tracker. With a
 		// master loop, the estimate snaps to a clean master divisor; without one,
@@ -71,6 +72,7 @@ namespace engine
 		// Returns true once at least two taps have been received and a gap estimate exists.
 		bool HasEstimate() const noexcept;
 		double EstimatedGapSamps() const noexcept { return _estimatedGapSamps.value_or(0.0); }
+		std::optional<std::uint64_t> LastTapSample() const noexcept { return _lastTapSample; }
 
 	private:
 		std::optional<std::uint64_t> _lastTapSample;
@@ -119,7 +121,7 @@ namespace engine
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 			std::int64_t originSamps,
-			const std::vector<std::shared_ptr<engine::Station>>& stations, bool preserveRecordedMaster = false);
+			const std::vector<std::shared_ptr<engine::Station>>& stations, bool preserveRecordedMaster = false, unsigned long legacySourceLength = 0ul);
 		// Scene-serialized setup for a newly added local station.
 		void InitialiseStationMidiGrid(const std::shared_ptr<engine::Station>& station) const;
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
@@ -129,7 +131,8 @@ namespace engine
 		bool HandleTapTempo(std::uint64_t estimatedSampleAt,
 			unsigned int sampleRate,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const io::UserConfig& cfg, bool editRemoteMaster = false);
+			const io::UserConfig& cfg, bool editRemoteMaster = false,
+			const audio::PlaybackRateHistory* rateHistory = nullptr);
 		bool CanEditMasterTempo(const std::vector<std::shared_ptr<Station>>& stations) const;
 		bool HasActivatedLocalMaster(const std::vector<std::shared_ptr<Station>>& stations) const;
 
@@ -282,6 +285,7 @@ namespace engine
 		bool _previousSeedUsesPowers = true;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		RemoteTransportGeometry _acceptedRemoteGrid{};
+		unsigned long _acceptedRemoteSourceLength = 0ul;
 		RemoteTransportGeometry _recordingRemoteGrid{}; // Last accepted baseline survives Stay local.
 		std::int32_t _MasterAudioReferenceOffsetSamps() const noexcept;
 		midi::MidiQuantisationFraction _defaultMidiQuantisationFraction = midi::MidiQuantisationFraction::Quarter;

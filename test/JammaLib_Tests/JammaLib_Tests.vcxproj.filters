@@ -232,6 +232,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
+    <ClInclude Include="src\gui\GuiHudTestAccess.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="src">
@@ -267,5 +268,19 @@
     <Filter Include="src\ninjam">
       <UniqueIdentifier>{3a7e1c9d-52f6-4b88-9d3a-1e6f8c0a2b57}</UniqueIdentifier>
     </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\audio\PlaybackRate_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\PlaybackRateIntegration_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\LoopPlaybackRate_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="src\audio\LocalMetronomeTiming_Tests.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

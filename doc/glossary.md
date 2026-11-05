@@ -69,7 +69,12 @@ Audio-callback work must remain bounded, allocation-free, exception-free, lock-f
 | Phase | A position within one repeating interval or one entity's length. Phase wraps to zero at the end, so always name the interval or entity: master phase, remote-master phase, audio-loop phase, and so on. |
 | Per-entity phase | A cursor wrapped by that audio/MIDI/automation entity's own logical length. Different entities may intentionally have different phases and lengths. |
 | Remote timing | A validated NINJAM observation containing authoritative BPM, full BPI, interval geometry, phase, sample rate, and observation anchors. It is converted to device-rate units before application. |
-| Local timing | Device-rate transport and loop advancement owned locally, including intentionally different loop lengths and offsets. It remains distinct from remote authority. |
+| Local timing | Musical transport and source advancement owned locally, including intentionally different loop lengths and offsets. Applied playback rate changes source progress per device frame; physical device and Scene counters remain unchanged. It remains distinct from remote authority. |
+| Applied playback rate | The audio-owned global multiplier after smoothing. Local take source progress is this multiplier divided by the take's recording playback rate. Remote follow owns its source ratio separately. |
+| Recording playback rate | The frozen global-rate reference at an independent take's effective content start. Overdub and punch inherit it. The master keeps its own reference for interpreting its source interval and effective tempo. |
+| Device frame | One physical sample-time step at the audio device rate. Latency, callback sizes, network cadence and MIDI hardware timestamps use this ruler. |
+| Source coordinate | Unwrapped progress through recorded material before each child wraps by its own length and anchor. It has a wide integral part and a retained fractional part; it is not a device timestamp. |
+| Rate history | Prepared, bounded metadata mapping accepted physical frame intervals to source progress and historical master positions. It contains trajectory descriptors, not a smoothing audio buffer. Capture consumers pin the history they still need. |
 | BPM | Beats per minute: tempo, not interval length or phase. |
 | BPI | Beats per NINJAM interval. Remote authority requires the full observed BPI; disconnected local inference is a separate Quantiser calculation. |
 | Grain | The exact local audio construction unit used when deriving local loop geometry. It is not a remote beat and need not equal a quantisation-grid step. |

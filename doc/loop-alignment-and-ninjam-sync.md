@@ -1,5 +1,13 @@
 # Loop alignment and NINJAM sync
 
+Global playback rate adds a continuous audible source trajectory to the timing
+maps described here. See [Global playback rate](global-playback-rate.md) for
+local recording-rate references, smooth authority changes, prepared reader
+limits, and the explicit Request server BPM/BPI action. A map supplies target
+geometry and alignment; it does not overwrite an active fractional cursor on
+every callback. Accepted authority can therefore be **Aligning** before audible
+phase reaches **Following** tolerance.
+
 This document explains the timing model used when Jamma follows a NINJAM
 transport.
 

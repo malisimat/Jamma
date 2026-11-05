@@ -15,6 +15,13 @@ namespace midi
 
 namespace engine
 {
+    struct RecordedMasterReference
+    {
+        unsigned long LengthSamps = 0ul;
+        unsigned int Bpi = 0u;
+        double RecordingPlaybackRate = 1.0;
+    };
+
     // A chosen source, not a transport ruler. Missing AudioLoopId means take provenance.
     struct ChosenMasterReference
     {

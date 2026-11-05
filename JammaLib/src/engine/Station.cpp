@@ -679,7 +679,9 @@ void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock, std:
 	const auto rawOrigin = take->CaptureTiming().TriggerSample.value_or(
 		request->Timing.RecordOrigin + static_cast<std::uint32_t>(take->CaptureTiming().DelaySamps));
 	const auto elapsed = static_cast<std::int32_t>(blockStartSample - rawOrigin);
-	auto phase = static_cast<std::int64_t>(elapsed) % request->Timing.LengthSamps;
+	const auto sourcePosition = take->CaptureSourcePositionAtDeviceSample(blockStartSample);
+	auto phase = (sourcePosition ? static_cast<std::int64_t>(std::floor(*sourcePosition))
+		- take->CaptureTiming().DelaySamps : static_cast<std::int64_t>(elapsed)) % request->Timing.LengthSamps;
 	if (phase < 0) phase += request->Timing.LengthSamps;
 	if (!take->ActivateFirstMasterMidiAtAudioBoundary(static_cast<unsigned long>(phase),
 		rawOrigin)) return;
@@ -689,6 +691,7 @@ void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock, std:
 	{
 		clock.SetQuantisation(request->Timing.GrainSamps, request->Timing.Type);
 		clock.SetSeedSourceLength(request->Timing.LengthSamps);
+		clock.SetMasterRecordingPlaybackRate(take->RecordingPlaybackRate());
 		// This take establishes master zero at its compensated content origin.
 		clock.SetMasterLoopSampleOffset(take->MidiPlayIndex());
 	}
@@ -697,6 +700,97 @@ void Station::ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock, std:
 	_firstMasterRecordingStatus.store(installMaster ? 1u : 2u, std::memory_order_relaxed);
 	clock.ConsumeRecordingSeedAtAudioBoundary(request->Timing.Version);
 	_firstMasterRecordingConsumed.store(request->Timing.Version, std::memory_order_release);
+}
+
+void Station::SetCaptureInputHistoryAtAudioBoundary(const audio::InputHistoryView& history) noexcept
+{
+	auto state = _BorrowAudioState();
+	if (state) for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->SetCaptureInputHistoryAtAudioBoundary(history);
+}
+
+bool Station::PlaybackRateAligned() const noexcept
+{
+	auto state = _BorrowAudioState();
+	if (!state.ReadSucceeded()) return false;
+	if (state) for (const auto& take : state->OwnedLoopTakes)
+		if (take && !take->PlaybackRateAligned()) return false;
+	return true;
+}
+
+void Station::ResetPlaybackRateHistoryForDevice(unsigned int sampleRate)
+{
+	_captureMusicalHistory.store(nullptr, std::memory_order_release);
+	for (const auto& take : GetLoopTakeSnapshot())
+		if (take) take->ResetPlaybackRateHistoryForDevice(sampleRate);
+}
+
+void Station::CancelRateCapturesBefore(std::uint64_t earliest) noexcept
+{
+	auto state = _BorrowAudioState();
+	if (state) for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->CancelRateCaptureBefore(earliest);
+}
+
+std::uint64_t Station::RequiredRateHistoryStart(std::uint64_t fallback) const noexcept
+{
+	auto state = _BorrowAudioState();
+	if (!state.ReadSucceeded()) return 0u;
+	if (state) for (const auto& take : state->OwnedLoopTakes)
+		if (take) fallback = (std::min)(fallback, take->RequiredRateHistoryStart(fallback));
+	return fallback;
+}
+
+std::optional<RecordedMasterReference> Station::FirstRecordedMasterReference() const noexcept
+{
+    const auto state = _BorrowAudioState();
+    if (!state) return std::nullopt;
+    for (const auto& take : state->OwnedLoopTakes)
+        if (take && take->IsIndependentRecording() && take->IsCompletedRecording())
+        {
+            const auto geometry = take->RecordingGeometry();
+            if (geometry.IntervalLengthSamps && geometry.Bpi)
+                return RecordedMasterReference{geometry.IntervalLengthSamps, geometry.Bpi, take->RecordingPlaybackRate()};
+        }
+    return std::nullopt;
+}
+
+std::optional<bool> Station::CanApplyRemotePlaybackRate(unsigned long remoteLength, unsigned long legacySourceLength) const noexcept
+{
+    if (remoteLength == 0ul) return false;
+    const auto state = _BorrowAudioState();
+    if (!state.ReadSucceeded()) return std::nullopt;
+    if (!state) return true;
+    for (const auto& take : state->OwnedLoopTakes)
+    {
+        if (!take) continue;
+        const auto recordedLength = take->RecordingMasterLengthSamps();
+        const auto sourceLength = recordedLength ? recordedLength : legacySourceLength;
+        // The fixed reader prepares up to 5x including the 25% seek budget.
+        const auto slope = sourceLength ? static_cast<double>(sourceLength) / remoteLength : 1.0;
+        if (slope < 0.25 || slope > 4.0) return false;
+    }
+    return true;
+}
+
+bool Station::CanBeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std::uint64_t deviceStart,
+	bool followingRemote, double legacyRemoteRate, bool allowContinuation) noexcept
+{
+	auto state = _BorrowAudioState();
+	if (!state.ReadSucceeded()) return false;
+	if (state) for (const auto& take : state->OwnedLoopTakes)
+		if (take && !take->CanBeginPlaybackRateBlock(block, deviceStart, followingRemote, legacyRemoteRate, allowContinuation)) return false;
+	return true;
+}
+
+void Station::BeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std::uint64_t deviceStart,
+	const audio::PlaybackRateHistory* history, bool followingRemote, double legacyRemoteRate) noexcept
+{
+	_captureMusicalHistory.store(history, std::memory_order_release);
+	auto state = _BorrowAudioState();
+	if (!state) return;
+	for (const auto& take : state->OwnedLoopTakes)
+		if (take) take->BeginPlaybackRateBlock(block, deviceStart, history, followingRemote, legacyRemoteRate);
 }
 
 void Station::BeginCaptureAudioBoundary(std::uint32_t blockStartSample,
@@ -793,14 +887,15 @@ void Station::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps, 
 		if (take) take->RestoreMappedSourceCoordinate(sourceCoordinateSamps, sceneSample);
 }
 
-void Station::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
+void Station::SetLocalTransportOffsetSamps(long long targetSamps, double masterRecordingRate,
+    unsigned long remoteLength, unsigned long legacySourceLength) noexcept
 {
 	auto state = _BorrowAudioState();
 	if (!state)
 		return;
 
 	for (const auto& take : state->OwnedLoopTakes)
-		if (take) take->SetLocalTransportOffsetSamps(targetSamps);
+		if (take) take->SetLocalTransportOffsetSamps(targetSamps, masterRecordingRate, remoteLength, legacySourceLength);
 }
 
 void Station::OnBlockWriteChannel(unsigned int channel,
@@ -969,6 +1064,7 @@ ActionResult Station::OnAction(TriggerAction action)
 		recordingClock = std::make_shared<utils::Timer>();
 		recordingClock->SetQuantisation(pendingSeed->GrainSamps, pendingSeed->Type);
 		recordingClock->SetSeedSourceLength(pendingSeed->LengthSamps);
+		recordingClock->SetMasterRecordingPlaybackRate(pendingSeed->RecordingPlaybackRate);
 	}
 	const auto pendingElapsed = pendingSeed ? static_cast<std::int32_t>(
 		_captureDeviceBoundary.load(std::memory_order_acquire) - pendingSeed->RecordOrigin) : 0;
@@ -986,7 +1082,9 @@ ActionResult Station::OnAction(TriggerAction action)
         TriggerCaptureTiming timing;
         timing.TriggerSample = action.MidiSample.value_or(_captureDeviceBoundary.load(std::memory_order_acquire));
         timing.DelaySamps = *delay;
-        if (_midiFormatEpochKnown.load(std::memory_order_acquire))
+		if (pendingSeed) timing.PendingMasterDeviceOrigin = pendingSeed->RecordOrigin;
+        if (_midiFormatEpochKnown.load(std::memory_order_acquire)
+			&& !_captureMusicalHistory.load(std::memory_order_acquire))
         {
             bool observed = false;
             for (unsigned int attempt = 0u; attempt < 4u; ++attempt)
@@ -1015,6 +1113,9 @@ ActionResult Station::OnAction(TriggerAction action)
             return std::nullopt;
         const auto guard = static_cast<std::uint32_t>((static_cast<std::uint64_t>(rate) * 10u + 999u) / 1000u);
         timing.SeamSamps = *delay > 0 ? (std::min)(*capacity, static_cast<unsigned int>(*delay) + guard) : 0u;
+        const auto sourceHistoryWindow = static_cast<std::uint64_t>(rate) * 2u + constants::MaxLoopFadeSamps + 128u;
+        if (static_cast<std::uint64_t>(timing.SourceAgeSamps) + timing.SeamSamps + 128u > sourceHistoryWindow)
+            return std::nullopt; // Reject before creating material; the callback cannot grow history.
         if (!action.InputChannels.empty() && _captureHistoryEpochKnown.load(std::memory_order_acquire) &&
             midi::MidiSampleDelta(*timing.TriggerSample - timing.SeamSamps,
                 _captureEarliestPhysicalSample.load(std::memory_order_relaxed)) < 0)
@@ -1065,8 +1166,8 @@ ActionResult Station::OnAction(TriggerAction action)
             newLoopTake->RecordMidiEvent(entry.Event, entry.Device, *timing.TriggerSample);
         if (!midiInputChannels.empty()) _captureHistory.TrackTarget(newLoopTake);
 		if (pendingSeed && !IsRemote())
-			newLoopTake->SetMidiBaseGrid(static_cast<std::uint32_t>(pendingSeed->LengthSamps),
-				static_cast<std::uint32_t>(pendingSeed->LengthSamps / pendingSeed->GrainSamps));
+			newLoopTake->SetTransportMidiBaseGrid(static_cast<std::uint32_t>(pendingSeed->LengthSamps),
+				static_cast<std::uint32_t>(pendingSeed->LengthSamps / pendingSeed->GrainSamps), pendingSeed->RecordingPlaybackRate);
 		res.SourceId = "";
 		res.TargetId = newLoopTake->Id();
 		res.TriggerTargetTake = newLoopTake;
@@ -1096,6 +1197,13 @@ ActionResult Station::OnAction(TriggerAction action)
 			}
 		}
 
+		if (loopTake && loopTake.value()->HasCaptureRateMapping())
+		{
+			const auto mapped = loopTake.value()->CaptureSourceLengthAtDeviceSample(action.MidiSample.value_or(
+				_captureDeviceBoundary.load(std::memory_order_acquire)));
+			if (!mapped) { loopTake.value()->CancelCapture(true); return ActionResult::NoAction(); }
+			loopLength = *mapped;
+		}
 		const auto requestedLength = loopLength;
 		if (0 == loopLength)
 		{
@@ -1120,7 +1228,11 @@ ActionResult Station::OnAction(TriggerAction action)
 			{
 				if (clockWasSeeded)
 				{
-					auto quantised = recordingClock->QuantiseLength(action.SampleCount);
+					const auto ruler = loopTake ? loopTake.value()->RecordingPlaybackRate()
+						/ recordingClock->MasterRecordingPlaybackRate() : 1.0;
+					auto quantised = recordingClock->QuantiseLength(static_cast<unsigned long>(std::llround(loopLength * ruler)));
+					std::get<0>(quantised) = static_cast<unsigned long>(std::llround(std::get<0>(quantised) / ruler));
+					std::get<1>(quantised) = static_cast<int>(static_cast<std::int64_t>(loopLength) - std::get<0>(quantised));
 					if (loopTake && recordingClock->Quantisation() != utils::Timer::QUANTISE_OFF)
 					{
 						const auto& take = *loopTake.value();
@@ -1129,7 +1241,7 @@ ActionResult Station::OnAction(TriggerAction action)
 						if (captured.IntervalLengthSamps == 0ul)
 							captured = { grid.RemoteIntervalSamps, grid.RemoteBpi };
 						if (captured.IntervalLengthSamps > 0ul && captured.Bpi > 0u)
-							quantised = captured.QuantiseLength(action.SampleCount, recordingClock->Quantisation() == utils::Timer::QUANTISE_POWER);
+							quantised = captured.QuantiseLength(loopLength, recordingClock->Quantisation() == utils::Timer::QUANTISE_POWER);
 					}
 					auto [quantisedLength, err] = quantised;
 					loopLength = quantisedLength;
@@ -1149,7 +1261,7 @@ ActionResult Station::OnAction(TriggerAction action)
                     }
 					firstSeed = _clock->ReserveRecordingSeedOnOwner({ 0u, previewClock->QuantiseSamps(),
 						loopLength, previewClock->Quantisation(), *loopTake.value()->MidiRecordStartSample()
-                            - static_cast<std::uint32_t>(loopTake.value()->CaptureTiming().DelaySamps) });
+                            - static_cast<std::uint32_t>(loopTake.value()->CaptureTiming().DelaySamps), loopTake.value()->RecordingPlaybackRate() });
 					if (firstSeed && !IsRemote())
 						loopTake.value()->SetMidiBaseGrid(static_cast<std::uint32_t>(loopLength),
 							static_cast<std::uint32_t>(loopLength / firstSeed->GrainSamps));
@@ -1180,7 +1292,7 @@ ActionResult Station::OnAction(TriggerAction action)
                             _captureDeviceBoundary.load(std::memory_order_acquire));
                         firstSeed = _clock->ReserveRecordingSeedOnOwner({ 0u, previewClock->QuantiseSamps(),
                             loopLength, previewClock->Quantisation(), origin
-                                - static_cast<std::uint32_t>(loopTake.value()->CaptureTiming().DelaySamps) });
+                                - static_cast<std::uint32_t>(loopTake.value()->CaptureTiming().DelaySamps), loopTake.value()->RecordingPlaybackRate() });
                         if (firstSeed && !IsRemote())
                             loopTake.value()->SetMidiBaseGrid(static_cast<std::uint32_t>(loopLength),
                                 static_cast<std::uint32_t>(loopLength / firstSeed->GrainSamps));
@@ -1289,6 +1401,13 @@ ActionResult Station::OnAction(TriggerAction action)
 	case TriggerAction::TRIGGER_OVERDUB_END:
 	{
 		auto loopLength = action.SampleCount;
+		if (loopTake && loopTake.value()->HasCaptureRateMapping())
+		{
+			const auto mapped = loopTake.value()->CaptureSourceLengthAtDeviceSample(action.MidiSample.value_or(
+				_captureDeviceBoundary.load(std::memory_order_acquire)));
+			if (!mapped) { loopTake.value()->CancelCapture(true); return ActionResult::NoAction(); }
+			loopLength = *mapped;
+		}
 		const auto requestedLength = loopLength;
 
 		if (0 == loopLength)
@@ -1311,14 +1430,16 @@ ActionResult Station::OnAction(TriggerAction action)
 			{
 				if (recordingClock->IsQuantisable())
 				{
-					auto [quantisedLength, err] = recordingClock->QuantiseLength(action.SampleCount);
-					loopLength = quantisedLength;
-					errorSamps = err;
+					const auto ruler = loopTake ? loopTake.value()->RecordingPlaybackRate()
+						/ recordingClock->MasterRecordingPlaybackRate() : 1.0;
+					const auto quantised = recordingClock->QuantiseLength(static_cast<unsigned long>(std::llround(loopLength * ruler)));
+					loopLength = static_cast<unsigned long>(std::llround(std::get<0>(quantised) / ruler));
+					errorSamps = static_cast<int>(static_cast<std::int64_t>(requestedLength) - loopLength);
 				}
 				else
 				{
                     auto previewClock = std::make_shared<utils::Timer>();
-                    _TrySeedClockFromFirstLoop(previewClock, action.SampleCount, cfg, streamParams,
+                    _TrySeedClockFromFirstLoop(previewClock, loopLength, cfg, streamParams,
                         loopTake.has_value() ? loopTake.value()->Id() : "none");
                     loopLength = previewClock->SeedSourceLength();
                     if (loopTake && !loopTake.value()->AdmitTriggerCaptureLength(loopLength))
@@ -1619,15 +1740,16 @@ std::shared_ptr<LoopTake> Station::AddTake()
 }
 
 void Station::SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
-	std::int64_t originSamps, bool resetBaseGrid)
+	std::int64_t originSamps, bool resetBaseGrid, unsigned long legacySourceLength)
 {
 	_remoteMidiGrid = geometry;
 	_remoteMidiGridOriginSamps = originSamps;
+	_remoteMidiSourceLength = legacySourceLength;
 	const auto apply = [&](const auto& takes) {
 		for (const auto& take : takes)
 			if (take)
 			{
-				take->SetRemoteMidiQuantisationGrid(geometry, originSamps);
+				take->SetRemoteMidiQuantisationGrid(geometry, originSamps, legacySourceLength);
 				if (resetBaseGrid) take->SetMidiBaseGrid(0u, 0u);
 			}
 	};
@@ -1661,7 +1783,7 @@ void Station::AddTake(std::shared_ptr<LoopTake> take)
 	take->SetLogging(_loggingConfig);
 	take->SetReceiver(ActionReceiver::shared_from_this());
 	take->SetGlobalMidiQuantState(_globalMidiQuantState);
-	take->SetRemoteMidiQuantisationGrid(_remoteMidiGrid, _remoteMidiGridOriginSamps);
+	take->SetRemoteMidiQuantisationGrid(_remoteMidiGrid, _remoteMidiGridOriginSamps, _remoteMidiSourceLength);
 	take->SetInitialLocalTransportOffsetSamps(TransportOffsetSamps());
 	_backLoopTakes.push_back(take);
 	_ApplyMidiQuantisationPhaseOffset();

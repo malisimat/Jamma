@@ -1623,3 +1623,62 @@ TEST(NinjamTimingCoordinator, SequentialFailedMasterChoicesPreserveUnresolvedFol
     EXPECT_EQ(8u,coordinator.PendingTempoChange()->Bpi);
     EXPECT_EQ(ninjam::NinjamLocalFollowPolicy::NoSync,coordinator.FollowPolicy());
 }
+
+TEST(NinjamTimingCoordinator, ExplicitServerRequestRejectsStaleRatePendingMasterAndDisconnectedSession)
+{
+    Timer clock;
+    NinjamTimingCoordinator coordinator;
+    Connect(coordinator, false, false);
+    auto observed = MakeTimingTempo(384000u, 100u, 120.0f, 16u);
+    observed.DeviceAudioSampleAtObservation = 1000u;
+    coordinator.Observe(observed, std::nullopt, false, io::UserConfig{}, clock);
+    engine::QuantisationTiming local{24000u, 168000u, 7u, 120.1234f, 7u};
+    const auto first = coordinator.SetLocalPlaybackRate(0.5);
+    ASSERT_TRUE(first.DesiredTransport);
+    const auto revision = first.DesiredTransport->PlaybackRateRevision;
+    coordinator.SetLocalPlaybackRate(0.75);
+    EXPECT_FALSE(coordinator.RequestServerTempo(local, revision).TempoRequest);
+    const auto latest = coordinator.SetLocalPlaybackRate(1.0);
+    ASSERT_TRUE(latest.DesiredTransport);
+    coordinator.BeginLocalTiming();
+    EXPECT_FALSE(coordinator.RequestServerTempo(local, latest.DesiredTransport->PlaybackRateRevision).TempoRequest);
+    const auto detached = coordinator.SetLocalPlaybackRate(1.0);
+    ASSERT_TRUE(detached.DesiredTransport);
+    coordinator.Disconnect();
+    EXPECT_FALSE(coordinator.RequestServerTempo(local, detached.DesiredTransport->PlaybackRateRevision).TempoRequest);
+}
+
+TEST(NinjamTimingCoordinator, ExplicitServerRequestCanonicalisesTempoAndNeedsFreshMatchingBpmAndBpi)
+{
+    Timer clock;
+    NinjamTimingCoordinator coordinator;
+    Connect(coordinator, false, false);
+    auto observed = MakeTimingTempo(384000u, 100u, 120.0f, 16u);
+    observed.DeviceAudioSampleAtObservation = 1000u;
+    coordinator.Observe(observed, std::nullopt, false, io::UserConfig{}, clock);
+    engine::QuantisationTiming local{24000u, 168000u, 7u, 120.1234f, 7u};
+    const auto detached = coordinator.SetLocalPlaybackRate(1.0);
+    ASSERT_TRUE(detached.DesiredTransport);
+    const auto request = coordinator.RequestServerTempo(local, detached.DesiredTransport->PlaybackRateRevision);
+    ASSERT_TRUE(request.TempoRequest);
+    EXPECT_FLOAT_EQ(120.123f, request.TempoRequest->Bpm);
+    EXPECT_EQ(7u, request.TempoRequest->Bpi);
+    coordinator.NotifyTempoRequestSent(true);
+    observed.Bpm = request.TempoRequest->Bpm;
+    observed.Bpi = 7u;
+    observed.IntervalLengthSamps = 167828u;
+    EXPECT_FALSE(coordinator.Observe(observed, local, true, io::UserConfig{}, clock).DesiredTransport);
+    EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
+    observed.DeviceAudioSampleAtObservation = 2000u;
+    observed.Bpi = 8u;
+    EXPECT_FALSE(coordinator.Observe(observed, local, true, io::UserConfig{}, clock).DesiredTransport);
+    observed.DeviceAudioSampleAtObservation = 3000u;
+    observed.Bpi = 7u;
+    observed.Bpm = 130.0f;
+    EXPECT_FALSE(coordinator.Observe(observed, local, true, io::UserConfig{}, clock).DesiredTransport);
+    EXPECT_EQ(ninjam::TempoRequestState::SentAwaitingOutcome, coordinator.RequestState());
+    observed.DeviceAudioSampleAtObservation = 4000u;
+    observed.Bpm = request.TempoRequest->Bpm;
+    EXPECT_TRUE(coordinator.Observe(observed, local, true, io::UserConfig{}, clock).DesiredTransport);
+    EXPECT_EQ(ninjam::TempoRequestState::Acknowledged, coordinator.RequestState());
+}

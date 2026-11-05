@@ -229,6 +229,77 @@ static std::shared_ptr<TimingTestLoopTake> MakeTimingTestLoopTake(const std::str
 	return std::make_shared<TimingTestLoopTake>(params, mixerParams);
 }
 
+TEST(LoopTakePlaybackRate, SharedIntegralKeepsFractionAcrossPartitionsAndRecordingBaselines)
+{
+	auto first = MakeTimingTestLoopTake("rate-one");
+	auto second = MakeTimingTestLoopTake("rate-half");
+	first->SetMidiVisualPosition(0u, 97u);
+	second->SetMidiVisualPosition(0u, 194u);
+	second->RestoreRecordingPlaybackRate(0.5);
+	std::uint64_t device = 0u;
+	for (const auto count : {1u, 3u, 7u, 16u, 31u})
+	{
+		const audio::PlaybackRateBlock block{0.5, 0.5, 1.0, count, 1u};
+		first->BeginPlaybackRateBlock(block, device, nullptr, false);
+		second->BeginPlaybackRateBlock(block, device, nullptr, false);
+		first->EndMultiPlay(count);
+		second->EndMultiPlay(count);
+		device += count;
+	}
+	EXPECT_DOUBLE_EQ(29.0, first->MidiSourcePositionAtFrame(0u));
+	EXPECT_DOUBLE_EQ(58.0, second->MidiSourcePositionAtFrame(0u));
+}
+
+TEST(LoopTakePlaybackRate, UnequalMidiChildrenWrapOnlyOnTheirOwnLengths)
+{
+	auto take = MakeTimingTestLoopTake("unequal-streams");
+	take->SetMidiVisualPosition(0u, 10u);
+	const audio::PlaybackRateBlock block{1.0, 1.0, 1.0, 13u, 1u};
+	take->BeginPlaybackRateBlock(block, 0u, nullptr, false);
+	take->EndMultiPlay(13u);
+	EXPECT_EQ(3u, take->MidiVisualPosition());
+	EXPECT_DOUBLE_EQ(3.0, take->MidiSourcePhaseAtFrame(0u, 5u));
+	EXPECT_DOUBLE_EQ(6.0, take->MidiSourcePhaseAtFrame(0u, 7u));
+}
+
+TEST(LoopTakePlaybackRate, SaveDuringSharedShiftRestoresAudiblePhaseForUnequalChildren)
+{
+	auto take = MakeTimingTestLoopTake("save-source-position");
+	LoopTake::MidiExportState initial;
+	initial.PlayIndex = 3u;
+	initial.SourcePosition = 13;
+	initial.LoopLengthSamps = 10u;
+	initial.Quantisation.PhaseOffsetSamps = 2;
+	for (const auto length : {5u, 7u})
+	{
+		LoopTake::MidiStreamExport stream;
+		stream.Loop.LoopLengthSamps = length;
+		initial.Streams.push_back(stream);
+	}
+	ASSERT_TRUE(take->RestoreMidiFromExport(initial));
+	const audio::PlaybackRateBlock block{1.0, 1.0, 480.0, 4u, 1u};
+	take->BeginPlaybackRateBlock(block, 0u, nullptr, false);
+	take->EndMultiPlay(4u);
+	auto settings = initial.Quantisation;
+	settings.PhaseOffsetSamps = 4;
+	take->SetMidiQuantisation(settings);
+	take->BeginPlaybackRateBlock(block, 4u, nullptr, false);
+	take->EndMultiPlay(4u);
+	LoopTake::MidiExportState saved;
+	ASSERT_TRUE(take->SnapshotMidiForExport(saved));
+	ASSERT_TRUE(saved.SourcePosition);
+	auto restored = MakeTimingTestLoopTake("restored-source-position");
+	ASSERT_TRUE(restored->RestoreMidiFromExport(saved));
+	restored->BeginPlaybackRateBlock(block, 0u, nullptr, false);
+	for (const auto length : {5u, 7u})
+		EXPECT_NEAR(take->MidiSourcePhaseAtFrame(0u, length), restored->MidiSourcePhaseAtFrame(0u, length), 1.0);
+	const auto before = restored->MidiSourcePositionAtFrame(0u);
+	restored->ResetPlaybackRateHistoryForDevice(44100u);
+	restored->BeginPlaybackRateBlock(block, 0u, nullptr, false);
+	EXPECT_FALSE(restored->IsCaptureCancelled());
+	EXPECT_DOUBLE_EQ(before, restored->MidiSourcePositionAtFrame(0u));
+}
+
 static std::shared_ptr<engine::Loop> MakeTimingLoop(unsigned long loopLength, bool ramp = false)
 {
 	audio::WireMixBehaviourParams mixBehaviour;
@@ -1539,6 +1610,7 @@ TEST(AudioLoopShift, SignedOffsetsWrapByEachLengthAndSurviveTransportCorrections
 TEST(AudioLoopShift, FirstBlockLatchesInitialTargetAndRepeatedReadsDoNotAdvance)
 {
     auto loop = MakeTimingLoop(1000ul, true);
+    loop->SetSampleRate(48000.0f);
     loop->SetBodyPlayIndex(200ul);
     loop->SetPlaybackOffsetSamps(7);
     EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
@@ -1555,12 +1627,13 @@ TEST(AudioLoopShift, FirstBlockLatchesInitialTargetAndRepeatedReadsDoNotAdvance)
     EXPECT_EQ(seek,seekAgain);
     EXPECT_DOUBLE_EQ(7.0,loop->AppliedPlaybackOffsetSamps());
     // A ramp fixture exposes fractional reads rather than repeated integer samples.
-    const auto rate = 24.0 / (44100.0 * 0.010);
+    const auto rate = 24.0 * (1.0 - std::exp(-1.0 / (48000.0 * 0.010)));
     const auto expected = (constants::MaxLoopFadeSamps + 264.0 + 1.0 - 7.0 - rate)
         / (constants::MaxLoopFadeSamps + 1000.0);
     EXPECT_NEAR(expected,seek[1],1e-6);
     loop->EndMultiPlay(17u); // Actual frame count differs from ramp preparation.
-    EXPECT_NEAR(7.0 + rate * 17.0,loop->AppliedPlaybackOffsetSamps(),1e-9);
+    EXPECT_NEAR(7.0 + 24.0 * (1.0 - std::exp(-17.0 / (48000.0 * 0.010))),
+        loop->AppliedPlaybackOffsetSamps(),1e-9);
     EXPECT_EQ(31,loop->PlaybackOffsetSamps());
     SettleTimingOffset(loop);
     EXPECT_DOUBLE_EQ(31.0,loop->AppliedPlaybackOffsetSamps());
@@ -1622,17 +1695,17 @@ TEST(AudioLoopShift, FractionalSeamReadsRemainContinuousForShortAndLongFades)
         loop->SetBodyPlayIndex(length-3ul);
         std::array<float,32> rendered{};
         ASSERT_EQ(32u,loop->ReadBlock(rendered.data(),0,32u));
-        const auto rate=static_cast<double>(target)/(44100.0*0.010);
+        // The same physical trajectory must survive callback partitioning,
+        // including the seam and the speed-up antialias filter transition.
+        std::array<float,8> firstPartition{};
+        std::array<float,24> secondPartition{};
+        ASSERT_EQ(8u,loop->ReadBlock(firstPartition.data(),0,8u));
+        loop->EndMultiPlay(8u);
+        ASSERT_EQ(24u,loop->ReadBlock(secondPartition.data(),0,24u));
         for (auto frame=0u; frame<rendered.size(); ++frame)
         {
-            const auto offset=rate*(std::min)(frame,8u);
-            auto phase=std::fmod(length-3.0+frame-offset,static_cast<double>(length));
-            if (phase<0.0) phase+=length;
-            const auto first=static_cast<unsigned long>(phase);
-            const auto fraction=phase-first;
-            const auto expected=std::sin(first*2.0*pi/length)*(1.0-fraction)
-                + std::sin(((first+1ul)%length)*2.0*pi/length)*fraction;
-            EXPECT_NEAR(expected,rendered[frame],1e-5) << frame;
+            const auto partitioned = frame < 8u ? firstPartition[frame] : secondPartition[frame-8u];
+            EXPECT_NEAR(rendered[frame],partitioned,1e-6) << frame;
             EXPECT_TRUE(std::isfinite(rendered[frame])); EXPECT_LE(std::abs(rendered[frame]),1.00001f);
             if (frame) EXPECT_LE(std::abs(rendered[frame]-rendered[frame-1u]),2.0*std::sin(pi/length)*1.25+1e-5);
         }
@@ -1714,4 +1787,35 @@ TEST(LoopTakeTiming, ConfiguredCaptureAnchorsWaitForPlaybackActivation)
         if (loop) EXPECT_EQ(phase + 137u, loop->BodyPlayIndex());
         EXPECT_EQ(phase + 137u, take->MidiVisualPosition());
     }
+}
+
+TEST(LoopTakePlaybackRate, TransportGridConvertsToEachRecordingRulerAndExplicitGridStaysLocal)
+{
+    for (const auto baseline : {0.5, 1.0, 2.0})
+    {
+        SCOPED_TRACE(baseline);
+        auto take = MakeTimingTestLoopTake("source-grid");
+        take->RestoreRecordingPlaybackRate(baseline);
+        take->SetTransportMidiBaseGrid(48000u, 4u, 0.5);
+        EXPECT_EQ(static_cast<unsigned int>(24000.0 / baseline), take->ResolvedMidiQuantisation().BaseIntervalSamps);
+        take->SetMidiBaseGrid(12000u, 4u);
+        EXPECT_EQ(12000u, take->ResolvedMidiQuantisation().BaseIntervalSamps);
+        take->SetRemoteMidiQuantisationGrid({96000u, 8u}, 24000, 48000u);
+        EXPECT_EQ(48000u, take->ResolvedMidiQuantisation().RemoteIntervalSamps);
+        EXPECT_EQ(12000, take->ResolvedMidiQuantisation().RemoteOriginSamps);
+    }
+}
+
+TEST(LoopTakePlaybackRate, RemoteGridKeepsFrozenRecordedIntervalAcrossServerChanges)
+{
+    auto take = MakeTimingTestLoopTake("recorded-remote-grid");
+    take->Record({}, "grid", {0u}, {"Keys"}, {}, 0u, 0u);
+    audio::PlaybackRateBlock block{0.5, 0.5, 1.0, 64u, 1u};
+    block.RemoteIntervalLengthSamps = 48000u;
+    block.RemoteBpi = 4u;
+    take->BeginPlaybackRateBlock(block, 0u, nullptr, true, 1.0);
+    take->SetRemoteMidiQuantisationGrid({96000u, 8u}, 24000, 192000u);
+    EXPECT_EQ(48000u, take->ResolvedMidiQuantisation().RemoteIntervalSamps);
+    EXPECT_EQ(12000, take->ResolvedMidiQuantisation().RemoteOriginSamps);
+    EXPECT_EQ(8u, take->ResolvedMidiQuantisation().RemoteBpi);
 }

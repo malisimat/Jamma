@@ -1192,4 +1192,18 @@
       <Filter>src\spectral</Filter>
     </ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\audio\PlaybackRate.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClInclude Include="src\audio\PlaybackRate.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+    <ClCompile Include="src\audio\LocalMetronomeTiming.cpp">
+      <Filter>src\audio</Filter>
+    </ClCompile>
+    <ClInclude Include="src\audio\LocalMetronomeTiming.h">
+      <Filter>src\audio</Filter>
+    </ClInclude>
+  </ItemGroup>
 </Project>

@@ -958,11 +958,11 @@ TEST(JamFile, BuiltInNewSessionEnablesEveryMidiChannelWithoutCables)
 
 TEST(JamFile, RetainsAudioShiftAndCreationSubdivisionIndependentlyOfMidiGrid)
 {
-	JamFile jam; jam.Name = "shift-and-subdivision"; jam.MasterAudioLoopId = "audio-master";
+	JamFile jam{}; jam.Name = "shift-and-subdivision"; jam.MasterAudioLoopId = "audio-master";
 	jam.DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Sixth;
-	JamFile::Loop loop; loop.Name = "audio.wav"; loop.Length = 1000ul; loop.BodyPlayIndex = 300ul; loop.PlaybackOffsetSamps = -2000000017;
-	JamFile::LoopTake take; take.Name = "take"; take.TakePhaseOffsetSamps = 19; take.Loops.push_back(loop);
-	JamFile::Station station; station.Name = "station"; station.LoopTakes.push_back(take); jam.Stations.push_back(station);
+	JamFile::Loop loop{}; loop.Level = 1.0; loop.Speed = 1.0; loop.Mix.Mix = JamFile::LoopMix::MIX_WIRE; loop.Name = "audio.wav"; loop.Length = 1000ul; loop.BodyPlayIndex = 300ul; loop.PlaybackOffsetSamps = -2000000017;
+	JamFile::LoopTake take{}; take.Name = "take"; take.TakePhaseOffsetSamps = 19; take.Loops.push_back(loop);
+	JamFile::Station station{}; station.Name = "station"; station.LoopTakes.push_back(take); jam.Stations.push_back(station);
 	std::stringstream output; ASSERT_TRUE(JamFile::ToStream(jam,output));
 	const auto restored = JamFile::FromStream(std::move(output)); ASSERT_TRUE(restored);
 	EXPECT_EQ(midi::MidiQuantisationFraction::Sixth,restored->DefaultMidiQuantFraction);

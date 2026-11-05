@@ -119,6 +119,15 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	_transportOffsetSlider = std::make_shared<GuiSlider>(transportOffsetParams);
 	_transportOffsetLabel = _StatusLabel("", GuiLabelParams::DefaultHeight);
 	RefreshOffsetPresentation(offset);
+    auto rate = GuiSliderParams::PanelHorizontal("purple", 320u);
+    rate.Index = PlaybackRateControlIndex;
+    rate.Min = -1.0; rate.Max = 1.0; rate.Steps = 400u;
+    rate.DefaultValue = 0.0; rate.InitValue = 0.0;
+    _playbackRateSlider = std::make_shared<GuiSlider>(rate);
+    _playbackRateLabel = _StatusLabel("1.000x", GuiLabelParams::DefaultHeight);
+    _serverTempoLabel = _StatusLabel("", GuiLabelParams::DefaultHeight);
+    _requestServerTempoButton = _SessionButton("Request server BPM/BPI");
+    _requestServerTempoButton->SetEnabled(false);
 
 	GuiToggleParams metronomeToggleParams = GuiToggleParams::PanelPrimary();
 	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
@@ -218,7 +227,11 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 {
 	return {
 		{ SettingsPage::Timing, "Global MIDI quantisation", _globalMidiQuantRadio, 101u },
-		{ SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetSlider, TransportOffsetControlIndex },
+		{ SettingsPage::Timing, "Playback rate", _playbackRateSlider, PlaybackRateControlIndex },
+        { SettingsPage::Timing, "", _playbackRateLabel, 0u },
+        { SettingsPage::Timing, "", _requestServerTempoButton, RequestServerTempoControlIndex },
+        { SettingsPage::Timing, "", _serverTempoLabel, 0u },
+        { SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetSlider, TransportOffsetControlIndex },
 		{ SettingsPage::Timing, "", _transportOffsetLabel, 0u },
 		{ SettingsPage::Timing, "Subdivision: local grain / remote beat", _midiSubdivisionRadio, MidiSubdivisionControlIndex },
 		{ SettingsPage::Timing, "", _tapButton, TapTempoControlIndex },
@@ -249,7 +262,12 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SelectionEntries() const
 std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const GuiAction& action,
 	double acceptedOffset) const
 {
-	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == TapTempoControlIndex)
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == RequestServerTempoControlIndex)
+        return RequestServerTempo{};
+    if (action.ElementType == GuiAction::ACTIONELEMENT_SLIDER && action.Index == PlaybackRateControlIndex)
+        if (const auto value = std::get_if<GuiAction::GuiDouble>(&action.Data); value && std::isfinite(value->Value))
+            return PlaybackRateChange{std::exp2(std::clamp(value->Value, -1.0, 1.0))};
+    if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == TapTempoControlIndex)
 		return TapTempo{};
 	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == ReclockControlIndex) return Reclock{};
     if (action.ElementType==GuiAction::ACTIONELEMENT_BUTTON && action.Index==UseMasterControlIndex) return UseMaster{};
@@ -284,6 +302,22 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 			return OffsetChange{ std::isfinite(value->Value) ? value->Value : acceptedOffset };
 
 	return std::nullopt;
+}
+
+void SceneSettingsControls::RefreshPlaybackRate(double target, double applied, bool following,
+    bool canRequest, double bpm, unsigned int bpi, bool unsupportedRemoteRate, bool aligning, bool controlPending)
+{
+    _playbackRateSlider->SetValue(std::log2(target), true);
+    char text[96];
+    if (controlPending) std::snprintf(text, sizeof(text), "%.3fx - waiting for capture", target);
+    else if (following) std::snprintf(text, sizeof(text), aligning ? "%.3fx local - Aligning" : "%.3fx local - following server", target);
+    else if (target != applied) std::snprintf(text, sizeof(text), "%.3fx (%.3fx applied) - Settling", target, applied);
+    else std::snprintf(text, sizeof(text), "%.3fx", target);
+    _playbackRateLabel->SetString(unsupportedRemoteRate ? "Local: server source rate exceeds prepared reader limit" : text);
+    _requestServerTempoButton->SetEnabled(canRequest);
+    if (canRequest) std::snprintf(text, sizeof(text), "Request %.3f BPM / %u BPI", bpm, bpi);
+    else text[0] = '\0';
+    _serverTempoLabel->SetString(text);
 }
 
 void SceneSettingsControls::RefreshChannelPresentation(std::uint8_t channel)
@@ -335,7 +369,7 @@ std::shared_ptr<GuiButton> SceneSettingsControls::_SessionButton(const std::stri
 	return std::make_shared<GuiButton>(params);
 }
 
-void SceneSettingsControls::RefreshNinjamStatus(ninjam::NinjamLocalTempoState state, bool connected, bool following)
+void SceneSettingsControls::RefreshNinjamStatus(ninjam::NinjamLocalTempoState state, bool connected, bool following, bool aligning)
 {
 	_syncToServerButton->SetEnabled(connected);
 	const char* text = "Local playback; server not followed";
@@ -343,7 +377,7 @@ void SceneSettingsControls::RefreshNinjamStatus(ninjam::NinjamLocalTempoState st
 	else if (state == ninjam::NinjamLocalTempoState::AwaitingMaster) text = "Local timing; record a new master";
 	else if (state == ninjam::NinjamLocalTempoState::AwaitingServer) text = "Local playback; server tempo request pending";
 	else if (state == ninjam::NinjamLocalTempoState::AwaitingFreshSync) text = "Waiting for fresh server timing";
-	else if (following) text = "Following server timing";
+	else if (following) text = aligning ? "Aligning to server timing" : "Following server timing";
 	_ninjamStatus->SetString(text);
 }
 

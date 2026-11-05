@@ -144,6 +144,17 @@ namespace engine
 		// Fans one policy-neutral accepted correction out to every local take.
 		// Audio-thread only; called once at the top of the callback block.
 		void ApplyFirstMasterRecordingAtAudioBoundary(utils::Timer& clock, std::uint32_t blockStartSample = 0u) noexcept;
+		std::optional<RecordedMasterReference> FirstRecordedMasterReference() const noexcept;
+        std::optional<bool> CanApplyRemotePlaybackRate(unsigned long remoteLength, unsigned long legacySourceLength) const noexcept;
+		void BeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std::uint64_t deviceStart,
+			const audio::PlaybackRateHistory* history, bool followingRemote, double legacyRemoteRate = 1.0) noexcept;
+		bool CanBeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std::uint64_t deviceStart,
+			bool followingRemote, double legacyRemoteRate, bool allowContinuation = true) noexcept;
+		std::uint64_t RequiredRateHistoryStart(std::uint64_t fallback) const noexcept;
+		void CancelRateCapturesBefore(std::uint64_t earliest) noexcept;
+		void ResetPlaybackRateHistoryForDevice(unsigned int sampleRate);
+		bool PlaybackRateAligned() const noexcept;
+		void SetCaptureInputHistoryAtAudioBoundary(const audio::InputHistoryView& history) noexcept;
 		void BeginCaptureAudioBoundary(std::uint32_t blockStartSample, std::uint64_t sceneSample, std::uint64_t absoluteSample,
             std::optional<std::uint32_t> earliestPhysicalSample = std::nullopt,
 			const RemoteTransportGeometry& recordingGeometry = {}) noexcept;
@@ -158,7 +169,8 @@ namespace engine
 		void ResetTimingEpoch() noexcept;
 		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample = 0u) noexcept;
 		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample = 0u) noexcept;
-		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
+		void SetLocalTransportOffsetSamps(long long targetSamps, double masterRecordingRate = 1.0,
+            unsigned long remoteLength = 0ul, unsigned long legacySourceLength = 0ul) noexcept;
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,
 			int writeOffset) override;
@@ -212,7 +224,7 @@ namespace engine
 		void SetQuantisationOverlayAlpha(float alpha) noexcept;
 		void SetGlobalMidiQuantState(io::JamFile::GlobalMidiQuantState state) noexcept;
 		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
-			std::int64_t originSamps, bool resetBaseGrid);
+			std::int64_t originSamps, bool resetBaseGrid, unsigned long legacySourceLength = 0ul);
 		void SetTransportOffsetLoopFrac(double loopFrac) noexcept;
 		double TransportOffsetLoopFrac() const noexcept { return _transportOffsetLoopFrac.load(std::memory_order_relaxed); }
 		std::int32_t TransportOffsetSamps() const noexcept;
@@ -503,6 +515,7 @@ namespace engine
 		std::atomic<std::uint32_t> _captureDeviceBoundary{ 0u };
         std::atomic<std::uint64_t> _captureAbsoluteBoundary{ 0u };
         std::atomic<std::uint32_t> _captureBoundaryRevision{ 0u };
+		std::atomic<const audio::PlaybackRateHistory*> _captureMusicalHistory{ nullptr };
         std::atomic<std::uint32_t> _captureEarliestPhysicalSample{ 0u };
         std::atomic<bool> _captureHistoryEpochKnown{ false };
         std::atomic<bool> _midiFormatEpochPending{ true };
@@ -528,6 +541,7 @@ namespace engine
 		// retained defaults. Station teardown follows callback shutdown.
 		RemoteTransportGeometry _remoteMidiGrid;
 		std::int64_t _remoteMidiGridOriginSamps = 0;
+		unsigned long _remoteMidiSourceLength = 0ul;
 		std::weak_ptr<LoopTake> _recordedMasterTake; // Job-owned identity from accepted first-master receipt.
 		std::int32_t _masterAudioReferenceOffsetSamps = 0;
 		midi::MidiQuantisationFraction _defaultMidiQuantisationFraction = midi::MidiQuantisationFraction::Quarter;

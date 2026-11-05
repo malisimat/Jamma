@@ -48,6 +48,7 @@ namespace midi
 			std::uint32_t                     loopLengthSamps = 0u;      // frozen at rebuild
 			std::uint32_t                     automationGlobalSampleOrigin = 0u; // frozen at rebuild; automation origin
 			const std::atomic<std::int32_t>*  anchorCorrection = nullptr; // live correction from owning LoopTake
+			const engine::LoopTake* take = nullptr; // pinned by the same prepared snapshot
 			// effective origin = automationGlobalSampleOrigin + anchorCorrection (modular uint32)
 		};
 		// Per-entry playback state owned exclusively by the audio thread.

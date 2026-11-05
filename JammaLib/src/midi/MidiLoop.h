@@ -16,6 +16,7 @@
 #include "MidiEvent.h"
 #include "MidiQuantisation.h"
 #include "../base/PublishedAudioSnapshot.h"
+#include "../audio/PlaybackRate.h"
 
 namespace vst
 {
@@ -32,6 +33,7 @@ namespace midi
 	{
 		std::uint64_t Token = 0u;
 		std::uint32_t Start = 0u, Duration = 0u, LoopLength = 0u;
+        double SourceFrameResidual = 0.0;
 	};
 
 	// Sink for MIDI playback. Implementations should not allocate or block.
@@ -276,6 +278,7 @@ namespace midi
 			// Quantised also holds seam-merged playback when quantisation is off.
 			bool PlaybackViewActive = false;
 			MidiQuantisationSettings Quantisation{};
+			MidiQuantisationSettings PlaybackQuantisation{};
 			std::uint64_t QuantisationTransportStartSamps = 0u;
 		};
 
@@ -291,6 +294,8 @@ namespace midi
 		// Append an event during recording. `ev.sampleOffset` is the offset (in samples)
 		// since StartRecord(). Returns false if capacity was exceeded (event dropped).
 		bool RecordEvent(const MidiEvent& ev) noexcept;
+		bool MapRecordedCaptureSamples(const audio::PlaybackRateHistory& history,
+			std::uint64_t physicalOrigin, const audio::SourcePosition& sourceOrigin, double recordingRate) noexcept;
 		// Append an event during non-RT build/finalization flows (for example,
 		// MIDI overdub render). Uses the same fixed-capacity drop-newest behavior
 		// as RecordEvent.
@@ -473,6 +478,7 @@ namespace midi
 		static MidiQuantisationSettings ResolveQuantisation(const MidiQuantisationSettings& inherited,
 			const QuantisationOverride& overrides) noexcept;
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
+		void UseTakePhaseTrajectory() noexcept { _takePhaseTrajectory = true; }
 		bool IsQuantisationActive() const noexcept;
 
 		// Owner-side format refresh: project automation timing and the optional ms-based
@@ -624,6 +630,7 @@ namespace midi
 		std::atomic<std::shared_ptr<MidiModel>> _model;
 		std::uint64_t _sourceRevision = 0u;
 		MidiQuantisationSettings _quantisation;
+		bool _takePhaseTrajectory = false;
 		MidiQuantisationSettings _inheritedQuantisation;
 		QuantisationOverride _loopQuantisationOverride;
 		std::optional<bool> _forcedQuantisationEnabled;

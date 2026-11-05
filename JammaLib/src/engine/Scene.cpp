@@ -65,7 +65,7 @@ Scene::Scene(SceneParams params,
         // Suspend following before the callback can prepare the new local ruler.
 		_ApplyNinjamTimingUpdate(_networkService->BeginLocalTiming());
 		const auto version=_audioEngine->PublishLocalMasterTiming(timing.SeedSamps,
-			timing.MasterLoopSamps, type, take, loop);
+			timing.MasterLoopSamps, type, take, loop, timing.Bpi);
         _networkService->BindLocalTimingVersion(version);
         return version;
 	});
@@ -211,12 +211,13 @@ void Scene::_ApplyNinjamTimingUpdate(const ninjam::NinjamTimingUpdate& update)
 	}
 	if (update.DesiredTransport.has_value())
 	{
-		const auto& desired = update.DesiredTransport.value();
-		if (update.RemoteGrid.has_value())
-			_quantisation.SetRemoteMidiGrid(update.RemoteGrid->Geometry,
-				update.RemoteGrid->OriginSamps, _stations, update.RemoteGrid->PreserveRecordedMaster);
-		else if (desired.Intent == ninjam::NinjamDesiredTimingIntent::NoSync)
-			_quantisation.SetRemoteMidiGrid({}, 0, _stations);
+		auto desired = update.DesiredTransport.value();
+        // Carry the grid's interpretation with the complete timing intent. The
+        // job adopts only the audio receipt, even if newer intents are deferred.
+        if (update.RemoteGrid) _desiredRemoteGrid = update.RemoteGrid;
+        else if (desired.Intent == ninjam::NinjamDesiredTimingIntent::NoSync) _desiredRemoteGrid.reset();
+        desired.GridOriginSamps = _desiredRemoteGrid ? _desiredRemoteGrid->OriginSamps : 0;
+        desired.PreserveRecordedMaster = _desiredRemoteGrid && _desiredRemoteGrid->PreserveRecordedMaster;
 		if (_audioEngine)
 			_audioEngine->PublishDesiredTiming(desired);
 		if (_loggingConfig.Event == "verbose"
@@ -346,6 +347,14 @@ std::optional<std::shared_ptr<Scene>> Scene::FromFile(SceneParams sceneParams,
 			midi::MidiQuantisation::FractionDisplayIndex(jamStruct.DefaultMidiQuantFraction), true);
 	scene->_SetGlobalMidiQuantState(jamStruct.GlobalMidiQuantStateValue, true);
 	scene->_SetTransportOffsetLoopFrac(jamStruct.TransportOffsetLoopFrac);
+    scene->_audioEngine->InitialisePlaybackRate(jamStruct.PlaybackRate);
+    scene->_ApplyNinjamTimingUpdate(scene->_networkService->SetLocalPlaybackRate(jamStruct.PlaybackRate));
+    if (const auto clock = scene->_quantisation.Clock())
+    {
+        clock->SetMasterRecordingPlaybackRate(jamStruct.MasterRecordingPlaybackRate);
+        if (jamStruct.MasterBeatsPerInterval) clock->SetMasterBeatsPerInterval(jamStruct.MasterBeatsPerInterval);
+    }
+
 	// Saved sessions always start locally.  NINJAM config/anchors are live
 	// connection state and are intentionally never restored from a .jam.
 	scene->InitReceivers();
@@ -546,6 +555,23 @@ ActionResult Scene::OnAction(GuiAction action)
 		_inputSubsystem->SetForcedChannelOverride(channel->Value, SnapshotStations());
 		_workspace->Settings().RefreshChannelPresentation(_inputSubsystem->ForcedChannelOverride());
 	}
+    else if (const auto rate = std::get_if<Settings::PlaybackRateChange>(&*change))
+    {
+        std::scoped_lock lock(_sceneMutex);
+        _ApplyNinjamTimingUpdate(_networkService->SetLocalPlaybackRate(rate->Value));
+    }
+    else if (std::holds_alternative<Settings::RequestServerTempo>(*change))
+    {
+        std::scoped_lock lock(_sceneMutex);
+        const auto rate = _audioEngine->ObservePlaybackRate();
+        if (rate && rate->Settled() && !rate->Following && rate->MasterLength && rate->FullBpi
+            && rate->Tempo > 0.0 && !_quantisation.LocalMasterTimingPending())
+        {
+            const QuantisationTiming timing{rate->Grain, rate->MasterLength, rate->FullBpi,
+                static_cast<float>(rate->Tempo), rate->FullBpi};
+            _ApplyNinjamTimingUpdate(_networkService->RequestServerTempo(timing, rate->Revision));
+        }
+    }
 	else if (auto offset = std::get_if<Settings::OffsetChange>(&*change))
 	{
 		_SetTransportOffsetLoopFrac(offset->Value, false);
@@ -636,6 +662,12 @@ void Scene::OnJobTick(Time curTime)
 	{
 		// Keep the station clock synced when local content seeds it without NINJAM.
 		std::scoped_lock lock(_sceneMutex);
+        if (_pendingTapSample && *_pendingTapSample <= _audioEngine->GetAudioSampleCounter())
+        {
+            const auto sample = *_pendingTapSample;
+            _pendingTapSample.reset();
+            _HandleTapSampleLocked(sample);
+        }
         const auto localResult=_localTiming.Advance(_quantisation,*_audioEngine,_stations);
 
 		if (!_networkService->HasConnectedTiming())
@@ -1124,6 +1156,12 @@ void Scene::_ResetSessionWhileQuiescent(SessionResetMode mode)
 		_quantisation.SetGlobalPhaseOffsetSamps(0, _stations);
 		for (const auto& station : _stations) if (station) station->SetStationPhaseOffsetSamps(0);
 		Reset(); // Remote authority is gone before the final local clock clear.
+        _pendingTapSample.reset();
+        _desiredRemoteGrid.reset();
+        _appliedRemoteGrid.reset();
+        _audioEngine->InitialisePlaybackRate(1.0);
+        _ApplyNinjamTimingUpdate(_networkService->SetLocalPlaybackRate(1.0));
+        if (const auto clock = _quantisation.Clock()) clock->SetMasterRecordingPlaybackRate(1.0);
 		_workspace->InvalidateHover2d();
 	}
 	// Detached take jobs are rejected by _JobReceiverAvailableLocked. Preserve
@@ -1322,9 +1360,41 @@ void Scene::CommitChanges()
 		}
 
 		_workspace->SynchronizeTempoPrompt(_networkService->PendingRemoteTempoPrompt());
-		_workspace->Settings().RefreshNinjamStatus(_networkService->LocalTempoState(),
-			_networkService->HasConnectedTiming(),
-			_networkService->FollowPolicy() != ninjam::NinjamLocalFollowPolicy::NoSync);
+
+        if (const auto rate = _audioEngine->ObservePlaybackRate())
+        {
+            if (const auto applied = _audioEngine->LastAppliedDesiredTiming(); applied
+                && (!_appliedRemoteGrid || applied->Version != _appliedRemoteGrid->Version
+                    || applied->SessionEpoch != _appliedRemoteGrid->SessionEpoch))
+            {
+                const auto& previous = _appliedRemoteGrid;
+                const bool changed = !previous || applied->Policy != previous->Policy
+                    || applied->SourceLengthSamps != previous->SourceLengthSamps
+                    || applied->RemoteLengthSamps != previous->RemoteLengthSamps
+                    || applied->BeatsPerInterval != previous->BeatsPerInterval
+                    || applied->TempoBpm != previous->TempoBpm || applied->GridOriginSamps != previous->GridOriginSamps;
+                if (changed)
+                {
+                    if (applied->Policy == ninjam::NinjamLocalFollowPolicy::NoSync)
+                        _quantisation.SetRemoteMidiGrid({}, 0, _stations);
+                    else
+                        _quantisation.SetRemoteMidiGrid({applied->RemoteLengthSamps, applied->BeatsPerInterval,
+                            0u, applied->TempoBpm, applied->Generation}, applied->GridOriginSamps, _stations,
+                            applied->PreserveRecordedMaster, applied->SourceLengthSamps);
+                }
+                _appliedRemoteGrid = applied;
+            }
+            _workspace->Settings().RefreshNinjamStatus(_networkService->LocalTempoState(),
+                _networkService->HasConnectedTiming(), rate->Following, rate->Aligning);
+            if (rate->UnsupportedRemoteRate)
+                _ApplyNinjamTimingUpdate(_networkService->RejectUnsupportedFollow(rate->AuthorityVersion, rate->SessionEpoch));
+            const bool canRequest = _networkService->HasConnectedTiming() && !rate->Following
+                && rate->Settled() && rate->MasterLength && rate->FullBpi && rate->Tempo > 0.0
+                && !_quantisation.LocalMasterTimingPending()
+                && _networkService->LocalTempoState() == ninjam::NinjamLocalTempoState::StayLocal;
+            _workspace->Settings().RefreshPlaybackRate(rate->Target, rate->Applied, rate->Following, canRequest,
+                rate->Tempo, rate->FullBpi, rate->UnsupportedRemoteRate, rate->Aligning, rate->ControlPending);
+        }
 
 		// Completion/update payloads share structural ownership with start/end/ditch.
 		// Keep validation and mutation under the same off-callback scene lock.
@@ -1728,12 +1798,23 @@ void Scene::_ApplyQuantisationTiming(const QuantisationTiming& timing, const cha
 
 bool Scene::_HandleTapTempo(Time actionTime)
 {
-	std::scoped_lock lock(_sceneMutex);
+    std::scoped_lock lock(_sceneMutex);
+    const auto sample = _EstimatedAudioSampleAt(actionTime);
+    if (_audioEngine->RateHistory().Size() != 0u && sample > _audioEngine->GetAudioSampleCounter())
+    {
+        _pendingTapSample = sample;
+        return false;
+    }
+    return _HandleTapSampleLocked(sample);
+}
+
+bool Scene::_HandleTapSampleLocked(std::uint64_t sample)
+{
 	const bool pushMaster = _networkService->HasConnectedTiming() && _quantisation.CanEditMasterTempo(_stations);
-	const auto handled = _quantisation.HandleTapTempo(_EstimatedAudioSampleAt(actionTime),
+	const auto handled = _quantisation.HandleTapTempo(sample,
 		_CurrentSampleRate(),
 		_stations,
-		_userConfig, pushMaster);
+		_userConfig, pushMaster, _audioEngine->RateHistory().Size() ? &_audioEngine->RateHistory() : nullptr);
 	if (handled)
 	{
 		_quantisation.UpdateStationHints(nullptr, _workspace->SelectionDepth(), false, _stations);
@@ -1848,11 +1929,12 @@ void Scene::_RequestStationControl(gui::GuiStationControls::Intent intent)
 	if (!_StationManagementAvailableLocked() || StationManagement::LocalCount(_stations) >= io::JamFile::MaxStations) return;
 	StationParams params;
 	params.Size = {136u, 300u}; params.FadeSamps = std::min(_userConfig.Loop.FadeSamps, constants::MaxLoopFadeSamps);
+	const auto namingRig = _rigCoordinator.Accepted();
 	for (size_t suffix = 1u;; ++suffix)
 	{
 		params.Name = "Station" + std::to_string(suffix);
 		if (std::none_of(_stations.begin(), _stations.end(), [&](const auto& station) { return station->Name() == params.Name; }) &&
-			std::none_of(_rigCoordinator.Accepted()->Rig.Triggers.begin(), _rigCoordinator.Accepted()->Rig.Triggers.end(),
+			std::none_of(namingRig->Rig.Triggers.begin(), namingRig->Rig.Triggers.end(),
 				[&](const auto& trigger) { return trigger.StationTarget == params.Name; })) break;
 	}
 	auto station = std::make_shared<Station>(params, Station::GetMixerParams(params.Size, MergeMixBehaviourParams{}));

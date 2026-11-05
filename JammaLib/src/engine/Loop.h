@@ -1,6 +1,7 @@
 #pragma once
 #include "../vst/VstRackSlot.h"
 #include "../audio/InputHistory.h"
+#include "../audio/PlaybackRate.h"
 
 // Audio recording/playback entity within a LoopTake; owns its buffers, logical
 // length, read/write positions, fades, and loop-local phase.
@@ -128,6 +129,11 @@ namespace engine
 			_playbackOffsetSamps(other.PlaybackOffsetSamps()),
 			_inheritedPlaybackOffsetSamps(other._inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed)),
 			_appliedPlaybackOffsetSamps(static_cast<double>(other.TotalPlaybackOffsetSamps())),
+			_playbackRateBlock(other._playbackRateBlock),
+			_recordingPlaybackRate(other._recordingPlaybackRate),
+			_playbackFraction(other._playbackFraction),
+			_playbackFilterMix(other._playbackFilterMix),
+			_playbackFilterInitialised(other._playbackFilterInitialised),
 			_playIndex(other._playIndex.load(std::memory_order_relaxed)),
 			_loopParams{other._loopParams},
 			_mixer(std::move(other._mixer)),
@@ -186,6 +192,11 @@ namespace engine
 				_playbackOffsetInitialised = other._playbackOffsetInitialised = false;
 				_playbackOffsetPublished.store(false, std::memory_order_relaxed);
 				other._playbackOffsetPublished.store(false, std::memory_order_relaxed);
+				std::swap(_playbackRateBlock, other._playbackRateBlock);
+				std::swap(_recordingPlaybackRate, other._recordingPlaybackRate);
+				std::swap(_playbackFraction, other._playbackFraction);
+				std::swap(_playbackFilterMix, other._playbackFilterMix);
+				std::swap(_playbackFilterInitialised, other._playbackFilterInitialised);
 				auto playIndex = _playIndex.load(std::memory_order_relaxed);
 				_playIndex.store(other._playIndex.exchange(playIndex, std::memory_order_relaxed), std::memory_order_relaxed);
 				auto playState = _playState.load(std::memory_order_relaxed);
@@ -249,8 +260,20 @@ namespace engine
 			int sampOffset,
 			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr,
             std::uint32_t trigger = 0u, std::int64_t delay = 0, unsigned int channel = 0u,
-			vst::VstChain* preparedChain = nullptr, bool usePreparedChain = false);
+			vst::VstChain* preparedChain = nullptr, bool usePreparedChain = false, bool sourceResidual = false);
 		virtual void EndMultiPlay(unsigned int numSamps) override;
+		// Audio boundary only. All readers replay the same immutable block; only
+		// EndMultiPlay commits the fractional source phase.
+		void SetPlaybackRateBlockAtAudioBoundary(const audio::PlaybackRateBlock& block,
+			double recordingRate = 1.0) noexcept;
+		static constexpr double MaximumFilteredSourceRate = 5.0;
+		void SetCaptureSourceAtAudioBoundary(const Loop* source, double sourceBodyOrigin) noexcept
+		{ _captureSource = source; _captureSourceBodyOrigin = sourceBodyOrigin; }
+		void SetCaptureInputHistoryAtAudioBoundary(const audio::InputHistoryView& history, unsigned int channel) noexcept;
+		void FlushPendingCaptureAtAudioBoundary() noexcept;
+		void SetCaptureRateHistoryAtAudioBoundary(const audio::PlaybackRateHistory* history,
+			std::uint64_t physicalInputStart, const audio::SourcePosition& sourceOrigin, double baseline) noexcept;
+
 		virtual void OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset) override;
 		virtual void EndWrite(unsigned int numSamps,
 			bool updateIndex) override;
@@ -352,6 +375,7 @@ namespace engine
 			const auto len = _loopLength.load(std::memory_order_relaxed);
 			if (len == 0ul) return;
 			_playIndex.store(index < len ? index : index % len, std::memory_order_relaxed);
+			_playbackFraction = 0.0;
 		}
 		void SetSceneAnchor(unsigned long anchor) noexcept
 		{
@@ -366,6 +390,7 @@ namespace engine
 		void SetPlaybackOffsetSamps(std::int32_t samples) noexcept { _playbackOffsetSamps.store(samples, std::memory_order_relaxed); }
 		std::int32_t PlaybackOffsetSamps() const noexcept { return _playbackOffsetSamps.load(std::memory_order_relaxed); }
 		// Owner-published take/station/global sum; persisted at those owners only.
+		void AdoptInheritedPlaybackOffsetAtAudioBoundary() noexcept;
 		void SetInheritedPlaybackOffsetSamps(std::int32_t samples) noexcept { _inheritedPlaybackOffsetSamps.store(samples, std::memory_order_relaxed); }
 		std::int64_t TotalPlaybackOffsetSamps() const noexcept
 		{ return static_cast<std::int64_t>(PlaybackOffsetSamps()) + _inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed); }
@@ -387,12 +412,14 @@ namespace engine
 			const auto index = _playIndex.load(std::memory_order_relaxed);
 			return (index + length - constants::MaxLoopFadeSamps) % length;
 		}
+		double FractionalBodyPlayIndex() const noexcept { return BodyPlayIndex() + _playbackFraction; }
 		void SetBodyPlayIndex(unsigned long index) noexcept
 		{
 			const auto length = _loopLength.load(std::memory_order_relaxed);
 			if (length == 0ul)
 				return;
 			_playIndex.store(constants::MaxLoopFadeSamps + (index % length), std::memory_order_relaxed);
+			_playbackFraction = 0.0;
 		}
 		void EndRecording();
 		// Capture cursor uses signed physical storage coordinates. Configure before
@@ -539,9 +566,60 @@ namespace engine
 		bool _playbackOffsetInitialised = false;
 		double _playbackOffsetStart = 0.0, _playbackOffsetEnd = 0.0, _playbackOffsetRate = 0.0;
 		unsigned long _playbackOffsetLength = 0ul;
-		double _PlaybackOffsetAtFrame(unsigned int frame) const noexcept;
+		double _NextPlaybackOffset(double value, double baseIncrement, double sharedCorrection) const noexcept;
+		double _playbackOffsetDamping = 480.500173611;
+		double _playbackFilterMix = 0.0;
+		bool _playbackFilterInitialised = false;
+		double _NextPlaybackFilterMix(double value, double sourceIncrement) const noexcept;
+		void _InitialisePlaybackFilter() noexcept;
+		void _AdvancePlaybackFilter(unsigned int frames) noexcept;
 		void _AdvancePlaybackOffset(unsigned int numSamps) noexcept;
 		void _InitialisePlaybackOffset() noexcept;
+		void _PreparePlaybackOffsetTarget() noexcept;
+		std::int32_t _localOffsetTarget = 0, _inheritedOffsetTarget = 0;
+		const Loop* _captureSource = nullptr; // Source take is pinned by active bounce scope.
+		double _captureSourceBodyOrigin = 0.0;
+		float _ReadSourceBodySample(double sourcePosition, unsigned int frame) const noexcept;
+		const audio::PlaybackRateHistory* _captureRateHistory = nullptr; // Borrowed for this callback only.
+		std::uint64_t _capturePhysicalInputStart = 0;
+		audio::SourcePosition _captureSourceOrigin;
+		double _captureRecordingRate = 1.0;
+		struct CaptureInterpolation
+		{
+			bool Valid = false;
+			std::uint64_t Frame = 0;
+			double Position = 0.0;
+			float Sample = 0.0f;
+		};
+		std::array<CaptureInterpolation, 3> _captureInterpolation{};
+		audio::InputHistoryView _captureInputHistory;
+		unsigned int _captureInputChannel = 0;
+		static constexpr unsigned int CaptureFilterTaps = 128u;
+		struct CaptureFilterRegion
+		{
+			std::uint64_t Cursor = 0, End = 0;
+			float FadeNew = 1.0f, FadeCurrent = 0.0f;
+			const Loop* SourceIdentity = nullptr; // Compared only; current bounce scope pins dereference.
+			std::uint64_t SourceGeneration = 0;
+			double SourceBodyOrigin = 0.0;
+		};
+		struct CaptureFilterState
+		{
+			std::array<CaptureFilterRegion,128> Regions{};
+			unsigned int First = 0, Count = 0;
+			double FilterMix = 0.0;
+			bool FilterInitialised = false;
+		};
+		std::array<CaptureFilterState,2> _captureFilters{};
+		std::array<float, constants::MaxBlockSize + CaptureFilterTaps> _captureResidualSamples{};
+		std::optional<std::uint64_t> _captureResidualStart;
+		std::uint64_t _captureResidualEnd = 0;
+		void _QueueFilteredCapture(const base::AudioWriteRequest& request, int writeOffset, bool residual) noexcept;
+		void _FlushFilteredCapture(bool residual) noexcept;
+		void _WriteRateMappedCapture(const base::AudioWriteRequest& request, int writeOffset) noexcept;
+		audio::PlaybackRateBlock _playbackRateBlock;
+		double _recordingPlaybackRate = 1.0;
+		double _playbackFraction = 0.0;
 		std::atomic<unsigned long> _playIndex;
 		std::atomic<unsigned long> _sceneAnchor{ 0ul };
 		std::atomic_bool _hasSceneAnchor{ false };
@@ -593,6 +671,8 @@ namespace engine
 		void _AdvanceSpectralPlayback(unsigned int numSamps) noexcept;
 		float _ReadSpectralSample(unsigned long storageIndex, unsigned int blockOffset, std::uint64_t generation) const noexcept;
 		spectral::SpectralSourceLayout _SpectralSourceLayout() const noexcept;
+		struct PlaybackFilter;
+		static const std::unique_ptr<const PlaybackFilter> _playbackFilter;
 		static void _DrainVstChain(std::shared_ptr<vst::VstChain> chain);
 	};
 }

@@ -180,6 +180,45 @@ NinjamTimingUpdate NinjamTimingCoordinator::PushActivatedLocalTempo(
 	return update;
 }
 
+NinjamTimingUpdate NinjamTimingCoordinator::RejectUnsupportedFollow(std::uint64_t version, std::uint64_t epoch) noexcept
+{
+    if (version != _desiredVersion || epoch != _sessionEpoch) return {};
+    _CancelTempoRequest();
+    _pendingTempoChange.reset();
+    _localTempoState = NinjamLocalTempoState::StayLocal;
+    ++_followRevision;
+    return _PublishNoSync(NinjamNoSyncReason::StayLocal);
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::SetLocalPlaybackRate(double rate) noexcept
+{
+    if (!std::isfinite(rate) || rate < 0.5 || rate > 2.0) return {};
+    _playbackRate = rate;
+    ++_playbackRateRevision;
+    ++_followRevision;
+    _priorLocalTiming.reset();
+    _restoringFollowing = false;
+    _CancelTempoRequest();
+    _pendingTempoChange.reset();
+    _ignoredTempoChange.reset();
+    _localTempoState = NinjamLocalTempoState::StayLocal;
+    _followObservationFence = _lastRemotePhaseDeviceSample;
+    return _PublishNoSync(NinjamNoSyncReason::StayLocal);
+}
+
+NinjamTimingUpdate NinjamTimingCoordinator::RequestServerTempo(
+    const engine::QuantisationTiming& timing, std::uint64_t rateRevision,
+    std::chrono::steady_clock::time_point now) noexcept
+{
+    if (!_tracker.IsConnected() || rateRevision != _playbackRateRevision
+        || _localTempoState != NinjamLocalTempoState::StayLocal
+        || !IsValidNinjamTempo(timing.Bpm, timing.Bpi) || timing.MasterLoopSamps == 0u) return {};
+    auto canonical = timing;
+    canonical.Bpm = std::round(timing.Bpm * 1000.0f) / 1000.0f;
+    _localTempoState = NinjamLocalTempoState::AwaitingMaster;
+    return PushActivatedLocalTempo(canonical, now);
+}
+
 NinjamTimingUpdate NinjamTimingCoordinator::RequestSyncToServer() noexcept
 {
     _priorLocalTiming.reset(); _restoringFollowing=false;
@@ -799,6 +838,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishRemoteDesired(
 	desired.Version = ++_desiredVersion;
 	desired.SessionEpoch = _sessionEpoch;
 	desired.FollowRevision = _followRevision;
+	desired.PlaybackRate = _playbackRate;
+	desired.PlaybackRateRevision = _playbackRateRevision;
 	desired.SourceMasterIntervalLengthSamps = _sourceMasterIntervalLengthSamps;
 	desired.Generation = ++_commandGeneration;
 	desired.Intent = intent;
@@ -837,6 +878,8 @@ NinjamTimingUpdate NinjamTimingCoordinator::_PublishNoSync(NinjamNoSyncReason re
 	desired.Version = ++_desiredVersion;
 	desired.SessionEpoch = _sessionEpoch;
 	desired.FollowRevision = _followRevision;
+	desired.PlaybackRate = _playbackRate;
+	desired.PlaybackRateRevision = _playbackRateRevision;
 	desired.SourceMasterIntervalLengthSamps = _sourceMasterIntervalLengthSamps;
 	desired.Generation = _commandGeneration;
 	desired.Intent = NinjamDesiredTimingIntent::NoSync;

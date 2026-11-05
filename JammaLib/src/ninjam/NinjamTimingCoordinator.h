@@ -213,6 +213,11 @@ namespace ninjam
 		NinjamTimingUpdate PushActivatedLocalTempo(const engine::QuantisationTiming& timing,
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 		NinjamTimingUpdate RequestSyncToServer() noexcept;
+		NinjamTimingUpdate SetLocalPlaybackRate(double rate) noexcept;
+        NinjamTimingUpdate RejectUnsupportedFollow(std::uint64_t version, std::uint64_t epoch) noexcept;
+		NinjamTimingUpdate RequestServerTempo(const engine::QuantisationTiming& timing,
+			std::uint64_t rateRevision,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 		NinjamLocalTempoState LocalTempoState() const noexcept { return _localTempoState; }
 		NinjamLocalFollowPolicy FollowPolicy() const noexcept { return _activeFollowPolicy; }
 		NinjamTimingUpdate ObserveSessionStatus(const NinjamSessionTimingStatus& status,
@@ -245,6 +250,7 @@ namespace ninjam
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 		TempoRequestState RequestState() const noexcept { return _requestState; }
 		bool IsConnected() const noexcept { return _tracker.IsConnected(); }
+		double LocalPlaybackRate() const noexcept { return _playbackRate; }
 		std::uint64_t SessionEpoch() const noexcept { return _sessionEpoch; }
 		void SetDiagnosticsCaptureEnabled(bool enabled) noexcept;
 		NinjamTimingDiagnostics ObserveAppliedTimingReceipt(
@@ -258,6 +264,8 @@ namespace ninjam
 			float remoteBpm) noexcept;
 
 	private:
+		double _playbackRate = 1.0;
+		std::uint64_t _playbackRateRevision = 0u;
 		void _CancelTempoRequest() noexcept;
 		void _SetPendingTempoChange(const NinjamTempoChange& change);
 		static bool _MatchesRequest(const NinjamTiming& timing,

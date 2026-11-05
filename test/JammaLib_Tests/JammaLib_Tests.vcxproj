@@ -156,6 +156,7 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
+    <ClInclude Include="src\gui\GuiHudTestAccess.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\audio\Spectral_Tests.cpp" />
@@ -264,4 +265,12 @@ xcopy /y "$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\bin\gtest_main.dll" "$(OutDi
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
+  <ItemGroup>
+    <ClCompile Include="src\audio\PlaybackRate_Tests.cpp" />
+    <ClCompile Include="src\audio\LoopPlaybackRate_Tests.cpp" />
+    <ClCompile Include="src\audio\PlaybackRateIntegration_Tests.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\audio\LocalMetronomeTiming_Tests.cpp" />
+  </ItemGroup>
 </Project>

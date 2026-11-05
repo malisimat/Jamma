@@ -338,6 +338,10 @@ namespace engine
 		std::optional<unsigned int> _lastRejectedRecordedLatency; // Job owner, under _sceneMutex.
 		void _ResetIfEmpty();
 		bool _HandleTapTempo(Time actionTime);
+        bool _HandleTapSampleLocked(std::uint64_t sample);
+        std::optional<std::uint64_t> _pendingTapSample;
+        std::optional<ninjam::NinjamRemoteGridPublication> _desiredRemoteGrid;
+        std::optional<ninjam::NinjamDesiredTimingReceipt> _appliedRemoteGrid;
 		void _ClearStationQuantisation();
 		bool _HasSelection() const;
 		void _SetNinjamMetronomeSession(bool connected);

@@ -191,10 +191,12 @@ namespace io
 			int MidiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Quarter);
 			std::int32_t TakePhaseOffsetSamps = 0;
 			unsigned long MidiPlayIndex = 0;
+			std::optional<std::int64_t> MidiSourcePosition;
 			unsigned long MidiPlayLength = 0;
 			std::uint64_t MidiQuantTransportStart = 0;
 			std::optional<std::uint64_t> BaseIntervalSamps;
 			std::optional<std::uint32_t> BaseDivisions;
+			double RecordingPlaybackRate = 1.0;
 			unsigned long RecordingMasterLengthSamps = 0ul;
 			unsigned int RecordingBeatsPerInterval = 0u;
 			std::vector<MidiStream> MidiStreams;
@@ -262,6 +264,9 @@ namespace io
 		midi::MidiQuantisationFraction DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		double TransportOffsetLoopFrac = 0.0;
+		double PlaybackRate = 1.0;
+		double MasterRecordingPlaybackRate = 1.0;
+        unsigned int MasterBeatsPerInterval = 0u;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
 		// A loopless session has no local master geometry. Its first successful
 		// recording establishes the master length, grain, and BPI.
@@ -273,6 +278,7 @@ namespace io
 	private:
 		static std::optional<std::vector<int>> ParseAllowedMidiChannels(const Json::JsonPart& json);
 		static bool ParseMidiChannelRoutes(const Json::JsonPart& json, std::array<midi::MidiChannelRoute, 16>& routes);
+		static double ParsePlaybackRate(const Json::JsonPart& json, const char* key);
 		static std::optional<double> ParseFiniteNumber(const Json::JsonValue& value) noexcept;
 	};
 }

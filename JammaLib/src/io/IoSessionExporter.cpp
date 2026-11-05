@@ -302,6 +302,12 @@ namespace io
         const bool captured = [&]() -> bool
         {
 			std::scoped_lock lock(sceneMutex);
+            if (host)
+            {
+                const auto rate = host->ObservePlaybackRate();
+                if (!rate) { appendError("Playback timing snapshot unavailable"); return false; }
+                jam.PlaybackRate = rate->Target;
+            }
             if(quantisation.LocalMasterTimingPending())
             {
                 appendError("Wait for the master change before saving");
@@ -338,8 +344,21 @@ namespace io
 			else if (clock && clock->SeedSourceLength() != 0ul)
 			{
 				jam.MasterLengthSamps = clock->SeedSourceLength();
+				jam.MasterRecordingPlaybackRate = clock->MasterRecordingPlaybackRate();
+                jam.MasterBeatsPerInterval = clock->MasterBeatsPerInterval();
 				jam.AbsoluteSamplePos = clock->AbsoluteSamplePos();
 				jam.Quantisation = clock->Quantisation();
+				if (host)
+					if (const auto local = host->LocalMasterReferenceForSaveAfterReadersStopped())
+					{
+						jam.AbsoluteSamplePos = clock->LoopCount() * local->Length
+							+ static_cast<std::uint64_t>(clock->SampOffset()) * local->Length / clock->SeedSourceLength();
+						jam.MasterLengthSamps = local->Length;
+						jam.QuantiseSamps = local->Grain;
+						jam.MasterBeatsPerInterval = local->Bpi;
+						jam.MasterRecordingPlaybackRate = local->RecordingRate;
+						jam.Quantisation = local->Quantisation;
+					}
 			}
 			else
 			{
@@ -382,6 +401,7 @@ namespace io
 					jamTake.Name = take->Id();
 					const auto recordingGeometry = take->RecordingGeometry();
 					jamTake.RecordingMasterLengthSamps = recordingGeometry.IntervalLengthSamps;
+					jamTake.RecordingPlaybackRate = take->RecordingPlaybackRate();
 					jamTake.RecordingBeatsPerInterval = recordingGeometry.Bpi;
 					jamTake.MasterLevel = take->MasterLevelForExport();
 					jamTake.BusLevels = take->BusLevelsForExport();
@@ -411,6 +431,8 @@ namespace io
 							continue;
 
 						auto jamLoop = loop->ToJamFile(wavFilename);
+						if (loop->LoopLength()) jamLoop.BodyPlayIndex = static_cast<unsigned long>(ninjam::PositiveModulo(
+							static_cast<std::int64_t>(jamLoop.BodyPlayIndex) + take->SavedSharedPlaybackOffset(), loop->LoopLength()));
 						jamTake.Loops.push_back(std::move(jamLoop));
 
 						LoopSnapshot snap;
@@ -429,6 +451,7 @@ namespace io
 			            result.Error = "Session capture failed"; return false;
 					}
 					jamTake.MidiPlayIndex = midiExport.PlayIndex;
+					jamTake.MidiSourcePosition = midiExport.SourcePosition;
 					jamTake.MidiPlayLength = midiExport.LoopLengthSamps;
 					jamTake.MidiQuantTransportStart = midiExport.QuantisationTransportStartSamps;
 					if (midiExport.BaseIntervalSamps > 0u && midiExport.BaseDivisions > 0u)

@@ -34,7 +34,7 @@ namespace audio
 	public:
 		static void ConfigureMetronome(AudioHost& host) { host._ninjamMetronome.Configure(48000u); }
 		static void Click(AudioHost& host, float* output, unsigned int frames, const ninjam::NinjamTiming& remote, const Timer* clock)
-		{ host.MixMetronome(output, 1u, frames, 48000u, remote, clock); }
+		{ host.MixMetronome(output, 1u, frames, 48000u, remote, clock, host._playbackRate.DescribeBlock(frames)); }
 		static bool Apply(AudioHost& host, std::uint64_t blockStartSample,
 			unsigned int sampleRate) noexcept
 		{
@@ -1827,4 +1827,46 @@ TEST(AudioHostMetronome, ConnectedServerPhaseWinsOverLocalAndInvalidRemoteStaysS
 	output.fill(0.0f);
 	audio::NinjamAudioBoundaryTestAccess::Click(host, output.data(), 64u, remote, &clock);
 	EXPECT_EQ(output, (std::array<float, 64>{}));
+}
+
+TEST(NinjamTimingProductionBoundary, FirstRecordingWhileFollowingRetainsHalfRateLocalRuler)
+{
+    constexpr unsigned int frames = 48000u;
+    auto station = NinjamProductionBoundaryFixture::MakeStation({});
+    engine::LoopTakeParams params;
+    params.Id = "first-followed-half-rate";
+    params.Size = {100, 100};
+    params.SampleRate = 48000u;
+    audio::MergeMixBehaviourParams merge;
+    auto take = std::make_shared<engine::LoopTake>(params,
+        engine::LoopTake::GetMixerParams(params.Size, merge));
+    station->AddTake(take);
+    take->Record({}, station->Name(), {0u}, {"Keys"}, {}, 0u, 0u);
+    audio::PlaybackRateBlock followed{0.5, 0.5, 1.0, frames, 1u};
+    followed.RemoteIntervalLengthSamps = frames;
+    followed.RemoteBpi = 4u;
+    audio::PlaybackRateHistory history(4u);
+    ASSERT_TRUE(history.Append(0u, followed));
+    take->BeginPlaybackRateBlock(followed, 0u, &history, true, 1.0);
+    EXPECT_DOUBLE_EQ(0.5, take->RecordingPlaybackRate());
+    EXPECT_EQ(frames, take->RecordingMasterLengthSamps());
+    ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(24u, 0u, 60u, 100u), "Keys", 24u));
+    ASSERT_TRUE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(96u, 0u, 60u), "Keys", 96u));
+    take->EndMultiWrite(frames, true, base::Audible::AUDIOSOURCE_ADC);
+    take->Play(0ul, frames, 0u);
+    station->CommitChanges();
+    const auto reference = station->FirstRecordedMasterReference();
+    ASSERT_TRUE(reference);
+    EXPECT_EQ(frames, reference->LengthSamps);
+    EXPECT_EQ(4u, reference->Bpi);
+    EXPECT_DOUBLE_EQ(0.5, reference->RecordingPlaybackRate);
+
+    // Detaching at the retained local rate keeps this take at its recording speed.
+    take->EndMultiPlay(frames);
+    const auto before = take->MidiSourcePositionAtFrame(0u);
+    audio::PlaybackRateBlock local{0.5, 0.5, 1.0, 64u, 1u};
+    ASSERT_TRUE(history.Append(frames, local));
+    take->BeginPlaybackRateBlock(local, frames, &history, false, 1.0);
+    EXPECT_NEAR(64.0, take->MidiSourcePositionAtFrame(64u) - take->MidiSourcePositionAtFrame(0u), 1e-9);
+    EXPECT_DOUBLE_EQ(before, take->MidiSourcePositionAtFrame(0u));
 }

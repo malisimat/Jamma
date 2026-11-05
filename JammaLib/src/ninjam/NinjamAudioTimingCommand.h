@@ -49,6 +49,11 @@ namespace ninjam
 		unsigned int RemoteMasterPhaseSamps = 0u;
 		bool HasRemotePhaseDeviceSample = false;
 		std::uint64_t RemotePhaseDeviceSample = 0u;
+		// Local target and authority are accepted together, including while disconnected.
+		double PlaybackRate = 1.0;
+		std::uint64_t PlaybackRateRevision = 0u;
+        std::int64_t GridOriginSamps = 0;
+        bool PreserveRecordedMaster = false;
 	};
 
 	// Coherent audio-boundary acknowledgement of the latest complete desired
@@ -67,6 +72,10 @@ namespace ninjam
 		unsigned long SourceLengthSamps = 0ul;
 		unsigned long RemoteLengthSamps = 0ul;
 		std::int64_t SourceCoordinateSamps = 0;
+        unsigned int BeatsPerInterval = 0u;
+        float TempoBpm = 0.0f;
+        std::int64_t GridOriginSamps = 0;
+        bool PreserveRecordedMaster = false;
 	};
 
 	// The integration owner is the sole writer and the audio callback is the sole
@@ -97,6 +106,10 @@ namespace ninjam
 		std::atomic<unsigned int> _remoteMasterPhaseSamps{ 0u };
 		std::atomic_bool _hasRemotePhaseDeviceSample{ false };
 		std::atomic<std::uint64_t> _remotePhaseDeviceSample{ 0u };
+		std::atomic<double> _playbackRate{ 1.0 };
+		std::atomic<std::uint64_t> _playbackRateRevision{ 0u };
+        std::atomic<std::int64_t> _gridOriginSamps{0};
+        std::atomic<bool> _preserveRecordedMaster{false};
 	};
 
 }

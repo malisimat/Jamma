@@ -2114,13 +2114,17 @@ public:
 
 	static void CheckOrdinaryEditDelayedQueue()
 	{
-		for (auto mode = 0u; mode < 3u; ++mode)
+		for (const auto rate : {0.5, 1.0, 2.0})
+        for (auto mode = 0u; mode < 3u; ++mode)
 		for (const auto deviceStart : {10000u, 0xfffffff0u})
 		{
 			SCOPED_TRACE(mode);
+            SCOPED_TRACE(rate);
 			SCOPED_TRACE(deviceStart);
 			PreparedState state;
 			auto take = MakeMidiTake("edit-delayed-queue");
+            take->ResetPlaybackRateHistoryForDevice(48000u);
+            take->RestoreRecordingPlaybackRate(1.0);
 			auto loop = std::make_shared<midi::MidiLoop>();
 			const std::array source{MidiEvent::MakeNoteOn(10u, 0u, 60u, 100u), MidiEvent::MakeNoteOn(12u, 0u, 64u, 90u),
 				MidiEvent::MakeNoteOff(50u, 0u, 60u, 23u), MidiEvent::MakeNoteOff(52u, 0u, 64u, 31u)};
@@ -2137,7 +2141,11 @@ public:
 			CompleteFixtureTopology(state);
 			MidiPlaybackSink output(state);
 			auto render = [&](unsigned int offset, unsigned int count) {
-				_InvalidateScheduledMidiAtBlockStart(state, deviceStart + offset);
+				audio::PlaybackRateBlock block;
+                block.InitialRate = block.TargetRate = rate;
+                block.Frames = count;
+                take->BeginPlaybackRateBlock(block, static_cast<std::uint64_t>(deviceStart) + offset, nullptr, false);
+                _InvalidateScheduledMidiAtBlockStart(state, deviceStart + offset);
 				// The source clock deliberately differs from the device clock, including uint32 wrap.
 				midi::MidiIndexedOutputSink sink(output, 0u, 1000u + offset, deviceStart + offset);
 				loop->ReadBlock(1000u + offset, count, sink);
@@ -2160,15 +2168,112 @@ public:
 			if (mode == 0u) ASSERT_EQ(2u, plugin->Events.size()); // Both attacks survive a revision after their source ends.
 			if (mode == 1u) { ASSERT_EQ(1u, plugin->Events.size()); EXPECT_EQ(64u, plugin->Events[0].data1); }
 			if (mode == 2u) { ASSERT_EQ(2u, plugin->Events.size()); EXPECT_TRUE(binding->AudibleHeld.test(60u)); }
-			render(100u, 40u);
+			const auto release = static_cast<unsigned int>(100u + 40.0 / rate);
+            render(100u, release - 100u);
 			if (mode == 2u) { EXPECT_TRUE(binding->AudibleHeld.test(60u)); EXPECT_FALSE(binding->AudibleHeld.test(64u)); }
-			render(140u, 1u);
+			render(release, 1u);
 			EXPECT_FALSE(binding->AudibleHeld.any()); EXPECT_EQ(0u, destination->ScheduledCount);
 			const auto releases = std::count_if(plugin->Events.begin(), plugin->Events.end(), [](const auto& event) { return event.IsNoteOff(); });
 			EXPECT_EQ(mode == 1u ? 1 : 2, releases);
-			if (mode == 2u) { EXPECT_EQ(deviceStart + 140u, plugin->Events.back().sampleOffset); EXPECT_EQ(23u, plugin->Events.back().data2); }
+			if (mode == 2u) { EXPECT_EQ(deviceStart + release, plugin->Events.back().sampleOffset); EXPECT_EQ(23u, plugin->Events.back().data2); }
 		}
 	}
+
+    static void CheckRateMappedEditedEndpointOwnership()
+    {
+        for (const auto rate : {0.5, 2.0})
+        for (const bool loseHistory : {false, true})
+        for (const auto deviceStart : {10000u, 0xfffffff0u})
+        {
+            SCOPED_TRACE(rate);
+            SCOPED_TRACE(loseHistory);
+            SCOPED_TRACE(deviceStart);
+            PreparedState state;
+            auto take = MakeMidiTake("actual-rate-endpoint");
+            take->ResetPlaybackRateHistoryForDevice(48000u);
+            take->RestoreRecordingPlaybackRate(1.0);
+            auto loop = std::make_shared<midi::MidiLoop>();
+            const std::array source{MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), MidiEvent::MakeNoteOff(1u, 0u, 60u, 23u)};
+            loop->ReplaceRecordedEvents(source.data(), source.size(), 1000u);
+            auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>();
+            plugin->Load(L"", 48000.f, 128u, 2u);
+            auto destination = std::make_shared<MidiDestination>();
+            destination->Plugin = plugin; destination->ActiveCompensationDelaySamps = 100u;
+            auto binding = std::make_shared<MidiPlaybackBinding>();
+            binding->Take = take; binding->Loop = loop; binding->Destination = destination;
+            state.MidiPlaybackRoutes.emplace_back(); state.MidiPlaybackRoutes[0].push_back(binding);
+            state.MidiDestinations.push_back(destination); state.DestinationChannels.push_back(0xffffu);
+            state.DestinationRetirements.emplace_back(); CompleteFixtureTopology(state);
+            audio::PlaybackRateBlock block;
+            block.InitialRate = block.TargetRate = rate; block.Frames = 4u;
+            take->BeginPlaybackRateBlock(block, deviceStart, nullptr, false);
+            _InvalidateScheduledMidiAtBlockStart(state, deviceStart);
+            MidiPlaybackSink output(state);
+            midi::MidiIndexedOutputSink sink(output, 0u, 0u, deviceStart);
+            sink.SetPlaybackRate(block, 1.0, 0.0);
+            loop->ReadBlock(0u, static_cast<unsigned>(4.0 * rate), sink);
+            ASSERT_EQ(2u, destination->ScheduledCount);
+            midi::MidiLoop::EditState edit; ASSERT_TRUE(loop->SnapshotForEdit(edit));
+            edit.Events[1].sampleOffset = 2u; ASSERT_TRUE(loop->PublishEdit(edit));
+            if (loseHistory) take->ResetPlaybackRateHistoryForDevice(48000u);
+            take->BeginPlaybackRateBlock(block, static_cast<std::uint64_t>(deviceStart) + 4u, nullptr, false);
+            _InvalidateScheduledMidiAtBlockStart(state, deviceStart + 4u);
+            _DrainScheduledMidi(state, deviceStart + 100u, 10u);
+            EXPECT_EQ(0u, destination->ScheduledCount);
+            EXPECT_EQ(0u, binding->QueuedEvents.load());
+            EXPECT_FALSE(binding->AudibleHeld.any());
+            if (loseHistory) EXPECT_TRUE(plugin->Events.empty());
+            else
+            {
+                ASSERT_EQ(2u, plugin->Events.size());
+                EXPECT_TRUE(plugin->Events.back().IsNoteOff());
+                EXPECT_EQ(deviceStart + 100u + static_cast<unsigned>(2.0 / rate), plugin->Events.back().sampleOffset);
+            }
+        }
+    }
+
+    static void CheckEndpointMappingBudgetRecovery()
+    {
+        PreparedState state;
+        auto take = MakeMidiTake("endpoint-budget");
+        auto loop = std::make_shared<midi::MidiLoop>();
+        std::vector<MidiEvent> events;
+        for (unsigned char note = 60u; note < 65u; ++note)
+            events.push_back(MidiEvent::MakeNoteOn(0u, 0u, note, 100u));
+        for (unsigned char note = 60u; note < 65u; ++note)
+            events.push_back(MidiEvent::MakeNoteOff(10u, 0u, note, 23u));
+        loop->ReplaceRecordedEvents(events.data(), events.size(), 1000u);
+        auto plugin = std::make_shared<StationMidiInstrumentFakePlugin>();
+        plugin->Load(L"", 48000.f, 128u, 2u);
+        auto destination = std::make_shared<MidiDestination>();
+        destination->Plugin = plugin; destination->ActiveCompensationDelaySamps = 100u;
+        auto binding = std::make_shared<MidiPlaybackBinding>();
+        binding->Take = take; binding->Loop = loop; binding->Destination = destination;
+        state.MidiPlaybackRoutes.emplace_back(); state.MidiPlaybackRoutes[0].push_back(binding);
+        state.MidiDestinations.push_back(destination); state.DestinationChannels.push_back(0xffffu);
+        state.DestinationRetirements.emplace_back(); CompleteFixtureTopology(state);
+        _InvalidateScheduledMidiAtBlockStart(state, 0u);
+        MidiPlaybackSink output(state);
+        midi::MidiIndexedOutputSink sink(output, 0u, 0u, 0u);
+        loop->ReadBlock(0u, 11u, sink);
+        _DrainScheduledMidi(state, 100u, 1u);
+        ASSERT_EQ(5u, plugin->Events.size()); ASSERT_EQ(5u, destination->ScheduledCount);
+        midi::MidiLoop::EditState edit; ASSERT_TRUE(loop->SnapshotForEdit(edit));
+        for (auto index = 0u; index < edit.EventCount; ++index)
+            if (edit.Events[index].IsNoteOff()) edit.Events[index].sampleOffset = 9u;
+        ASSERT_TRUE(loop->PublishEdit(edit));
+        _InvalidateScheduledMidiAtBlockStart(state, 109u);
+        _DrainPendingMidiReleases(state, 109u);
+        _DrainScheduledMidi(state, 109u, 1u);
+        EXPECT_EQ(0u, destination->ScheduledCount); EXPECT_EQ(0u, binding->QueuedEvents.load());
+        EXPECT_FALSE(binding->AudibleHeld.any()); EXPECT_FALSE(destination->PluginHeld.any());
+        ASSERT_EQ(10u, plugin->Events.size());
+        for (auto index = 5u; index < 10u; ++index)
+        {
+            EXPECT_TRUE(plugin->Events[index].IsNoteOff());
+            EXPECT_EQ(109u, plugin->Events[index].sampleOffset);
+        }
+    }
 
 	static void CheckFanoutReleaseRetry()
 	{
@@ -3544,4 +3649,40 @@ TEST(StationMidiInstrument, PureMidiWithoutLocalRackSkipsTakeMixingAndRackRemova
 	take->OnAction(unload); take->CommitChanges(); station->CommitChanges();
 	RenderStationBlock(station, 1152u);
 	EXPECT_EQ(0u, renderTake());
+}
+
+TEST(StationMidiInstrument, RevisedMidiEndpointUsesAcceptedRampHistoryAndReportsMissingOrFuture)
+{
+    auto take = MakeMidiTake("endpoint-ramp");
+    take->ResetPlaybackRateHistoryForDevice(48000u);
+    take->RestoreRecordingPlaybackRate(1.0);
+    audio::PlaybackRateBlock first;
+    first.InitialRate = first.TargetRate = 0.5;
+    first.Frames = 64u;
+    take->BeginPlaybackRateBlock(first, 1000u, nullptr, false);
+    audio::PlaybackRateBlock ramp;
+    ramp.InitialRate = 0.5; ramp.TargetRate = 2.0; ramp.Damping = 50.0; ramp.Frames = 64u; ramp.Revision = 1u;
+    take->BeginPlaybackRateBlock(ramp, 1064u, nullptr, false);
+    const auto delta = take->SourceProgressBetweenDeviceSamples(1020u, 1090u);
+    ASSERT_TRUE(delta);
+    const auto mapped = take->MapSourceDeltaToDeviceSample(1020u, *delta);
+    EXPECT_EQ(engine::LoopTake::SourceEventMapStatus::Mapped, mapped.Status);
+    EXPECT_EQ(1090u, mapped.Sample);
+    const auto shorter = take->MapSourceDeltaToDeviceSample(1060u, -10.0);
+    EXPECT_EQ(engine::LoopTake::SourceEventMapStatus::Mapped, shorter.Status);
+    EXPECT_EQ(1040u, shorter.Sample);
+    EXPECT_EQ(engine::LoopTake::SourceEventMapStatus::Future,
+        take->MapSourceDeltaToDeviceSample(1020u, 10000.0).Status);
+    EXPECT_EQ(engine::LoopTake::SourceEventMapStatus::Missing,
+        take->MapSourceDeltaToDeviceSample(900u, 10.0).Status);
+}
+
+TEST(StationMidiInstrument, EditedDelayedEndpointKeepsSubframeSourceResidualAndCancelsAttackIfHistoryIsLost)
+{
+    PlaybackReviewDelivery::CheckRateMappedEditedEndpointOwnership();
+}
+
+TEST(StationMidiInstrument, FiveSimultaneousEditedEndpointsRecoverOwnershipWithinCurrentCallback)
+{
+    PlaybackReviewDelivery::CheckEndpointMappingBudgetRecovery();
 }

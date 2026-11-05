@@ -193,6 +193,8 @@ LoopTake::LoopTake(LoopTakeParams params,
 	_vstBlockPtrs()
 {
 	_masterMixer = std::make_shared<AudioMixer>(mixerParams);
+	_sourceRateHistoryWindow = static_cast<std::uint64_t>(params.SampleRate) * 2u + constants::MaxLoopFadeSamps + 128u;
+	_sourceRateHistory.Prepare(static_cast<std::size_t>(_sourceRateHistoryWindow + 2u));
 	_guiRack = std::make_shared<gui::GuiRack>(_GetRackParams(params.Size));
 
 	_children.push_back(_guiRack);
@@ -218,6 +220,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 
 	auto mixerParams = GetMixerParams({ 100,100 }, audio::WireMixBehaviourParams());
 	auto take = std::make_shared<LoopTake>(takeParams, mixerParams);
+	take->RestoreRecordingPlaybackRate(takeStruct.RecordingPlaybackRate);
 	take->_recordingBaselinePacked.store((static_cast<std::uint64_t>(takeStruct.RecordingMasterLengthSamps) << 32u)
 		| takeStruct.RecordingBeatsPerInterval, std::memory_order_release);
 	midi::MidiQuantisationSettings quantisation = take->MidiQuantisation();
@@ -268,6 +271,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 	midiState.Quantisation = quantisation;
 	midiState.QuantisationTransportStartSamps = takeStruct.MidiQuantTransportStart;
 	midiState.PlayIndex = takeStruct.MidiPlayIndex;
+	midiState.SourcePosition = takeStruct.MidiSourcePosition;
 	midiState.LoopLengthSamps = takeStruct.MidiPlayLength;
 	midiState.BaseIntervalSamps = quantisation.BaseIntervalSamps;
 	midiState.BaseDivisions = quantisation.BaseDivisions;
@@ -285,8 +289,7 @@ std::optional<std::shared_ptr<LoopTake>> LoopTake::FromFile(LoopTakeParams takeP
 		if (sidecar->LogicalLength != streamStruct.LogicalLength
 			|| sidecar->AutomationGlobalSampleOrigin != streamStruct.AutomationGlobalSampleOrigin
 			|| sidecar->AutomationGlobalSampleOrigin > std::numeric_limits<std::uint32_t>::max()
-			|| sidecar->LogicalLength > io::JamFile::MaxLoopLengthSamps
-			|| (midiState.LoopLengthSamps != 0ul && midiState.LoopLengthSamps != sidecar->LogicalLength))
+			|| sidecar->LogicalLength > io::JamFile::MaxLoopLengthSamps)
 		{
 			std::cout << "Load: skipped inconsistent MIDI sidecar " << streamStruct.SidecarPath << std::endl;
 			continue;
@@ -563,6 +566,286 @@ void LoopTake::ConfigureTriggerCapture(const TriggerCaptureTiming& timing) noexc
 	_audioCaptureAdmitted.store(true, std::memory_order_relaxed);
 }
 
+void LoopTake::RestoreRecordingPlaybackRate(double rate) noexcept
+{
+	_recordingPlaybackRate.store(audio::PlaybackRate::IsValid(rate) ? rate : 1.0, std::memory_order_release);
+	_recordingPlaybackRatePending.store(false, std::memory_order_release);
+}
+
+bool LoopTake::_InitialiseCaptureRateOrigin(const audio::PlaybackRateHistory& history,
+	std::uint64_t effectiveStart) noexcept
+{
+	const auto rawOffset = _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps;
+	if (rawOffset < 0 && static_cast<std::uint64_t>(-rawOffset) > effectiveStart) return false;
+	const auto rawStart = rawOffset < 0 ? effectiveStart - static_cast<std::uint64_t>(-rawOffset)
+		: effectiveStart + static_cast<std::uint64_t>(rawOffset);
+	const auto content = history.Query(effectiveStart);
+	const auto raw = history.Query(rawStart);
+	if (!content || !raw) return false;
+	_captureRateOrigin = content->Coordinate;
+	_captureMidiRateOrigin = raw->Coordinate;
+	_captureMidiPhysicalOrigin = rawStart;
+	return true;
+}
+
+bool LoopTake::_SeedSourceRateHistory(const audio::PlaybackRateHistory& history, std::uint64_t first,
+	std::uint64_t end, bool sourceRuler) noexcept
+{
+	while (first < end)
+	{
+		auto segment = history.DescribeAt(first);
+		if (!segment) return false;
+		segment->Frames = static_cast<unsigned int>((std::min)(static_cast<std::uint64_t>(segment->Frames), end - first));
+		if (!sourceRuler)
+		{
+			segment->SourceScale = 1.0 / RecordingPlaybackRate();
+			if (segment->RemoteIntervalLengthSamps)
+			{
+				segment->InitialRate = segment->TargetRate = RecordingMasterLengthSamps()
+					? static_cast<double>(RecordingMasterLengthSamps()) / segment->RemoteIntervalLengthSamps : 1.0;
+				segment->SourceScale = 1.0;
+			}
+			segment->HasSourceTransition = _sourceTrajectoryInitialised
+				&& (segment->RemoteIntervalLengthSamps != 0u) != _sourceFollowingRemote;
+			segment->InitialSourceVelocity = _sourceTrajectoryInitialised ? _sourceVelocity
+				: segment->InitialRate * segment->SourceScale;
+			segment->InitialSourcePhaseError = _sourcePhaseError;
+		}
+		segment->MasterLength = 0u; // Only the global history owns the master musical ruler.
+		segment->MasterRecordingRate = 1.0;
+		if (!_sourceRateHistory.Append(first, *segment)) return false;
+		auto cursor = segment->Cursor();
+		if (!segment->IsConstant())
+			for (unsigned int frame = 0u; frame < segment->Frames; ++frame) cursor.Next();
+		_sourceVelocity = cursor.SourceVelocity();
+		_sourcePhaseError = cursor.SourcePhaseError();
+		_sourceTrajectoryInitialised = true;
+		_sourceFollowingRemote = segment->RemoteIntervalLengthSamps != 0u;
+		first += segment->Frames;
+	}
+	return true;
+}
+
+bool LoopTake::CanBeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std::uint64_t deviceStart,
+	bool followingRemote, double legacyRemoteRate, bool allowContinuation) noexcept
+{
+	if (!_sourceRateHistoryStarted) return true;
+	auto candidate = block;
+	candidate.MasterLength = 0u;
+	candidate.MasterRecordingRate = 1.0;
+	candidate.SourceScale = 1.0 / RecordingPlaybackRate();
+	if (followingRemote)
+	{
+		candidate.InitialRate = candidate.TargetRate = RecordingMasterLengthSamps() && block.RemoteIntervalLengthSamps
+			? static_cast<double>(RecordingMasterLengthSamps()) / block.RemoteIntervalLengthSamps : legacyRemoteRate;
+		candidate.SourceScale = 1.0;
+	}
+	candidate.HasSourceTransition = _sourceTransitionActive || _sourcePhaseError != 0.0
+		|| _pendingSourcePhaseCorrection != 0.0 || followingRemote != _sourceFollowingRemote;
+	candidate.InitialSourceVelocity = _sourceVelocity;
+	candidate.InitialSourcePhaseError = _sourcePhaseError + _pendingSourcePhaseCorrection;
+	const auto cutoff = deviceStart > _sourceRateHistoryWindow ? deviceStart - _sourceRateHistoryWindow : 0u;
+	_sourceRateHistory.RetainFrom(RequiredRateHistoryStart(cutoff));
+	return _sourceRateHistory.CanAppend(deviceStart, candidate, allowContinuation);
+}
+
+void LoopTake::BeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std::uint64_t deviceStart,
+	const audio::PlaybackRateHistory* history, bool followingRemote, double legacyRemoteRate) noexcept
+{
+	_playbackRateBlock = block;
+	_playbackRateBlock.MasterLength = 0u;
+	_playbackRateBlock.MasterRecordingRate = 1.0;
+	_playbackRateHistory = &_sourceRateHistory;
+	_masterRateHistory = history;
+	_playbackDeviceStart = deviceStart;
+	_hasPlaybackRateBlock = true;
+	if (!_midiSourceOriginInitialised)
+	{
+		_midiSourceWhole = _midiVisualPlayIndex.load(std::memory_order_relaxed);
+		_midiSourceOriginInitialised = true;
+	}
+	_captureRateDeviceAnchor.store(deviceStart, std::memory_order_release);
+	_captureRateHistory.store(&_sourceRateHistory, std::memory_order_release);
+	std::optional<std::uint64_t> effectiveStart;
+	if (_triggerCaptureConfigured && !_captureRateOriginReady.load(std::memory_order_acquire))
+	{
+		const auto trigger = _triggerCaptureTiming.TriggerSample.value_or(static_cast<std::uint32_t>(deviceStart));
+		const auto age = midi::MidiSampleDelta(static_cast<std::uint32_t>(deviceStart), trigger) + _triggerCaptureTiming.DelaySamps;
+		if (age < 0 && static_cast<std::uint64_t>(-age) >= block.Frames) return;
+		if (age > 0 && static_cast<std::uint64_t>(age) > deviceStart)
+		{ _captureCancelled.store(true, std::memory_order_release); return; }
+		effectiveStart = age < 0 ? deviceStart + static_cast<std::uint64_t>(-age) : deviceStart - static_cast<std::uint64_t>(age);
+	}
+	if (_recordingPlaybackRatePending.load(std::memory_order_acquire))
+	{
+		if (!_triggerCaptureConfigured) effectiveStart = deviceStart;
+		const auto atStart = history && effectiveStart ? history->DescribeAt(*effectiveStart)
+			: !_triggerCaptureConfigured ? std::optional<audio::PlaybackRateBlock>{ block } : std::nullopt;
+		if (!atStart) { _captureCancelled.store(true, std::memory_order_release); return; }
+		_recordingPlaybackRate.store(atStart->RemoteIntervalLengthSamps ? atStart->TargetRate : atStart->RateAt(0u), std::memory_order_release);
+		_recordingBaselinePacked.store((atStart->RemoteIntervalLengthSamps << 32u) | atStart->RemoteBpi, std::memory_order_release);
+		_recordingBaselinePending.store(false, std::memory_order_release);
+		_recordingPlaybackRatePending.store(false, std::memory_order_release);
+		_midiQuantisationUpdatePending.store(true, std::memory_order_release);
+	}
+	if (!_sourceRateHistoryStarted)
+	{
+		if (effectiveStart && history)
+		{
+			const auto before = static_cast<std::uint64_t>(_triggerCaptureTiming.SourceAgeSamps) + _triggerCaptureTiming.SeamSamps + 128u;
+			const auto rawOffset = _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps;
+			if (rawOffset < 0 && static_cast<std::uint64_t>(-rawOffset) > *effectiveStart)
+			{ _captureCancelled.store(true, std::memory_order_release); return; }
+			const auto rawStart = rawOffset < 0 ? *effectiveStart - static_cast<std::uint64_t>(-rawOffset)
+				: *effectiveStart + static_cast<std::uint64_t>(rawOffset);
+			const auto first = (std::min)({ *effectiveStart, rawStart, deviceStart > before ? deviceStart - before : 0u });
+			const auto& seed = _captureRateParent ? _captureRateParent->_sourceRateHistory : *history;
+			if (!_SeedSourceRateHistory(seed, first, deviceStart, _captureRateParent != nullptr))
+			{ _captureCancelled.store(true, std::memory_order_release); return; }
+		}
+		_sourceRateHistoryStarted = true;
+	}
+	_playbackRateBaseline = RecordingPlaybackRate();
+	_playbackRateBlock.SourceScale = 1.0 / _playbackRateBaseline;
+	if (followingRemote)
+	{
+		const auto rate = RecordingMasterLengthSamps() && block.RemoteIntervalLengthSamps
+			? static_cast<double>(RecordingMasterLengthSamps()) / block.RemoteIntervalLengthSamps
+			: _recordingPhaseMap.IsActive()
+			? static_cast<double>(_recordingPhaseMap.SourceLengthSamps) / _recordingPhaseMap.RemoteLengthSamps
+			: legacyRemoteRate;
+		_playbackRateBlock.InitialRate = _playbackRateBlock.TargetRate = rate;
+		_playbackRateBlock.SourceScale = 1.0;
+		if (_sourceTrajectoryInitialised && rate != _previousRemoteSourceRate) _sourceTransitionActive = true;
+		_previousRemoteSourceRate = rate;
+	}
+	_playbackRateBaseline = 1.0;
+	if (_sourceTrajectoryInitialised && followingRemote != _sourceFollowingRemote) _sourceTransitionActive = true;
+	_sourceFollowingRemote = followingRemote;
+	if (!_sourceTrajectoryInitialised)
+	{
+		_sourceVelocity = _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale;
+		_sourceTrajectoryInitialised = true;
+	}
+	const auto sharedOffset = _desiredSharedPlaybackOffset.load(std::memory_order_acquire);
+	const bool firstTrajectory = !_sharedPlaybackTrajectoryActive.exchange(true, std::memory_order_acq_rel);
+	if (firstTrajectory) _midiSourceWhole -= sharedOffset;
+	const auto desiredPhaseError = _sourcePhaseError + _pendingSourcePhaseCorrection
+		- (firstTrajectory ? 0.0 : static_cast<double>(static_cast<std::int64_t>(sharedOffset) - _appliedSharedPlaybackOffset));
+	_playbackRateBlock.HasSourceTransition = _sourceTransitionActive || desiredPhaseError != 0.0;
+	_playbackRateBlock.InitialSourceVelocity = _sourceVelocity;
+	_playbackRateBlock.InitialSourcePhaseError = desiredPhaseError;
+	const auto cutoff = deviceStart > _sourceRateHistoryWindow ? deviceStart - _sourceRateHistoryWindow : 0u;
+	_sourceRateHistory.RetainFrom(RequiredRateHistoryStart(cutoff));
+	if (_sourceRateHistory.CanAppend(deviceStart, _playbackRateBlock))
+	{
+		_pendingSourcePhaseCorrection = 0.0;
+		_appliedSharedPlaybackOffset = sharedOffset;
+	}
+	else
+	{
+		// Keep the newest absolute shared target pending. Existing accepted
+		// audible motion continues until its retained history can admit it.
+		_playbackRateBlock.InitialSourcePhaseError = _sourcePhaseError;
+		_playbackRateBlock.HasSourceTransition = _sourceTransitionActive || _sourcePhaseError != 0.0;
+	}
+	if (!_sourceRateHistory.Append(deviceStart, _playbackRateBlock))
+	{
+		// A capture consumer exceeded its prepared physical history window. Retire
+		// that capture before releasing its pin; playback must retain continuity.
+		_captureCancelled.store(true, std::memory_order_release);
+		_sourceRateHistory.RetainFrom(cutoff);
+		if (!_sourceRateHistory.Append(deviceStart, _playbackRateBlock))
+		{
+			_sourceRateHistory.Clear();
+			_sourceRateHistory.Append(deviceStart, _playbackRateBlock);
+		}
+	}
+	if (effectiveStart)
+	{
+		if (!_InitialiseCaptureRateOrigin(_sourceRateHistory, *effectiveStart))
+		{ _captureCancelled.store(true, std::memory_order_release); return; }
+		_captureRateOriginReady.store(true, std::memory_order_release);
+	}
+	auto state = _BorrowAudioState();
+	if (!state) return;
+	for (const auto& loop : state->Loops)
+		if (loop)
+		{
+			if (firstTrajectory) loop->AdoptInheritedPlaybackOffsetAtAudioBoundary();
+			loop->SetInheritedPlaybackOffsetSamps(0);
+			loop->SetPlaybackRateBlockAtAudioBoundary(_playbackRateBlock, _playbackRateBaseline);
+		}
+}
+
+void LoopTake::ResetPlaybackRateHistoryForDevice(unsigned int sampleRate)
+{
+	if (IsArmed()) CancelCapture(true);
+	_triggerCaptureConfigured = false;
+	_sourceRateHistoryWindow = static_cast<std::uint64_t>(sampleRate) * 2u + constants::MaxLoopFadeSamps + 128u;
+	_sourceRateHistory.Prepare(static_cast<std::size_t>(_sourceRateHistoryWindow + 2u));
+	_sourceRateHistoryStarted = false;
+	_playbackRateHistory = nullptr;
+	_masterRateHistory = nullptr;
+	_captureRateHistory.store(nullptr, std::memory_order_release);
+	_captureRateOriginReady.store(false, std::memory_order_release);
+	_captureRateDeviceAnchor.store(0u, std::memory_order_release);
+	_midiRateHistoryConsumedThrough.store(0u, std::memory_order_release);
+	_hasPlaybackRateBlock = false;
+	_captureUsesRateMapping = false;
+}
+
+void LoopTake::CancelRateCaptureBefore(std::uint64_t earliest) noexcept
+{
+	if (RequiredRateHistoryStart(earliest) >= earliest) return;
+	_sourceLossCancelled.store(true, std::memory_order_release);
+	_captureCancelled.store(true, std::memory_order_release);
+	_audioCaptureAdmitted.store(false, std::memory_order_release);
+	const auto loops = _BorrowMidiLoopSnapshot();
+	if (loops) for (const auto& loop : *loops) if (loop) loop->RequestHeldFlush();
+}
+
+std::uint64_t LoopTake::RequiredRateHistoryStart(std::uint64_t fallback) const noexcept
+{
+	if (!_triggerCaptureConfigured || _captureCancelled.load(std::memory_order_acquire)) return fallback;
+	const auto requiredAge = static_cast<std::uint64_t>(_triggerCaptureTiming.SourceAgeSamps) + 128u;
+	const auto physical = _playbackDeviceStart >= requiredAge ? _playbackDeviceStart - requiredAge : 0u;
+	const auto state = _state.load(std::memory_order_acquire);
+	if (state == STATE_RECORDING || state == STATE_OVERDUBBING || state == STATE_PUNCHEDIN
+		|| state == STATE_PLAYINGRECORDING || state == STATE_OVERDUBBINGRECORDING)
+		fallback = (std::min)(fallback, physical);
+	if (_midiTriggerCapturePending.load(std::memory_order_acquire))
+	{
+		const auto consumed = _midiRateHistoryConsumedThrough.load(std::memory_order_acquire);
+		fallback = (std::min)(fallback, consumed ? consumed : _captureMidiPhysicalOrigin);
+	}
+	return fallback;
+}
+
+double LoopTake::MidiSourcePositionAtFrame(unsigned int frame) const noexcept
+{
+	return static_cast<double>(_midiSourceOriginInitialised ? _midiSourceWhole : _midiVisualPlayIndex.load(std::memory_order_relaxed)) + _midiSourceFraction
+		+ (_hasPlaybackRateBlock ? _playbackRateBlock.Advance(frame, _playbackRateBaseline) : frame);
+}
+
+double LoopTake::MidiSourcePhaseAtFrame(unsigned int frame, unsigned long length) const noexcept
+{
+	if (!length) return 0.0;
+	const auto whole = _midiSourceOriginInitialised ? _midiSourceWhole : _midiVisualPlayIndex.load(std::memory_order_relaxed);
+	const auto start = ninjam::PositiveModulo(whole, length);
+	return std::fmod(static_cast<double>(start) + _midiSourceFraction
+		+ (_hasPlaybackRateBlock ? _playbackRateBlock.Advance(frame, _playbackRateBaseline) : frame), static_cast<double>(length));
+}
+
+void LoopTake::SetCaptureInputHistoryAtAudioBoundary(const audio::InputHistoryView& history) noexcept
+{
+	auto state = _BorrowAudioState();
+	if (!state) return;
+	for (std::size_t i = 0u; i < state->Loops.size(); ++i)
+		if (state->Loops[i] && i < state->RecordInputChannels.size())
+			state->Loops[i]->SetCaptureInputHistoryAtAudioBoundary(history, state->RecordInputChannels[i]);
+}
+
 void LoopTake::BeginCaptureAudioBoundary(std::uint64_t deviceSample,
 	std::uint64_t sceneSample, std::uint64_t absoluteSample) noexcept
 {
@@ -588,10 +871,54 @@ void LoopTake::BeginCaptureAudioBoundary(std::uint64_t deviceSample,
     {
         // A take can finalize before its first topology publication. Its baked
         // grid origin is already canonical and must survive that late boundary.
-        if (!_capturePlaybackPrepared.load(std::memory_order_acquire))
+        if (!_capturePlaybackPrepared.load(std::memory_order_acquire) || _masterRateHistory)
         {
-            const auto contentOrigin = _triggerCaptureTiming.ContentTransportOrigin.value_or(
+            auto contentOrigin = _triggerCaptureTiming.ContentTransportOrigin.value_or(
                 static_cast<std::int64_t>(absoluteSample) - elapsed - _triggerCaptureTiming.DelaySamps);
+			if (_masterRateHistory && _captureRateOriginReady.load(std::memory_order_acquire))
+			{
+				const auto effective = static_cast<std::int64_t>(_captureMidiPhysicalOrigin)
+					+ _triggerCaptureTiming.SeamSamps - _triggerCaptureTiming.DelaySamps;
+				if (effective < 0) { _captureCancelled.store(true, std::memory_order_release); return; }
+				if (const auto master = _masterRateHistory->QueryMusicalPosition(static_cast<std::uint64_t>(effective)))
+				{
+					const auto description = _masterRateHistory->DescribeAt(static_cast<std::uint64_t>(effective));
+					const auto scale = description && description->RemoteIntervalLengthSamps
+						? (RecordingMasterLengthSamps() ? static_cast<double>(RecordingMasterLengthSamps()) / master->MasterLength : 1.0)
+						: master->RecordingRate / RecordingPlaybackRate();
+					// Grid phase repeats at the master interval. Reduce before converting
+					// rulers so long sessions never multiply an ever-growing double clock.
+					contentOrigin = static_cast<std::int64_t>(std::llround((static_cast<double>(ninjam::PositiveModulo(
+						master->Coordinate.Whole, master->MasterLength)) + master->Coordinate.Fraction) * scale));
+				}
+				else if (_triggerCaptureTiming.PendingMasterDeviceOrigin)
+				{
+					const auto age = midi::MidiSampleDelta(static_cast<std::uint32_t>(deviceSample), *_triggerCaptureTiming.PendingMasterDeviceOrigin);
+					const auto pending = age >= 0 && static_cast<std::uint64_t>(age) <= deviceSample
+						? std::optional<std::uint64_t>{deviceSample - age} : std::nullopt;
+					if (!pending) { _captureCancelled.store(true, std::memory_order_release); return; }
+					const auto end = static_cast<std::uint64_t>(effective);
+					auto frame = (std::min)(*pending, end);
+					const auto through = (std::max)(*pending, end);
+					double progress = 0.0;
+					while (frame < through)
+					{
+						auto segment = _masterRateHistory->DescribeAt(frame);
+						if (!segment || !segment->Frames) { _captureCancelled.store(true, std::memory_order_release); return; }
+						const auto frames = static_cast<unsigned int>((std::min)(through - frame,
+							static_cast<std::uint64_t>(segment->Frames)));
+						// A pending remote master advances in the remote physical ruler;
+						// the retained local rate does not govern that source interval.
+						progress += segment->RemoteIntervalLengthSamps
+							? frames * (RecordingMasterLengthSamps() ? static_cast<double>(RecordingMasterLengthSamps())
+								/ segment->RemoteIntervalLengthSamps : 1.0)
+							: segment->Advance(frames, RecordingPlaybackRate());
+						frame += frames;
+					}
+					contentOrigin = static_cast<std::int64_t>(std::llround(end < *pending ? -progress : progress));
+				}
+				else contentOrigin = 0; // No master exists at the effective content edge.
+			}
             _midiCaptureTransportOrigin.store(contentOrigin, std::memory_order_release);
             const auto interval = ResolvedMidiQuantisation().GridInterval();
             const auto gridOrigin = contentOrigin < 0 && interval > 0u
@@ -600,25 +927,55 @@ void LoopTake::BeginCaptureAudioBoundary(std::uint64_t deviceSample,
         }
         CaptureFirstRecordBlockSceneAtAudioBoundary(sceneSample);
     }
-	const auto cursor = static_cast<std::int64_t>(constants::MaxLoopFadeSamps) + elapsed
+	auto cursor = static_cast<std::int64_t>(constants::MaxLoopFadeSamps) + elapsed
 		- _triggerCaptureTiming.SourceAgeSamps + _triggerCaptureTiming.DelaySamps;
+	const auto physicalInputStart = deviceSample >= _triggerCaptureTiming.SourceAgeSamps
+		? deviceSample - _triggerCaptureTiming.SourceAgeSamps : 0u;
+	if (_captureRateOriginReady.load(std::memory_order_acquire) && _playbackRateHistory)
+	{
+		_captureUsesRateMapping = _captureUsesRateMapping
+			|| !_independentRecording
+			|| _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale != 1.0
+			|| _playbackRateBlock.TargetRate * _playbackRateBlock.SourceScale != 1.0
+			|| _playbackRateBlock.HasSourceTransition;
+		if (_captureUsesRateMapping && deviceSample >= _triggerCaptureTiming.SourceAgeSamps)
+		{
+			const auto point = _playbackRateHistory->Query(physicalInputStart);
+			if (!point)
+			{
+				_captureCancelled.store(true, std::memory_order_release);
+				return;
+			}
+			cursor = constants::MaxLoopFadeSamps + static_cast<std::int64_t>(std::floor(
+				point->Coordinate.Difference(_captureRateOrigin)));
+		}
+	}
+	for (const auto& loop : state->Loops)
+		if (loop) loop->SetCaptureRateHistoryAtAudioBoundary(_captureUsesRateMapping ? _playbackRateHistory : nullptr,
+			physicalInputStart, _captureRateOrigin, 1.0);
 	const auto begin = static_cast<std::int64_t>(constants::MaxLoopFadeSamps)
 		+ _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps;
 	if (!state->Loops.empty() && (begin < 0 || (_recordedSampCount.load(std::memory_order_relaxed) == 0 && cursor > begin)))
 		_audioCaptureAdmitted.store(false, std::memory_order_release);
 	const auto activate = _capturePlaybackPrepared.load(std::memory_order_acquire)
         && _capturePlaybackPending.exchange(false, std::memory_order_acq_rel);
+	const auto sourcePosition = CaptureSourcePositionAtDeviceSample(static_cast<std::uint32_t>(deviceSample));
+	const auto contentPosition = sourcePosition ? static_cast<long long>(std::floor(*sourcePosition))
+		: static_cast<long long>(elapsed) + _triggerCaptureTiming.DelaySamps;
 	const auto midiLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
 	if (activate && midiLength > 0)
-		_midiVisualPlayIndex.store(_NormalizeLoopIndex(static_cast<long long>(elapsed)
-			+ _triggerCaptureTiming.DelaySamps, midiLength), std::memory_order_relaxed);
+	{
+		_midiSourceWhole = contentPosition;
+		_midiSourceFraction = sourcePosition ? *sourcePosition - std::floor(*sourcePosition) : 0.0;
+		_midiVisualPlayIndex.store(_NormalizeLoopIndex(contentPosition, midiLength), std::memory_order_relaxed);
+	}
 	for (const auto& loop : state->Loops)
 		if (loop)
 		{
 			loop->SetTriggerCaptureCursor(cursor);
 			if (activate && loop->LoopLength() > 0)
-				loop->SetBodyPlayIndex(_NormalizeLoopIndex(static_cast<long long>(elapsed)
-					+ _triggerCaptureTiming.DelaySamps + _captureOutputAdvance.load(std::memory_order_relaxed), loop->LoopLength()));
+				loop->SetBodyPlayIndex(_NormalizeLoopIndex(contentPosition
+					+ _captureOutputAdvance.load(std::memory_order_relaxed), loop->LoopLength()));
 		}
     publishPhase();
 }
@@ -730,7 +1087,7 @@ bool LoopTake::ConfigureRecordedPlaybackCompensation(
 void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
 	int indexOffset,
-	unsigned int numSamps, const audio::DacRenderContext* dac, const RenderState* prepared)
+	unsigned int numSamps, const audio::DacRenderContext* dac, const RenderState* prepared, bool sourceResidual)
 {
 	if (_captureCancelled.load(std::memory_order_acquire))
 	{
@@ -786,7 +1143,7 @@ void LoopTake::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
             loop->WriteBlock(loopDest, bounceWriter, indexOffset, numSamps, provisional ? dac : nullptr,
                 _triggerCaptureTiming.TriggerSample.value_or(0u), _triggerCaptureTiming.DelaySamps,
                 provisional ? state->RecordInputChannels[i] : 0u,
-				prepared ? prepared->LoopChains[i].get() : nullptr, prepared != nullptr);
+				prepared ? prepared->LoopChains[i].get() : nullptr, prepared != nullptr, sourceResidual);
 	if (IsMuted())
 		for (const auto& loop : state->Loops)
 			if (loop) loop->ClearRecordedPlaybackDelay();
@@ -892,9 +1249,32 @@ void LoopTake::ProcessActiveBounce(int sourceOffset, unsigned int numSamps)
 		return;
 
 	auto target = MultiAudioSink::shared_from_this();
+	auto destinationState = _BorrowAudioState();
+	auto sourceState = sourceTake->_BorrowAudioState();
+	if (!destinationState || !sourceState) return;
+	if (_captureUsesRateMapping)
+	{
+		const auto outputLatency = (std::max)(std::int64_t{0}, -static_cast<std::int64_t>(sourceOffset)
+			- _triggerCaptureTiming.SourceAgeSamps);
+		if (static_cast<std::uint64_t>(outputLatency) > _playbackDeviceStart)
+		{ _captureCancelled.store(true, std::memory_order_release); return; }
+		const auto current = _sourceRateHistory.Query(_playbackDeviceStart);
+		const auto latency = sourceTake->_sourceRateHistory.QueryDifference(_playbackDeviceStart - outputLatency, _playbackDeviceStart);
+		if (!current || !latency) { _captureCancelled.store(true, std::memory_order_release); return; }
+		const auto progress = current->Coordinate.Difference(_captureRateOrigin) + *latency;
+		for (std::size_t i = 0u; i < destinationState->Loops.size(); ++i)
+			if (const auto& destination = destinationState->Loops[i])
+			{
+				const auto* source = i < sourceState->Loops.size() ? sourceState->Loops[i].get() : nullptr;
+				destination->SetCaptureSourceAtAudioBoundary(source,
+					source ? source->FractionalBodyPlayIndex() - progress : 0.0);
+			}
+	}
 	_activeBounceWriter->BeginCaptureBlock(numSamps);
-	sourceTake->WriteBlock(target, _activeBounceWriter, sourceOffset, numSamps);
+	sourceTake->WriteBlock(target, _activeBounceWriter, sourceOffset, numSamps, nullptr, nullptr, _captureUsesRateMapping);
 	_activeBounceWriter->EndCaptureBlock(numSamps);
+	for (const auto& loop : destinationState->Loops)
+		if (loop) loop->SetCaptureSourceAtAudioBoundary(nullptr, 0.0);
 }
 
 void LoopTake::EndMultiPlay(unsigned int numSamps)
@@ -907,6 +1287,15 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 
 	for (const auto& loop : state->Loops)
 		if (loop) loop->EndMultiPlay(numSamps);
+	if (_hasPlaybackRateBlock)
+	{
+		auto cursor = _playbackRateBlock.Cursor();
+		for (auto frame = 0u; frame < numSamps; ++frame) cursor.Next();
+		_sourceVelocity = cursor.SourceVelocity();
+		_sourcePhaseError = cursor.SourcePhaseError();
+		_sourceTransitionActive = _sourcePhaseError != 0.0
+			|| std::abs(_sourceVelocity - cursor.Current() * _playbackRateBlock.SourceScale) > audio::PlaybackRateCursor::SettleTolerance;
+	}
 
 	// Queue-based take-only phase shift (transport offset / global phase offset).
 	// NINJAM connected corrections do NOT use this path; they arrive through the
@@ -931,8 +1320,14 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	{
 		if (validCorrection != 0)
 			_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
-		for (const auto& loop : state->Loops)
-			if (loop) loop->ShiftPlayIndex(correction);
+		if (_hasPlaybackRateBlock)
+		{
+			_pendingSourcePhaseCorrection += static_cast<double>(validCorrection);
+			_sourceTransitionActive = true;
+		}
+		else
+			for (const auto& loop : state->Loops)
+				if (loop) loop->ShiftPlayIndex(correction);
 	}
 
 	for (auto& buffer : state->AudioBuffers)
@@ -944,10 +1339,22 @@ void LoopTake::EndMultiPlay(unsigned int numSamps)
 	const auto midiLoopLength = _midiVisualLoopLength.load(std::memory_order_relaxed);
 	if (midiLoopLength > 0ul && !_firstMasterActivationPending.load(std::memory_order_acquire))
 	{
-		auto midiPlayIndex = _midiVisualPlayIndex.load(std::memory_order_relaxed) + numSamps;
+		const auto advance = _hasPlaybackRateBlock
+			? _playbackRateBlock.Advance(numSamps, _playbackRateBaseline) : static_cast<double>(numSamps);
+		const auto complete = std::floor(_midiSourceFraction + advance);
+		_midiSourceFraction += advance - complete;
+		if (_midiSourceOriginInitialised)
+		{
+			if (_midiSourceWhole > (std::numeric_limits<std::int64_t>::max)() - static_cast<std::int64_t>(complete))
+			{ _captureCancelled.store(true, std::memory_order_release); return; }
+			_midiSourceWhole += static_cast<std::int64_t>(complete);
+		}
+		auto midiPlayIndex = _midiSourceOriginInitialised
+			? static_cast<unsigned long>(ninjam::PositiveModulo(_midiSourceWhole, midiLoopLength))
+			: _midiVisualPlayIndex.load(std::memory_order_relaxed) + static_cast<unsigned long>(complete);
 		while (midiPlayIndex >= midiLoopLength)
 			midiPlayIndex -= midiLoopLength;
-		if (applyCorrection)
+		if (applyCorrection && !_hasPlaybackRateBlock)
 		{
 			const auto length = static_cast<long long>(midiLoopLength);
 			auto shifted = (static_cast<long long>(midiPlayIndex) + (correction % length)) % length;
@@ -971,6 +1378,13 @@ void LoopTake::ApplyAcceptedTimingCorrection(long long deltaSamps,
 	_audioTimingGeneration = generation;
 	if (deltaSamps == 0)
 		return;
+	if (_hasPlaybackRateBlock)
+	{
+		_pendingSourcePhaseCorrection += static_cast<double>(deltaSamps);
+		_sourceTransitionActive = true;
+		_consumedTimingCorrectionCount.fetch_add(1u, std::memory_order_relaxed);
+		return;
+	}
 
 	if (_ShiftDirectPlaybackCursors(deltaSamps))
 	{
@@ -1146,6 +1560,10 @@ void LoopTake::ResetTimingEpoch() noexcept
 
 void LoopTake::RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample) noexcept
 {
+	// Continuous playback owns its fractional cursor. Accepted remote corrections
+	// retarget the take trajectory in ApplyRemoteTiming; restoring here would
+	// discard the remaining audible alignment error on every callback.
+	if (_hasPlaybackRateBlock) return;
 	// Configured capture publishes its final cursor at the activation boundary.
 	if (_triggerCaptureConfigured && (!_capturePlaybackPrepared.load(std::memory_order_acquire)
 		|| _capturePlaybackPending.load(std::memory_order_acquire)))
@@ -1216,8 +1634,13 @@ void LoopTake::SetInitialLocalTransportOffsetSamps(long long targetSamps) noexce
 	_desiredLocalTransportOffsetSamps.store(targetSamps, std::memory_order_release);
 }
 
-void LoopTake::SetLocalTransportOffsetSamps(long long targetSamps) noexcept
+void LoopTake::SetLocalTransportOffsetSamps(long long targetSamps, double masterRecordingRate,
+    unsigned long remoteLength, unsigned long legacySourceLength) noexcept
 {
+    const auto sourceLength = RecordingMasterLengthSamps() ? RecordingMasterLengthSamps() : legacySourceLength;
+    const auto scale = remoteLength ? (sourceLength ? static_cast<double>(sourceLength) / remoteLength : 1.0)
+        : masterRecordingRate / RecordingPlaybackRate();
+    targetSamps = static_cast<long long>(std::llround(static_cast<double>(targetSamps) * scale));
 	_desiredLocalTransportOffsetSamps.store(targetSamps, std::memory_order_release);
 	_TryApplyLocalTransportOffset();
 }
@@ -1239,6 +1662,13 @@ void LoopTake::_TryApplyLocalTransportOffset() noexcept
 	const auto deltaSamps = _OffsetDelta(targetSamps, _appliedLocalTransportOffsetSamps);
 	if (deltaSamps == 0)
 		return;
+	if (_hasPlaybackRateBlock)
+	{
+		_pendingSourcePhaseCorrection += static_cast<double>(deltaSamps);
+		_sourceTransitionActive = true;
+		_appliedLocalTransportOffsetSamps = targetSamps;
+		return;
+	}
 
 	if (_ShiftDirectPlaybackCursors(deltaSamps))
 	{
@@ -1334,7 +1764,10 @@ void LoopTake::EndMultiWrite(unsigned int numSamps,
 
 	if (isRecording)
 	{
-		_recordedSampCount.fetch_add(numSamps, std::memory_order_relaxed);
+		const auto sourceEnd = CaptureSourcePositionAtDeviceSample(CaptureBoundarySample() + numSamps);
+		if (sourceEnd && *sourceEnd >= 0.0 && *sourceEnd <= (std::numeric_limits<unsigned long>::max)())
+			_recordedSampCount.store(static_cast<unsigned long>(std::floor(*sourceEnd)), std::memory_order_relaxed);
+		else _recordedSampCount.fetch_add(numSamps, std::memory_order_relaxed);
 		_loopsNeedUpdating = true;
 		_changesMade = true;
 	}
@@ -2149,6 +2582,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 	_independentRecording = true;
 	_recordingBaselinePacked.store(0u, std::memory_order_release);
 	_recordingBaselinePending.store(true, std::memory_order_release);
+	_recordingPlaybackRatePending.store(true, std::memory_order_release);
     _midiRecordStartSample = midiRecordStartSample;
     _midiCaptureCloseRequested = false;
     _midiTriggerCapturePending.store(_triggerCaptureConfigured && !midiChannels.empty(), std::memory_order_release);
@@ -2205,6 +2639,7 @@ void LoopTake::Record(std::vector<unsigned int> channels,
 		for (auto midiChan : midiChannels)
 		{
 			auto midiLoop = std::make_shared<midi::MidiLoop>(_sampleRate, _midiSeamMergeWindowMs);
+			midiLoop->UseTakePhaseTrajectory();
 			midiLoop->SetGroupId(utils::GetGuid());
 			graphics::MidiModelParams modelParams;
 			modelParams.ModelScale = 1.0f;
@@ -2273,11 +2708,16 @@ bool LoopTake::_RecordMidiEventUnlocked(const midi::MidiEvent& ev,
 	std::uint32_t globalSampleNow) noexcept
 {
     if (_midiLoops.empty()) return false;
+	if (!_MapPendingMidiCaptureRate()) { CancelCapture(true); return false; }
+	const auto mappedCaptureSample = _midiCaptureRateMapped ? _MappedMidiCaptureOffset(ev.sampleOffset)
+		: std::optional<std::uint32_t>{};
+	if (_midiCaptureRateMapped && !mappedCaptureSample) { CancelCapture(true); return false; }
     if (_triggerCaptureConfigured && _midiRecordStartSample)
     {
         const auto physical = static_cast<std::int64_t>(midi::MidiSampleDelta(ev.sampleOffset, *_midiRecordStartSample))
             + _triggerCaptureTiming.SeamSamps;
-        if (physical < 0 || (_midiCaptureCloseRequested && physical >= _midiCaptureFinalLength)) return false;
+        if (physical < 0 || (_midiCaptureCloseRequested
+			&& (mappedCaptureSample ? *mappedCaptureSample : physical) >= _midiCaptureFinalLength)) return false;
     }
 
     const auto midiChan = ev.Channel();
@@ -2338,8 +2778,9 @@ bool LoopTake::_RecordMidiEventUnlocked(const midi::MidiEvent& ev,
             const auto physical = static_cast<std::int64_t>(midi::MidiSampleDelta(ev.sampleOffset,
                 *_midiRecordStartSample)) + _triggerCaptureTiming.SeamSamps;
             if (physical < 0 || physical > std::numeric_limits<std::int32_t>::max()) continue;
-            if (_midiCaptureCloseRequested && physical >= _midiCaptureFinalLength) continue;
-            stamped.sampleOffset = static_cast<std::uint32_t>(physical);
+            if (_midiCaptureCloseRequested
+				&& mappedCaptureSample.value_or(static_cast<std::uint32_t>(physical)) >= _midiCaptureFinalLength) continue;
+            stamped.sampleOffset = mappedCaptureSample.value_or(static_cast<std::uint32_t>(physical));
         }
         else
             stamped.sampleOffset = _midiRecordStartSample
@@ -2459,15 +2900,26 @@ unsigned int LoopTake::ReadPreparedMidiBlock(std::span<const std::shared_ptr<mid
 			continue;
 
 		const auto masterVelocityScale = rawVelocity ? 1.0f : RecordedMidiVelocityScale();
+		const auto streamStart = midiLoop->LoopLengthSamps()
+			? static_cast<std::uint32_t>(ninjam::PositiveModulo(_hasPlaybackRateBlock ? _midiSourceWhole
+				: static_cast<std::int64_t>(midiBlockStart) - ResolvedMidiQuantisation().PhaseOffsetSamps, midiLoop->LoopLengthSamps())) : midiBlockStart;
 		midi::MidiIndexedOutputSink indexedSink(sink,
 			firstOutputIndex + i,
-			midiBlockStart,
+			streamStart,
 			globalSample,
 			masterVelocityScale);
 		if (flushOnly)
-			midiLoop->FlushPlaybackHeldNotes(midiBlockStart, indexedSink);
+			midiLoop->FlushPlaybackHeldNotes(streamStart, indexedSink);
+		else if (_hasPlaybackRateBlock)
+		{
+			indexedSink.SetPlaybackRate(_playbackRateBlock, _playbackRateBaseline, _midiSourceFraction);
+			const auto first = static_cast<std::uint32_t>(std::ceil(_midiSourceFraction));
+			const auto end = static_cast<std::uint32_t>(std::ceil(_midiSourceFraction
+				+ _playbackRateBlock.Advance(numSamples, _playbackRateBaseline)));
+			midiLoop->ReadBlock(streamStart + first, end - first, indexedSink);
+		}
 		else
-			midiLoop->ReadBlock(midiBlockStart, numSamples, indexedSink);
+			midiLoop->ReadBlock(streamStart, numSamples, indexedSink);
 	}
 
 	return static_cast<unsigned int>(sources.size());
@@ -2609,15 +3061,141 @@ void LoopTake::Play(unsigned long index,
 
 }
 
-unsigned long LoopTake::_MidiPhaseAtDeviceSample(std::uint32_t sample, unsigned long length) const noexcept
+LoopTake::SourceEventMapping LoopTake::MapSourceDeltaToDeviceSample(std::uint32_t origin, double delta) const noexcept
+{
+    if (!_hasPlaybackRateBlock)
+        return {SourceEventMapStatus::Mapped, origin + static_cast<std::uint32_t>(static_cast<std::int64_t>(delta))};
+    const auto age = midi::MidiSampleDelta(static_cast<std::uint32_t>(_playbackDeviceStart), origin);
+    if (age < 0 || static_cast<std::uint64_t>(age) > _playbackDeviceStart)
+        return {SourceEventMapStatus::Missing};
+    const auto first = _sourceRateHistory.Query(_playbackDeviceStart - age);
+    if (!first) return {SourceEventMapStatus::Missing};
+    auto target = first->Coordinate;
+    if (!target.Advance(delta)) return {SourceEventMapStatus::Missing};
+    const auto endSample = _playbackDeviceStart + _playbackRateBlock.Frames;
+    const auto end = _sourceRateHistory.Query(endSample);
+    if (!end) return {SourceEventMapStatus::Missing};
+    if (target.Difference(end->Coordinate) >= 0.0)
+        return {SourceEventMapStatus::Future, static_cast<std::uint32_t>(endSample)};
+    auto low = _playbackDeviceStart > _sourceRateHistoryWindow ? _playbackDeviceStart - _sourceRateHistoryWindow : 0u;
+    auto high = endSample;
+    // Missing older points precede the retained history. Never extrapolate a
+    // revised endpoint using the latest rate or move its physical compensation.
+    while (low < high)
+    {
+        const auto middle = low + (high - low) / 2u;
+        const auto point = _sourceRateHistory.Query(middle);
+        if (!point || point->Coordinate.Difference(target) < -1e-9) low = middle + 1u;
+        else high = middle;
+    }
+    const auto mapped = _sourceRateHistory.Query(low);
+    if (!mapped) return {SourceEventMapStatus::Missing};
+    if (low > 0u)
+    {
+        const auto previous = _sourceRateHistory.Query(low - 1u);
+        if (mapped->Coordinate.Difference(target) > 1e-9)
+        {
+            if (!previous) return {SourceEventMapStatus::Missing};
+            --low; // The frame owns [source edge, next source edge).
+        }
+    }
+    return {SourceEventMapStatus::Mapped, static_cast<std::uint32_t>(low)};
+}
+
+std::optional<unsigned long> LoopTake::_MidiPhaseAtDeviceSample(std::uint32_t sample, unsigned long length) const noexcept
 {
     const auto observation = _midiDevicePhaseObservation.load(std::memory_order_acquire);
+	const auto anchor = _captureRateDeviceAnchor.load(std::memory_order_acquire);
+	const auto observationSample = static_cast<std::uint32_t>(observation >> 32u);
+	const auto observationAge = midi::MidiSampleDelta(static_cast<std::uint32_t>(anchor), observationSample);
+	const auto requestedAge = midi::MidiSampleDelta(static_cast<std::uint32_t>(anchor), sample);
+	if (_captureRateHistory.load(std::memory_order_acquire))
+	{
+		if (observationAge < 0 || requestedAge < 0 || static_cast<std::uint64_t>(observationAge) > anchor
+			|| static_cast<std::uint64_t>(requestedAge) > anchor) return std::nullopt;
+		const auto progress = _sourceRateHistory.QueryDifference(anchor - observationAge, anchor - requestedAge);
+		if (!progress) return std::nullopt;
+		return _NormalizeLoopIndex(static_cast<std::int64_t>(static_cast<std::uint32_t>(observation))
+			+ static_cast<std::int64_t>(std::llround(*progress)), length);
+	}
     return _NormalizeLoopIndex(static_cast<std::int64_t>(static_cast<std::uint32_t>(observation))
         + midi::MidiSampleDelta(sample, static_cast<std::uint32_t>(observation >> 32u)), length);
 }
 
+std::optional<std::uint32_t> LoopTake::_MappedMidiCaptureOffset(std::uint32_t sample) const noexcept
+{
+	if (!_captureRateOriginReady.load(std::memory_order_acquire)) return std::nullopt;
+	const auto* history = _captureRateHistory.load(std::memory_order_acquire);
+	if (!history) return std::nullopt;
+	const auto anchor = _captureRateDeviceAnchor.load(std::memory_order_acquire);
+	const auto delta = midi::MidiSampleDelta(sample, static_cast<std::uint32_t>(anchor));
+	if (delta < 0 && static_cast<std::uint64_t>(-static_cast<std::int64_t>(delta)) > anchor) return std::nullopt;
+	const auto physical = delta < 0 ? anchor - static_cast<std::uint64_t>(-static_cast<std::int64_t>(delta))
+		: anchor + static_cast<std::uint64_t>(delta);
+	const auto point = history->Query(physical);
+	if (!point) return std::nullopt;
+	const auto position = point->Coordinate.Difference(_captureMidiRateOrigin);
+	if (position < 0.0 || !std::isfinite(position)
+		|| position > (std::numeric_limits<std::uint32_t>::max)()) return std::nullopt;
+	return static_cast<std::uint32_t>(std::llround(position));
+}
+
+std::optional<double> LoopTake::CaptureSourcePositionAtDeviceSample(std::uint32_t sample) const noexcept
+{
+	if (!_captureRateOriginReady.load(std::memory_order_acquire)) return std::nullopt;
+	const auto anchor = _captureRateDeviceAnchor.load(std::memory_order_acquire);
+	const auto delta = midi::MidiSampleDelta(sample, static_cast<std::uint32_t>(anchor));
+	if (delta < 0 && static_cast<std::uint64_t>(-static_cast<std::int64_t>(delta)) > anchor) return std::nullopt;
+	const auto physical = delta < 0 ? anchor - static_cast<std::uint64_t>(-static_cast<std::int64_t>(delta))
+		: anchor + static_cast<std::uint64_t>(delta);
+	const auto point = _sourceRateHistory.Query(physical);
+	if (!point) return std::nullopt;
+	return point->Coordinate.Difference(_captureRateOrigin);
+}
+
+std::optional<unsigned long> LoopTake::CaptureSourceLengthAtDeviceSample(std::uint32_t sample) const noexcept
+{
+	const auto position = CaptureSourcePositionAtDeviceSample(sample - static_cast<std::uint32_t>(_triggerCaptureTiming.DelaySamps));
+	if (!position || *position <= 0.0 || *position > (std::numeric_limits<unsigned long>::max)()) return std::nullopt;
+	return static_cast<unsigned long>(std::llround(*position));
+}
+
+bool LoopTake::_MapPendingMidiCaptureRate() noexcept
+{
+	if (_midiCaptureRateMapped || !_captureRateOriginReady.load(std::memory_order_acquire)) return true;
+	const auto* history = _captureRateHistory.load(std::memory_order_acquire);
+	if (!history) return false;
+	for (const auto& loop : _midiLoops)
+		if (loop && loop->State() == midi::MidiLoopState::Recording
+			&& !loop->MapRecordedCaptureSamples(*history, _captureMidiPhysicalOrigin,
+				_captureMidiRateOrigin, 1.0)) return false;
+	for (auto& loop : _midiOverdubSession.Loops)
+	{
+		const auto mapOffset = [&](std::uint32_t& offset) {
+			const auto mapped = _MappedMidiCaptureOffset(static_cast<std::uint32_t>(_captureMidiPhysicalOrigin) + offset);
+			if (!mapped) return false;
+			offset = *mapped;
+			return true;
+		};
+		for (std::size_t i = 0u; i < loop.PunchWindowCount; ++i)
+			if (!mapOffset(loop.PunchWindows[i].StartSample) || !mapOffset(loop.PunchWindows[i].EndSample)) return false;
+		if (loop.ActivePunchStart != (std::numeric_limits<std::uint32_t>::max)()
+			&& !mapOffset(loop.ActivePunchStart)) return false;
+		for (std::size_t i = 0u; i < loop.LiveEventCount; ++i)
+		{
+			const auto sample = static_cast<std::uint32_t>(_captureMidiPhysicalOrigin) + loop.LiveEvents[i].sampleOffset;
+			const auto mapped = _MappedMidiCaptureOffset(sample);
+			if (!mapped) return false;
+			loop.LiveEvents[i].sampleOffset = *mapped;
+		}
+	}
+	_midiCaptureRateMapped = true;
+	return true;
+}
+
 std::uint32_t LoopTake::_MidiPhysicalCaptureOffset(std::uint32_t sample) const noexcept
 {
+	if (_midiCaptureRateMapped) return _MappedMidiCaptureOffset(sample).value_or(0u);
     const auto relative = static_cast<std::int64_t>(midi::MidiSampleDelta(sample,
         _midiRecordStartSample.value_or(sample))) + _triggerCaptureTiming.SeamSamps;
     return static_cast<std::uint32_t>((std::max)(std::int64_t{0}, relative));
@@ -2716,7 +3294,9 @@ void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long inde
 		{
             if (_triggerCaptureConfigured)
                 midiLoop->NormalizeTriggerCapture(midiLoopLength,
-                    _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps);
+                    _midiCaptureRateMapped ? static_cast<std::int64_t>(std::llround(
+						_captureMidiRateOrigin.Difference(_captureRateOrigin)))
+						: _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps);
 			if (i < heldThroughout.size())
 				midiLoop->ClampFullLoopCaptureNotes(midiLoopLength, heldThroughout[i]);
 			// Compute the global sample that corresponds to loop-relative position 0 so
@@ -2756,13 +3336,25 @@ void LoopTake::_FinalizeMidiCapture(unsigned long loopLength, unsigned long inde
 void LoopTake::CompleteMidiIngressPump(std::uint32_t deviceSample)
 {
     std::scoped_lock lock(_midiCaptureMutex);
+	if (!_MapPendingMidiCaptureRate()) { CancelCapture(true); return; }
+	const auto anchor = _captureRateDeviceAnchor.load(std::memory_order_acquire);
+	const auto behind = midi::MidiSampleDelta(static_cast<std::uint32_t>(anchor), deviceSample);
+	const auto graceSamples = static_cast<std::uint64_t>(_sampleRate);
+	if (behind >= 0 && anchor >= static_cast<std::uint64_t>(behind) + graceSamples)
+		_midiRateHistoryConsumedThrough.store(anchor - static_cast<std::uint64_t>(behind) - graceSamples,
+			std::memory_order_release);
     if (!_midiCaptureCloseRequested || !_midiTriggerCapturePending.load(std::memory_order_relaxed)) return;
     const auto origin = _midiRecordStartSample.value_or(deviceSample);
     const auto end = origin + static_cast<std::uint32_t>(_midiCaptureFinalLength) - _triggerCaptureTiming.SeamSamps;
     // All endpoint queues have been drained by this pump. Admit driver delivery
     // through a bounded 100ms grace after the physical end, independently of ADC.
     const auto grace = _triggerCaptureTiming.CapacitySamps / 2u;
-    if (midi::MidiSampleDelta(deviceSample, end) < static_cast<std::int64_t>(grace)) return;
+	if (_midiCaptureRateMapped)
+	{
+		const auto through = _MappedMidiCaptureOffset(deviceSample - grace);
+		if (!through || *through < _midiCaptureFinalLength) return;
+	}
+	else if (midi::MidiSampleDelta(deviceSample, end) < static_cast<std::int64_t>(grace)) return;
     _FinalizeMidiCapture(_midiCaptureFinalLength, _midiCaptureFinalIndex, _midiCaptureFinalState);
     _midiTriggerCapturePending.store(false, std::memory_order_release);
 }
@@ -3012,6 +3604,8 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 	std::scoped_lock midiLock(_midiCaptureMutex);
 	_independentRecording = false;
 	_recordingBaselinePending.store(false, std::memory_order_release);
+	RestoreRecordingPlaybackRate(sourceTake ? sourceTake->RecordingPlaybackRate() : 1.0);
+	_captureRateParent = sourceTake;
 	_recordingBaselinePacked.store(sourceTake
 		? sourceTake->_recordingBaselinePacked.load(std::memory_order_acquire) : 0u, std::memory_order_release);
     _midiRecordStartSample = _triggerCaptureConfigured ? _triggerCaptureTiming.TriggerSample : std::nullopt;
@@ -3074,6 +3668,7 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 		for (auto midiChan : midiChannels)
 		{
 			auto midiLoop = std::make_shared<midi::MidiLoop>(_sampleRate, _midiSeamMergeWindowMs);
+			midiLoop->UseTakePhaseTrajectory();
 			graphics::MidiModelParams modelParams;
 			midiLoop->SetGroupId(utils::GetGuid());
 			modelParams.ModelScale = 1.0f;
@@ -3108,6 +3703,9 @@ void LoopTake::Overdub(std::vector<unsigned int> channels,
 void LoopTake::PunchIn(bool applyAudio, bool applyMidi, std::optional<std::uint32_t> edgeSample)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
+	if (!_MapPendingMidiCaptureRate() || (_midiCaptureRateMapped
+		&& !_MappedMidiCaptureOffset(edgeSample.value_or(CaptureBoundarySample()))))
+	{ CancelCapture(true); return; }
 
 	auto state = _state.load(std::memory_order_relaxed);
 	const auto canPunchAudio = (STATE_OVERDUBBING == state) ||
@@ -3149,6 +3747,9 @@ void LoopTake::PunchIn(bool applyAudio, bool applyMidi, std::optional<std::uint3
 void LoopTake::PunchOut(bool applyAudio, bool applyMidi, std::optional<std::uint32_t> edgeSample)
 {
 	std::scoped_lock midiLock(_midiCaptureMutex);
+	if (!_MapPendingMidiCaptureRate() || (_midiCaptureRateMapped
+		&& !_MappedMidiCaptureOffset(edgeSample.value_or(CaptureBoundarySample()))))
+	{ CancelCapture(true); return; }
 
 	const auto captureGeneration = _captureGeneration.load(std::memory_order_acquire);
 	auto state = _state.load(std::memory_order_relaxed);
@@ -3689,9 +4290,17 @@ bool LoopTake::SnapshotMidiForExport(MidiExportState& state) const
 	MidiExportState exported;
 	exported.PlayIndex = _midiVisualPlayIndex.load(std::memory_order_acquire);
 	exported.LoopLengthSamps = _midiVisualLoopLength.load(std::memory_order_acquire);
+	if (_midiSourceOriginInitialised && exported.LoopLengthSamps)
+	{
+		const auto offset = SavedSharedPlaybackOffset();
+		if ((offset > 0 && _midiSourceWhole > (std::numeric_limits<std::int64_t>::max)() - offset)
+			|| (offset < 0 && _midiSourceWhole < (std::numeric_limits<std::int64_t>::min)() - offset)) return false;
+		exported.SourcePosition = _midiSourceWhole + offset;
+		exported.PlayIndex = static_cast<unsigned long>(ninjam::PositiveModulo(*exported.SourcePosition, exported.LoopLengthSamps));
+	}
 	exported.Quantisation = MidiQuantisation();
 	const auto base = _midiBaseGridPacked.load(std::memory_order_acquire);
-	exported.BaseIntervalSamps = static_cast<std::uint32_t>(base >> 32u);
+	exported.BaseIntervalSamps = ResolvedMidiQuantisation().BaseIntervalSamps;
 	exported.BaseDivisions = static_cast<std::uint32_t>(base);
 	// A saved session starts locally; remote beat geometry belongs to the live
 	// authority lifetime rather than the portable local tap grid.
@@ -3742,11 +4351,12 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 
 	for (const auto& stream : state.Streams)
 	{
-		if (stream.Channel >= 16u
-			|| stream.Loop.LoopLengthSamps != state.LoopLengthSamps)
+		if (stream.Channel >= 16u || stream.Loop.LoopLengthSamps == 0u
+			|| stream.Loop.LoopLengthSamps > io::JamFile::MaxLoopLengthSamps)
 			return false;
 
 		auto loop = std::make_shared<midi::MidiLoop>(_sampleRate, _midiSeamMergeWindowMs);
+		loop->UseTakePhaseTrajectory();
 		loop->SetGroupId(stream.Id.empty() ? utils::GetGuid() : stream.Id);
 		if (!loop->RestoreFromExport(stream.Loop))
 			return false;
@@ -3774,6 +4384,9 @@ bool LoopTake::RestoreMidiFromExport(const MidiExportState& state)
 	_firstMasterActivationPending.store(false, std::memory_order_release);
 	_midiVisualLoopLength.store(state.LoopLengthSamps, std::memory_order_release);
 	_midiVisualPlayIndex.store(state.PlayIndex, std::memory_order_release);
+	_midiSourceWhole = state.SourcePosition.value_or(static_cast<std::int64_t>(state.PlayIndex));
+	_midiSourceFraction = 0.0;
+	_midiSourceOriginInitialised = state.SourcePosition.has_value();
 	_midiAnchorCorrection.store(0, std::memory_order_release);
 	_midiTransportStartSamps.store(state.QuantisationTransportStartSamps, std::memory_order_release);
 	_midiQuantisationPacked.store(state.Quantisation.Pack(), std::memory_order_release);
@@ -3981,10 +4594,12 @@ void LoopTake::_UpdateMidiModelRotation()
 void LoopTake::_ApplyAudioPhaseOffset() noexcept
 {
 	const auto offset = ResolvedMidiQuantisation().PhaseOffsetSamps;
+	_desiredSharedPlaybackOffset.store(offset, std::memory_order_release);
+	const auto loopOffset = _sharedPlaybackTrajectoryActive.load(std::memory_order_acquire) ? 0 : offset;
 	for (const auto& loop : _loops)
-		if (loop) loop->SetInheritedPlaybackOffsetSamps(offset);
+		if (loop) loop->SetInheritedPlaybackOffsetSamps(loopOffset);
 	for (const auto& loop : _backLoops)
-		if (loop) loop->SetInheritedPlaybackOffsetSamps(offset);
+		if (loop) loop->SetInheritedPlaybackOffsetSamps(loopOffset);
 }
 
 void LoopTake::SetMidiQuantisation(const midi::MidiQuantisationSettings& settings) noexcept
@@ -4039,6 +4654,10 @@ midi::MidiQuantisationSettings LoopTake::_ResolvedMidiQuantisation(
 	const auto base = _midiBaseGridPacked.load(std::memory_order_acquire);
 	settings.BaseIntervalSamps = static_cast<std::uint32_t>(base >> 32u);
 	settings.BaseDivisions = static_cast<std::uint32_t>(base);
+	const auto baseRate = _midiBaseGridRecordingRate.load(std::memory_order_acquire);
+	if (baseRate > 0.0 && settings.BaseIntervalSamps)
+		settings.BaseIntervalSamps = static_cast<std::uint32_t>(std::clamp(std::llround(
+			settings.BaseIntervalSamps * baseRate / RecordingPlaybackRate()), 1ll, 4294967295ll));
 	const auto globalState = static_cast<io::JamFile::GlobalMidiQuantState>(
 		_globalMidiQuantStatePacked.load(std::memory_order_acquire));
 	switch (globalState)
@@ -4065,7 +4684,19 @@ midi::MidiQuantisationSettings LoopTake::_ResolvedMidiQuantisation(
 		if (before == _remoteMidiGridSequence.load(std::memory_order_acquire))
 			break;
 	}
-	// Both local and remote MIDI boundaries are evaluated in transport samples.
+	if (settings.RemoteIntervalSamps)
+	{
+		const auto source = RecordingMasterLengthSamps() ? RecordingMasterLengthSamps()
+			: _remoteMidiSourceIntervalSamps.load(std::memory_order_acquire);
+		if (source)
+		{
+			settings.RemoteOriginSamps = static_cast<std::int64_t>(std::llround(
+				static_cast<double>(ninjam::PositiveModulo(settings.RemoteOriginSamps, settings.RemoteIntervalSamps))
+				* source / settings.RemoteIntervalSamps));
+			settings.RemoteIntervalSamps = source;
+		}
+	}
+	// Both local and remote MIDI boundaries are evaluated in take source samples.
 	// This offset contains only intentional user, station, and global movement.
 	auto combined = static_cast<std::int64_t>(settings.PhaseOffsetSamps)
 		+ static_cast<std::int64_t>(_midiInheritedPhaseOffsetSamps.load(std::memory_order_acquire));
@@ -4172,6 +4803,7 @@ bool LoopTake::SetMidiLoopQuantisationOverride(const std::shared_ptr<midi::MidiL
 
 void LoopTake::SetMidiBaseGrid(std::uint32_t interval, std::uint32_t divisions) noexcept
 {
+	_midiBaseGridRecordingRate.store(0.0, std::memory_order_release);
     const auto packed = (static_cast<std::uint64_t>(interval) << 32u) | divisions;
     if (_midiBaseGridPacked.exchange(packed, std::memory_order_acq_rel) != packed)
     {
@@ -4180,11 +4812,19 @@ void LoopTake::SetMidiBaseGrid(std::uint32_t interval, std::uint32_t divisions) 
     }
 }
 
+void LoopTake::SetTransportMidiBaseGrid(std::uint32_t interval, std::uint32_t divisions, double masterRecordingRate) noexcept
+{
+	SetMidiBaseGrid(interval, divisions);
+	_midiBaseGridRecordingRate.store(masterRecordingRate, std::memory_order_release);
+	_midiQuantisationUpdatePending = true;
+}
+
 void LoopTake::SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
-	std::int64_t originSamps) noexcept
+	std::int64_t originSamps, unsigned long legacySourceLength) noexcept
 {
 	const auto writing = _remoteMidiGridSequence.fetch_add(1u, std::memory_order_acq_rel) + 1u;
 	_remoteMidiIntervalSamps.store(static_cast<std::uint32_t>(geometry.IntervalLengthSamps), std::memory_order_relaxed);
+	_remoteMidiSourceIntervalSamps.store(legacySourceLength, std::memory_order_relaxed);
 	_remoteMidiBpi.store(geometry.Bpi, std::memory_order_relaxed);
 	_remoteMidiOriginSamps.store(originSamps, std::memory_order_relaxed);
 	_remoteMidiGridSequence.store(writing + 1u, std::memory_order_release);
@@ -4425,9 +5065,11 @@ void LoopTake::_InitMidiOverdubSession(std::shared_ptr<LoopTake> sourceTake)
 		state.SourceLoopLengthSamps = sourceLoop->LoopLengthSamps();
 		if (0u == state.SourceLoopLengthSamps)
 			state.SourceLoopLengthSamps = static_cast<std::uint32_t>(sourceTake->VisualLoopLengthSamps());
-		state.SourceStartSample = _triggerCaptureConfigured && _midiRecordStartSample
+		const auto sourceStart = _triggerCaptureConfigured && _midiRecordStartSample
             ? sourceTake->_MidiPhaseAtDeviceSample(*_midiRecordStartSample - _triggerCaptureTiming.SeamSamps, state.SourceLoopLengthSamps)
-            : _NormalizeMidiLoopOffset(static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex.load(std::memory_order_relaxed)), state.SourceLoopLengthSamps);
+            : std::optional<unsigned long>{ _NormalizeMidiLoopOffset(static_cast<std::uint32_t>(sourceTake->_midiVisualPlayIndex.load(std::memory_order_relaxed)), state.SourceLoopLengthSamps) };
+		if (!sourceStart) { CancelCapture(true); return; }
+		state.SourceStartSample = *sourceStart;
 		
 		for (std::size_t eventIndex = 0u; eventIndex < state.SourceEvents.size(); ++eventIndex)
 		{
@@ -4710,7 +5352,9 @@ void LoopTake::_FinalizeMidiOverdubLoop(std::size_t loopIndex, std::uint32_t tar
     {
         midiLoop->StartRecord();
         for (std::size_t e = 0u; e < mergedCount; ++e) midiLoop->AppendEventForBuild(_midiOverdubSession.MergeScratch[e]);
-        midiLoop->NormalizeTriggerCapture(targetLoopLength, _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps);
+        midiLoop->NormalizeTriggerCapture(targetLoopLength, _midiCaptureRateMapped
+			? static_cast<std::int64_t>(std::llround(_captureMidiRateOrigin.Difference(_captureRateOrigin)))
+			: _triggerCaptureTiming.DelaySamps - _triggerCaptureTiming.SeamSamps);
         midiLoop->EndRecord(targetLoopLength, _midiRecordStartSample.value_or(0u));
     }
     else

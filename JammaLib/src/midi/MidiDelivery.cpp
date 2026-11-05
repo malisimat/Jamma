@@ -237,13 +237,19 @@ bool MidiDelivery::_TryDeliverMidi(MidiDestination& destination, const MidiEvent
 	MidiDestination::ScheduledMidi entry;
 	entry.Event = event;
 	entry.Voice = voice;
-	entry.Event.sampleOffset += delay; // Modular sample-clock arithmetic.
+    entry.RevisedSourceDelta = voice.SourceFrameResidual;
+	entry.SourceCrossingSample = event.sampleOffset;
+    entry.CompensationSamps = delay;
+    // This source event has already crossed. Later rate edits cannot retime
+    // its fixed physical plugin compensation; only source endpoint edits do.
+    entry.Event.sampleOffset += delay; // Modular sample-clock arithmetic.
 	entry.IsRealtime = isRealtime;
 	entry.Owner = owner;
 	if (owner) owner->QueuedEvents.fetch_add(1u, std::memory_order_release);
 	entry.Sequence = ++destination.ScheduleSequence;
 	auto precedes = [](const MidiDestination::ScheduledMidi& left,
 		const MidiDestination::ScheduledMidi& right) noexcept {
+                if (left.PendingSourceEndpoint != right.PendingSourceEndpoint) return !left.PendingSourceEndpoint;
 		const auto delta = midi::MidiSampleDelta(left.Event.sampleOffset,
 			right.Event.sampleOffset);
 		if (delta != 0) return delta < 0;
@@ -270,6 +276,7 @@ void MidiDelivery::_DrainScheduledMidi(const PreparedState& state,
 		if (!destination) continue;
 		auto precedes = [](const MidiDestination::ScheduledMidi& left,
 			const MidiDestination::ScheduledMidi& right) noexcept {
+                if (left.PendingSourceEndpoint != right.PendingSourceEndpoint) return !left.PendingSourceEndpoint;
 			const auto delta = midi::MidiSampleDelta(left.Event.sampleOffset,
 				right.Event.sampleOffset);
 			if (delta != 0) return delta < 0;
@@ -277,6 +284,7 @@ void MidiDelivery::_DrainScheduledMidi(const PreparedState& state,
 			return left.Sequence < right.Sequence;
 		};
 		while (destination->ScheduledCount > 0u
+            && !destination->Scheduled[0].PendingSourceEndpoint
 			&& midi::ClassifyMidiSampleInBlock(destination->Scheduled[0].Event.sampleOffset,
 				blockStartSample, numSamps) != midi::MidiBlockSamplePosition::Future)
 		{
@@ -328,6 +336,7 @@ std::bitset<midi::MidiNote::TotalNoteSlots> MidiDelivery::_CancelScheduledMidiFo
 	}
 	auto precedes = [](const MidiDestination::ScheduledMidi& left,
 		const MidiDestination::ScheduledMidi& right) noexcept {
+                if (left.PendingSourceEndpoint != right.PendingSourceEndpoint) return !left.PendingSourceEndpoint;
 		const auto delta = midi::MidiSampleDelta(left.Event.sampleOffset,
 			right.Event.sampleOffset);
 		if (delta != 0) return delta < 0;
@@ -441,6 +450,8 @@ void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& sta
 				|| binding->Take->IsCaptureCancelled();
 			if (recoveryChanged || relocate) binding->Loop->RequestHeldFlush();
 		}
+    constexpr std::size_t MappingBudget = 4u;
+    std::size_t mappingsRemaining = MappingBudget;
 	// A removed route can still own future entries in a destination retained by the new graph.
 	for (const auto& destination : state.MidiDestinations)
 	{
@@ -477,9 +488,41 @@ void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& sta
 					// source already accepted its old delayed endpoint.
 					entry.Event.sampleOffset = blockStartSample;
 					entry.Voice = {};
+                    entry.PendingSourceEndpoint = false;
 				}
-				else entry.Event.sampleOffset += delta;
+				else if (delta != 0)
+                {
+                    entry.RevisedSourceDelta += delta;
+                    entry.PendingSourceEndpoint = true;
+                }
 			}
+            if (owner && entry.PendingSourceEndpoint && !owner->CancelScheduledThisBlock && mappingsRemaining == 0u)
+            {
+                // The fixed callback budget is a recovery boundary, never permission
+                // to deliver an edited note at an unrelated later callback.
+                owner->CancelScheduledThisBlock = true;
+            }
+            if (owner && entry.PendingSourceEndpoint && !owner->CancelScheduledThisBlock)
+            {
+                --mappingsRemaining;
+                reconciled = true;
+                const auto mapped = owner->Take->MapSourceDeltaToDeviceSample(
+                    entry.SourceCrossingSample, entry.RevisedSourceDelta);
+                if (mapped.Status == engine::LoopTake::SourceEventMapStatus::Missing)
+                {
+                    // Retire the entire owner, including attacks still behind PDC.
+                    owner->CancelScheduledThisBlock = true;
+                    // Lost history must not strand an audible voice.
+                    entry.Event.sampleOffset = blockStartSample;
+                    entry.PendingSourceEndpoint = false;
+                    entry.Voice = {};
+                }
+                else
+                {
+                    entry.Event.sampleOffset = mapped.Sample + entry.CompensationSamps;
+                    entry.PendingSourceEndpoint = mapped.Status == engine::LoopTake::SourceEventMapStatus::Future;
+                }
+            }
 			const bool invalid = owner && (forceCancel || bypassStarted
 				|| !owner->RoutingActive.load(std::memory_order_acquire)
 				|| owner->CancelScheduledThisBlock);
@@ -497,11 +540,25 @@ void MidiDelivery::_InvalidateScheduledMidiAtBlockStart(const PreparedState& sta
 			}
 			else destination->Scheduled[retained++] = entry;
 		}
+        // A missing endpoint can invalidate attacks retained earlier in this pass.
+        auto surviving = std::size_t{0u};
+        for (auto index = std::size_t{0u}; index < retained; ++index)
+        {
+            auto& entry = destination->Scheduled[index];
+            if (entry.Owner && entry.Owner->CancelScheduledThisBlock)
+            {
+                entry.Owner->QueuedEvents.fetch_sub(1u, std::memory_order_release);
+                reconciled = true;
+            }
+            else destination->Scheduled[surviving++] = entry;
+        }
+        retained = surviving;
 		if (retained != destination->ScheduledCount || reconciled)
 		{
 			destination->ScheduledCount = retained;
 			auto precedes = [](const MidiDestination::ScheduledMidi& left,
 				const MidiDestination::ScheduledMidi& right) noexcept {
+                if (left.PendingSourceEndpoint != right.PendingSourceEndpoint) return !left.PendingSourceEndpoint;
 				const auto delta = midi::MidiSampleDelta(left.Event.sampleOffset, right.Event.sampleOffset);
 				if (delta != 0) return delta < 0;
 				if (left.Event.IsNoteOff() != right.Event.IsNoteOff()) return left.Event.IsNoteOff();

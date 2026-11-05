@@ -14,5 +14,6 @@ namespace engine
 		std::uint32_t SourceAgeSamps = 0u;
 		std::uint32_t SeamSamps = 0u;
 		std::optional<std::int64_t> ContentTransportOrigin;
+		std::optional<std::uint32_t> PendingMasterDeviceOrigin;
 	};
 }

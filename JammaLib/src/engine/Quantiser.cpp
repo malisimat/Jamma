@@ -1,6 +1,7 @@
 #include <iomanip>
 #include <sstream>
 #include "Quantiser.h"
+#include "../audio/PlaybackRate.h"
 #include "HierarchySelection.h"
 
 #include <algorithm>
@@ -272,7 +273,7 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 
 void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 	std::int64_t originSamps,
-	const std::vector<std::shared_ptr<Station>>& stations, bool preserveRecordedMaster)
+	const std::vector<std::shared_ptr<Station>>& stations, bool preserveRecordedMaster, unsigned long legacySourceLength)
 {
 	if (geometry.IntervalLengthSamps > 0ul && geometry.Bpi > 0u)
 	{
@@ -298,13 +299,14 @@ void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 	const auto changed = _acceptedRemoteGrid.IntervalLengthSamps != geometry.IntervalLengthSamps
 		|| _acceptedRemoteGrid.Bpi != geometry.Bpi;
 	_acceptedRemoteGrid = geometry;
+	_acceptedRemoteSourceLength = legacySourceLength;
 	_acceptedRemoteGridOriginSamps = originSamps;
 	_gridSource = geometry.IntervalLengthSamps && geometry.Bpi ? QuantisationGridSource::Remote : QuantisationGridSource::Default;
 	for (const auto& station : stations)
 	{
 		if (!station)
 			continue;
-		station->SetRemoteMidiQuantisationGrid(geometry, originSamps, changed);
+		station->SetRemoteMidiQuantisationGrid(geometry, originSamps, changed, legacySourceLength);
 	}
 }
 
@@ -314,7 +316,7 @@ void Quantiser::InitialiseStationMidiGrid(const std::shared_ptr<Station>& statio
 	{
 		station->SetDefaultMidiQuantisationFraction(_defaultMidiQuantisationFraction);
 		station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
-		station->SetRemoteMidiQuantisationGrid(_acceptedRemoteGrid, _acceptedRemoteGridOriginSamps, false);
+		station->SetRemoteMidiQuantisationGrid(_acceptedRemoteGrid, _acceptedRemoteGridOriginSamps, false, _acceptedRemoteSourceLength);
 	}
 }
 
@@ -376,7 +378,7 @@ bool Quantiser::HasActivatedLocalMaster(const std::vector<std::shared_ptr<Statio
 bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     unsigned int sampleRate,
     const std::vector<std::shared_ptr<Station>>& stations,
-    const io::UserConfig& cfg, bool editRemoteMaster)
+    const io::UserConfig& cfg, bool editRemoteMaster, const audio::PlaybackRateHistory* rateHistory)
 {
     if (_localMasterTimingPending) { _masterStatus="Master change is applying"; return false; }
 
@@ -409,7 +411,20 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     double smoothedGap = 0.0;
     {
         std::scoped_lock tapTempoLock(_tapTempoMutex);
-        timing = _tapTempo.TapAtSample(estimatedSampleAt, sampleRate, interval, Policy(cfg));
+        std::optional<double> sourceGap;
+        if (rateHistory && (!remote || (editRemoteMaster && eligible == 1u)))
+        {
+            const auto last = _tapTempo.LastTapSample();
+            if (last && estimatedSampleAt > *last)
+            {
+                const auto reference = eligible == 1u ? soleTake->RecordingPlaybackRate()
+                    : (_clock ? _clock->MasterRecordingPlaybackRate() : 1.0);
+                sourceGap = eligible == 1u ? soleTake->SourceProgressBetweenDeviceSamples(*last, estimatedSampleAt)
+                    : rateHistory->QueryDifference(*last, estimatedSampleAt, reference);
+                if (!sourceGap) _tapTempo.Clear(); // Missing history starts a new tap pair, never guesses.
+            }
+        }
+        timing = _tapTempo.TapAtSample(estimatedSampleAt, sampleRate, interval, Policy(cfg), sourceGap);
         smoothedGap = _tapTempo.EstimatedGapSamps();
         if (smoothedGap > 0.0) requestedDivisions = interval / smoothedGap;
     }
@@ -418,7 +433,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     {
         const auto grain = _clock ? _clock->QuantiseSamps() : 0u;
         const auto base = remote ? _acceptedRemoteGrid.Bpi :
-            (grain && _clock ? static_cast<unsigned int>(_clock->SeedSourceLength() / grain) : 0u);
+            (_clock ? _clock->MasterBeatsPerInterval() : 0u);
         if (!base || !interval)
         {
             std::cout << "[Quantisation] tap rejected: no valid base geometry generation=" << ReclockGeneration()
@@ -444,7 +459,10 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
                     {
                         // A frozen master keeps its grain/beat grid; tapping selects
                         // the subdivision itself, also shown by the fraction radio.
-                        take->SetMidiBaseGrid(static_cast<std::uint32_t>(interval), base);
+                        if (remote) take->SetMidiBaseGrid(take->RecordingMasterLengthSamps() ? take->RecordingMasterLengthSamps()
+                            : static_cast<std::uint32_t>(interval), base);
+                        else take->SetTransportMidiBaseGrid(static_cast<std::uint32_t>(interval), base,
+                            _clock ? _clock->MasterRecordingPlaybackRate() : 1.0);
                         auto settings = take->MidiQuantisation();
                         for (const auto fraction : midi::MidiQuantisation::FractionDisplayOrder)
                             if (midi::MidiQuantisation::Divisor(fraction) == selected / base)
@@ -1012,7 +1030,16 @@ std::optional<QuantisationTiming> Quantiser::CurrentTempoTiming(unsigned int sam
 		seedSamps = _clock->QuantiseSamps();
 		masterLoopSamps = _clock->SeedSourceLength();
 	}
-	return TimingFromSeedAndMaster(seedSamps, masterLoopSamps, sampleRate);
+	auto timing = TimingFromSeedAndMaster(seedSamps, masterLoopSamps, sampleRate);
+    if (_clock && _clock->SeedSourceLength() && _clock->MasterBeatsPerInterval())
+    {
+        const auto length = _clock->SeedSourceLength();
+        const auto beats = _clock->MasterBeatsPerInterval();
+        timing = QuantisationTiming{_clock->QuantiseSamps(), static_cast<unsigned int>(length), beats,
+            static_cast<float>(60.0 * sampleRate * beats / length), beats};
+    }
+    if (timing && _clock) timing->Bpm *= static_cast<float>(_clock->AppliedPlaybackRate() / _clock->MasterRecordingPlaybackRate());
+    return timing;
 }
 
 std::optional<Quantiser::TempoStatus> Quantiser::CurrentTempoStatus(unsigned int sampleRate) const
@@ -1134,9 +1161,9 @@ void TapTempoTracker::Clear() noexcept
 std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t samplePosition,
 	unsigned int sampleRate,
 	unsigned long masterLoopSamps,
-	const QuantisationPolicy& policy)
+	const QuantisationPolicy& policy, std::optional<double> sourceGap)
 {
-	if (!sampleRate)
+	if (!sampleRate || (sourceGap && (!std::isfinite(*sourceGap) || *sourceGap <= 0.0)))
 	{
 		Clear();
 		return std::nullopt;
@@ -1166,8 +1193,8 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 
 	_lastTapSample = samplePosition;
 	_estimatedGapSamps = _estimatedGapSamps.has_value() ?
-		((_estimatedGapSamps.value() * 0.5) + (gap * 0.5)) :
-		gap;
+		((_estimatedGapSamps.value() * 0.5) + (sourceGap.value_or(gap) * 0.5)) :
+		sourceGap.value_or(gap);
 
 	return CurrentTiming(masterLoopSamps, sampleRate, policy);
 }

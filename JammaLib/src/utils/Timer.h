@@ -41,6 +41,7 @@ namespace utils
 			QuantisationType Type = QUANTISE_OFF;
 			// Device sample at compensated content zero (T-D), also master zero.
 			std::uint32_t RecordOrigin = 0u;
+			double RecordingPlaybackRate = 1.0;
 		};
 		std::shared_ptr<const RecordingSeed> PendingRecordingSeedOnOwner() const;
 		std::shared_ptr<const RecordingSeed> ReserveRecordingSeedOnOwner(RecordingSeed seed);
@@ -76,6 +77,14 @@ namespace utils
 		static double GetElapsedSeconds(Time t1, Time t2);
 
 		void Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement);
+		// Audio boundary supplies source progress separately from physical callback size.
+		void SetBlockMusicalAdvance(double sourceSamples, double appliedRate) noexcept;
+		void SetMasterRecordingPlaybackRate(double rate) noexcept;
+		void SetMasterBeatsPerInterval(unsigned int beats) noexcept;
+		unsigned int MasterBeatsPerInterval() const noexcept { return _masterBeatsPerInterval.load(std::memory_order_relaxed); }
+		double MusicalFractionAtAudioBoundary() const noexcept { return _musicalFraction.load(std::memory_order_relaxed); }
+		double MasterRecordingPlaybackRate() const noexcept { return _masterRecordingPlaybackRate.load(std::memory_order_relaxed); }
+		double AppliedPlaybackRate() const noexcept { return _appliedPlaybackRate.load(std::memory_order_relaxed); }
 		void Clear();
 		bool IsQuantisable() const;
 		void SetQuantisation(unsigned int quantiseSamps, QuantisationType quantisation);
@@ -163,5 +172,11 @@ namespace utils
 		std::uint64_t _audioGeneration = 0u;
 		// Audio-thread-owned, scene-time-based external musical transport.
 		MusicalTransport _musicalTransport;
+		std::atomic<double> _masterRecordingPlaybackRate{ 1.0 };
+		std::atomic<double> _appliedPlaybackRate{ 1.0 };
+		std::atomic<unsigned int> _masterBeatsPerInterval{ 0u };
+		std::atomic<bool> _masterBeatsExplicit{ false };
+		std::atomic<double> _musicalFraction{ 0.0 }; // Audio-owned residual, always less than one source sample.
+		double _blockMusicalAdvance = -1.0;
 	};
 }

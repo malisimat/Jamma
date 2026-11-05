@@ -2,6 +2,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -95,6 +96,44 @@ public:
 		events.push_back({ outputIndex, ev });
 	}
 };
+
+TEST(MidiPlaybackRate, SourceCrossingsUsePhysicalFramesAndPreserveTieOrder)
+{
+	MidiLoopCapturingOutputSink output;
+	const audio::PlaybackRateBlock block{2.0, 2.0, 1.0, 4u, 1u};
+	midi::MidiIndexedOutputSink sink(output, 3u, 100u, 0xfffffffdu);
+	sink.SetPlaybackRate(block, 1.0, 0.25);
+	ASSERT_TRUE(sink.TryOnEvent(MidiEvent::MakeNoteOn(101u, 0u, 60u, 100u)));
+	ASSERT_TRUE(sink.TryOnEvent(MidiEvent::MakeNoteOff(102u, 0u, 60u)));
+	ASSERT_TRUE(sink.TryOnEvent(MidiEvent::MakeNoteOn(103u, 0u, 61u, 100u)));
+	ASSERT_TRUE(sink.TryOnEvent(MidiEvent::MakeNoteOff(108u, 0u, 61u)));
+	ASSERT_EQ(4u, output.events.size());
+	EXPECT_EQ(0xfffffffdu, output.events[0].event.sampleOffset);
+	EXPECT_EQ(0xfffffffdu, output.events[1].event.sampleOffset);
+	EXPECT_EQ(0xfffffffeu, output.events[2].event.sampleOffset);
+	EXPECT_EQ(0u, output.events[3].event.sampleOffset);
+	EXPECT_TRUE(output.events[0].event.IsNoteOn());
+	EXPECT_TRUE(output.events[1].event.IsNoteOff());
+}
+
+TEST(MidiPlaybackRate, CapturedEndpointsUseIntegratedSourceHistory)
+{
+	audio::PlaybackRateHistory history(8u);
+	ASSERT_TRUE(history.Append(100u, {1.0, 1.0, 1.0, 8u, 1u}));
+	ASSERT_TRUE(history.Append(108u, {2.0, 2.0, 1.0, 8u, 2u}));
+	const auto origin = history.Query(100u);
+	ASSERT_TRUE(origin);
+	MidiLoop loop(48000.0f);
+	loop.StartRecord();
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOn(4u, 0u, 60u, 100u)));
+	ASSERT_TRUE(loop.RecordEvent(MidiEvent::MakeNoteOff(12u, 0u, 60u)));
+	ASSERT_TRUE(loop.MapRecordedCaptureSamples(history, 100u, origin->Coordinate, 1.0));
+	MidiEvent event;
+	ASSERT_TRUE(loop.TryGetEvent(0u, event));
+	EXPECT_EQ(4u, event.sampleOffset);
+	ASSERT_TRUE(loop.TryGetEvent(1u, event));
+	EXPECT_EQ(16u, event.sampleOffset);
+}
 
 class MidiLoopCapturingGuiReceiver : public base::ActionReceiver
 {
@@ -1353,7 +1392,8 @@ TEST(LoopTakeMidiPlayback, MasterLevelScalesNoteVelocityOnly)
 	actions::GuiAction masterAction;
 	masterAction.ElementType = actions::GuiAction::ACTIONELEMENT_SLIDER;
 	masterAction.Index = 0u;
-	masterAction.Data = actions::GuiAction::GuiDouble(0.5);
+	// Half fader travel is -24 dB; linear amplitude 0.5 is near unity travel.
+	masterAction.Data = actions::GuiAction::GuiDouble(std::pow(10.0, -24.0 / 20.0));
 	take->OnAction(masterAction);
 
 	MidiLoopCapturingOutputSink sink;

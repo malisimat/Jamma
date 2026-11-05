@@ -1,3 +1,4 @@
+#include "../gui/GuiHudTestAccess.h"
 #include "../gui/WorkspaceTestAccess.h"
 #include "../gui/LoopGridEditorTestAccess.h"
 #include "gtest/gtest.h"
@@ -24,6 +25,14 @@ namespace gui
     {
     public:
         static std::shared_ptr<GuiButton> RigSaveButton(GuiMainPanel& panel) { panel.SetPage(SettingsPage::Session); return panel._saveRigButton; }
+        static void RevealTimingButton(GuiMainPanel& panel, const std::shared_ptr<base::GuiElement>& button)
+        {
+            const auto content = panel._pageScroll->Content();
+            const auto position = content->GlobalToLocal(button->GlobalPosition());
+            const auto size = button->GetSize();
+            panel._pageScroll->ScrollToVisible({position.X, position.Y,
+                position.X + static_cast<int>(size.Width), position.Y + static_cast<int>(size.Height)});
+        }
         static std::shared_ptr<GuiButton> OrdinaryRigSave(GuiMainPanel& panel) { return panel._ordinaryRigSaveButton; }
         static std::shared_ptr<GuiButton> RigSaveChoice(GuiMainPanel& panel, unsigned int choice) { return panel._additionalRigSaveButtons.at(choice); }
 
@@ -357,7 +366,9 @@ namespace engine
         {
             auto panel=scene._workspace->MainPanel(); panel->SetPage(gui::SettingsPage::Timing); panel->SetExpanded(true);
             for(unsigned int frame=0u;frame<20u;++frame) panel->AdvanceAnimation(0.05f);
-            const auto button=scene._workspace->Settings().MasterButton(); const auto size=button->GetSize();
+            const auto button=scene._workspace->Settings().MasterButton();
+            gui::GuiMainPanelTestAccess::RevealTimingButton(*panel, button);
+            const auto size=button->GetSize();
             const auto point=button->GlobalPosition()+utils::Position2d{static_cast<int>(size.Width/2u),static_cast<int>(size.Height/2u)};
             EXPECT_TRUE(panel->RouteHitTest(panel->GlobalToLocal(point))); return point;
         }
@@ -385,6 +396,23 @@ namespace engine
             const midi::MidiConnectionResult& refreshed, const std::vector<std::string>& names)
         {
             scene._operation.ConfirmMidiConnectionChange(previous, refreshed, names, { scene._sceneMutex, scene._stations });
+        }
+        static void StageRemoteGrid(Scene& scene, const ninjam::NinjamTimingUpdate& update)
+        { std::scoped_lock lock(scene._sceneMutex); scene._ApplyNinjamTimingUpdate(update); }
+        static void DeferRemoteGridBoundary(Scene& scene)
+        {
+            std::scoped_lock lock(scene._sceneMutex);
+            scene._audioEngine->_playbackControlPending = true;
+            scene._audioEngine->PublishPlaybackRateReceipt(scene._quantisation.Clock().get(), 48000u);
+        }
+        static bool AcceptRemoteGrid(Scene& scene, const ninjam::NinjamDesiredTransportState& desired)
+        {
+            std::scoped_lock lock(scene._sceneMutex);
+            const auto clock = scene._quantisation.Clock();
+            scene._audioEngine->PublishDesiredTiming(desired);
+            const auto accepted = scene._audioEngine->ApplyDesiredTimingAtAudioBoundary(0u, 48000u, &scene._stations, clock.get());
+            scene._audioEngine->PublishPlaybackRateReceipt(clock.get(), 48000u);
+            return accepted;
         }
         static void RemoteGrid(Scene& scene, const engine::RemoteTransportGeometry& geometry, std::int64_t origin)
         { std::scoped_lock lock(scene._sceneMutex); scene._quantisation.SetRemoteMidiGrid(geometry, origin, scene._stations); }
@@ -509,6 +537,14 @@ namespace engine
             scene._workspace->Hud()->SetStationAnchors(std::move(anchors));
 			return scene._workspace->Hud();
 		}
+        static void ObserveHudRigSubmission(Scene& scene, std::optional<RigCoordinator::EditResult>& result)
+        {
+            std::scoped_lock lock(scene._sceneMutex);
+            gui::GuiHudTestAccess::SetSubmitRigEdit(*scene._workspace->Hud(), [&scene, &result](const io::RigFile& candidate) {
+                result = scene._RequestRigEditLocked(candidate);
+                return *result == RigCoordinator::EditResult::Pending;
+            });
+        }
 		static void AudioHeartbeat(Scene& scene)
 		{ scene._audioEngine->_audioCallbackHeartbeat.fetch_add(1u); }
 		static gui::RoutingEditAvailability RoutingAvailability(Scene& scene)
@@ -1458,6 +1494,7 @@ TEST_F(SceneRoutingIntegrationTest, SavedJamAndExplicitRigReproduceAddedMembersh
 
 TEST_F(SceneRoutingIntegrationTest, DeletedStationOrphanReconnectsThroughLockedSceneHudDispatch)
 {
+ std::optional<engine::RigCoordinator::EditResult> submission;
  auto scene = FreshScene({Station("A"), Station("B")}, {Trigger("record", "A")});
  ASSERT_TRUE(scene);
  engine::SourceLossIntegrationTestAccess::Manage(*scene, false, scene->SnapshotStations()[0]);
@@ -1471,22 +1508,37 @@ TEST_F(SceneRoutingIntegrationTest, DeletedStationOrphanReconnectsThroughLockedS
  scene->SetSize({1200, 800});
  auto hud = engine::SourceLossIntegrationTestAccess::PrepareHud(*scene);
  LayoutHud(hud);
- std::vector<gui::CableInteraction::Endpoint> endpoints;
- std::vector<gui::CableInteraction::Cable> cables;
- hud->BuildInteractionGeometry(endpoints, cables);
- const auto source = std::find_if(endpoints.begin(), endpoints.end(), [](const auto& e) { return e.Kind == gui::CableInteraction::EndpointKind::TriggerOutput; });
- const auto target = std::find_if(endpoints.begin(), endpoints.end(), [](const auto& e) { return e.Kind == gui::CableInteraction::EndpointKind::Station && e.StationIndex == 1u; });
- ASSERT_NE(endpoints.end(), source); ASSERT_NE(endpoints.end(), target);
- actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0;
- touch.Position = source->Position; touch.State = actions::TouchAction::TOUCH_DOWN;
- EXPECT_TRUE(scene->OnAction(touch).IsEaten);
- ASSERT_TRUE(hud->HasCableDrag());
- actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE;
- move.Position = target->Position; move.MouseButtonsDown = 1u;
- scene->OnAction(move);
- touch.Position = target->Position; touch.State = actions::TouchAction::TOUCH_UP;
- EXPECT_NO_THROW(scene->OnAction(touch));
- EXPECT_FALSE(hud->HasCableDrag());
+ engine::SourceLossIntegrationTestAccess::ObserveHudRigSubmission(*scene, submission);
+ const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+ unsigned int attempts = 0u;
+ do
+ {
+     ++attempts;
+     submission.reset();
+     std::vector<gui::CableInteraction::Endpoint> endpoints;
+     std::vector<gui::CableInteraction::Cable> cables;
+     hud->BuildInteractionGeometry(endpoints, cables);
+     const auto source = std::find_if(endpoints.begin(), endpoints.end(), [](const auto& e) { return e.Kind == gui::CableInteraction::EndpointKind::TriggerOutput; });
+     const auto target = std::find_if(endpoints.begin(), endpoints.end(), [](const auto& e) { return e.Kind == gui::CableInteraction::EndpointKind::Station && e.StationIndex == 1u; });
+     ASSERT_NE(endpoints.end(), source); ASSERT_NE(endpoints.end(), target);
+     actions::TouchAction touch; touch.Touch = actions::TouchAction::TOUCH_MOUSE; touch.Index = 0;
+     touch.Position = source->Position; touch.State = actions::TouchAction::TOUCH_DOWN;
+     EXPECT_TRUE(scene->OnAction(touch).IsEaten);
+     ASSERT_TRUE(hud->HasCableDrag());
+     actions::TouchMoveAction move; move.Touch = actions::TouchAction::TOUCH_MOUSE;
+     move.Position = target->Position; move.MouseButtonsDown = 1u;
+     scene->OnAction(move);
+     touch.Position = target->Position; touch.State = actions::TouchAction::TOUCH_UP;
+     EXPECT_NO_THROW(scene->OnAction(touch));
+     EXPECT_FALSE(hud->HasCableDrag());
+     // A live job may own lifecycle admission during release. Retry only that
+     // explicit rejection; missing dispatch and every other result remain failures.
+     if (submission != engine::RigCoordinator::EditResult::EditsDisabled) break;
+     std::this_thread::sleep_for(std::chrono::milliseconds(1));
+ } while (std::chrono::steady_clock::now() < deadline);
+ SCOPED_TRACE(::testing::Message() << "gesture attempts=" << attempts
+     << " submission=" << (submission ? static_cast<int>(*submission) : -1));
+ ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, submission);
  Settle(scene);
  EXPECT_EQ(replacement, scene->AcceptedRigSnapshot()->Triggers[0].BoundReceiver);
  EXPECT_EQ(replacement->Name(), scene->AcceptedRigSnapshot()->Rig.Triggers[0].StationTarget);
@@ -4055,4 +4107,77 @@ TEST_F(SceneRoutingIntegrationTest, ChildRackEscapeCancelsSlotMoveThroughSceneKe
     }
     job.unlock();
     scene->Shutdown();
+}
+
+TEST_F(SceneRoutingIntegrationTest, RemoteMidiGridUsesAcceptedGeometryWhileNewerAuthorityWaits)
+{
+    using Access = engine::SourceLossIntegrationTestAccess;
+    auto scene = FreshScene({Station("grid-admission")}, {});
+    ASSERT_TRUE(scene);
+    const auto station = scene->SnapshotStations().front();
+    const auto take = station->AddTake(); station->CommitChanges();
+    const auto commitGrid = [&](unsigned long interval, std::int64_t origin) {
+        // Accepted geometry is consumed by the UI commit, not the job idle pump.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        do
+        {
+            scene->CommitChanges();
+            const auto grid = take->ResolvedMidiQuantisation();
+            if (grid.RemoteIntervalSamps == interval && grid.RemoteOriginSamps == origin) return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (std::chrono::steady_clock::now() < deadline);
+    };
+    Access::RemoteGrid(*scene, {96000u, 4u, 0u, 120.0f, 1u}, 1234);
+    ninjam::NinjamTimingUpdate update;
+    ninjam::NinjamDesiredTransportState desired;
+    desired.Version = 100u; desired.Generation = 100u; desired.SessionEpoch = 10u; desired.FollowRevision = 100u;
+    desired.Intent = ninjam::NinjamDesiredTimingIntent::Replacement;
+    desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::ContinuousSync;
+    desired.SourceMasterIntervalLengthSamps = 384000u;
+    desired.RemoteMasterIntervalLengthSamps = 384000u;
+    desired.RemoteGridStepSamps = 24000u;
+    desired.BeatsPerInterval = 16u; desired.TempoBpm = 120.0f; desired.HasRemoteTiming = true;
+    desired.GridOriginSamps = 5678;
+    desired.HasRemotePhaseDeviceSample = true;
+    update.DesiredTransport = desired;
+    update.RemoteGrid = ninjam::NinjamRemoteGridPublication{{384000u, 16u, 0u, 120.0f, 10u}, 5678, false};
+    auto unaccepted = update;
+    unaccepted.DesiredTransport->Version = 98u; unaccepted.DesiredTransport->Generation = 98u;
+    unaccepted.DesiredTransport->FollowRevision = 98u;
+    Access::StageRemoteGrid(*scene, unaccepted);
+    commitGrid(96000u, 1234);
+    EXPECT_EQ(96000u, take->ResolvedMidiQuantisation().RemoteIntervalSamps);
+    EXPECT_EQ(1234, take->ResolvedMidiQuantisation().RemoteOriginSamps);
+
+    // An intermediate accepted version publishes its own grid, never the newer desired geometry.
+    auto stale = desired; stale.Version = 99u; stale.Generation = 99u; stale.FollowRevision = 99u;
+    stale.SourceMasterIntervalLengthSamps = 192000u; stale.RemoteMasterIntervalLengthSamps = 192000u;
+    stale.BeatsPerInterval = 8u; stale.GridOriginSamps = 2345;
+    ASSERT_TRUE(Access::AcceptRemoteGrid(*scene, stale));
+    Access::StageRemoteGrid(*scene, update);
+    commitGrid(192000u, 2345);
+    EXPECT_EQ(192000u, take->ResolvedMidiQuantisation().RemoteIntervalSamps);
+    EXPECT_EQ(2345, take->ResolvedMidiQuantisation().RemoteOriginSamps);
+    ASSERT_TRUE(Access::AcceptRemoteGrid(*scene, desired));
+    // A phase-only successor waiting for admission cannot fence out accepted geometry.
+    auto phase = desired; phase.Version = 101u; phase.Generation = 101u;
+    phase.Intent = ninjam::NinjamDesiredTimingIntent::PhaseDiscipline;
+    ninjam::NinjamTimingUpdate phaseUpdate; phaseUpdate.DesiredTransport = phase;
+    Access::StageRemoteGrid(*scene, phaseUpdate);
+    Access::DeferRemoteGridBoundary(*scene);
+    commitGrid(384000u, 5678);
+    EXPECT_EQ(384000u, take->ResolvedMidiQuantisation().RemoteIntervalSamps);
+    EXPECT_EQ(5678, take->ResolvedMidiQuantisation().RemoteOriginSamps);
+
+    ninjam::NinjamTimingUpdate detach;
+    desired.Version = 102u; desired.Generation = 102u; desired.FollowRevision = 102u;
+    desired.Intent = ninjam::NinjamDesiredTimingIntent::NoSync;
+    desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+    desired.HasRemoteTiming = false; detach.DesiredTransport = desired;
+    Access::StageRemoteGrid(*scene, detach);
+    commitGrid(384000u, 5678);
+    EXPECT_TRUE(take->ResolvedMidiQuantisation().HasRemoteGrid());
+    ASSERT_TRUE(Access::AcceptRemoteGrid(*scene, desired));
+    commitGrid(0u, 0);
+    EXPECT_FALSE(take->ResolvedMidiQuantisation().HasRemoteGrid());
 }

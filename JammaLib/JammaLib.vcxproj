@@ -644,4 +644,12 @@
     <ClInclude Include="src\spectral\SpectralEditor.h" />
     <ClCompile Include="src\spectral\SpectralEditor.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\audio\PlaybackRate.h" />
+    <ClCompile Include="src\audio\PlaybackRate.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\audio\LocalMetronomeTiming.h" />
+    <ClCompile Include="src\audio\LocalMetronomeTiming.cpp" />
+  </ItemGroup>
 </Project>

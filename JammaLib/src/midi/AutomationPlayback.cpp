@@ -74,6 +74,7 @@ void AutomationPlayback::Rebuild(const std::vector<std::shared_ptr<engine::LoopT
 				entry.loopLengthSamps = midiLoop->LoopLengthSamps();
 				entry.automationGlobalSampleOrigin = midiLoop->AutomationGlobalSampleOrigin();
 				entry.anchorCorrection = take->MidiAnchorCorrectionPtr();
+				entry.take = take.get();
 			}
 		}
 	}
@@ -125,9 +126,12 @@ void AutomationPlayback::ProcessBlock(std::uint32_t blockStartSample,
 			? entry.anchorCorrection->load(std::memory_order_relaxed) : 0;
 		const auto effectiveAutomationGlobalSampleOrigin = entry.automationGlobalSampleOrigin
 			+ static_cast<std::uint32_t>(correction);
+		const auto sourcePosition = entry.take && entry.take->HasPlaybackRateBlock()
+			? entry.take->MidiSourcePhaseAtFrame(numSamps ? numSamps - 1u : 0u, entry.loopLengthSamps)
+			: static_cast<double>(dispatchSample - effectiveAutomationGlobalSampleOrigin);
 		const double frac = (entry.loopLengthSamps > 0u)
 			? std::fmod(
-				static_cast<double>(dispatchSample - effectiveAutomationGlobalSampleOrigin),
+				sourcePosition,
 				static_cast<double>(entry.loopLengthSamps))
 					/ static_cast<double>(entry.loopLengthSamps)
 			: 0.0;

@@ -73,6 +73,25 @@ namespace ninjam
 		return _timingCoordinator.PushActivatedLocalTempo(timing);
 	}
 
+    NinjamTimingUpdate NinjamNetworkService::RejectUnsupportedFollow(std::uint64_t version, std::uint64_t epoch)
+    {
+        std::scoped_lock lock(_timingMutex);
+        return _timingCoordinator.RejectUnsupportedFollow(version, epoch);
+    }
+
+    NinjamTimingUpdate NinjamNetworkService::SetLocalPlaybackRate(double rate)
+    {
+        std::scoped_lock lock(_timingMutex);
+        return _timingCoordinator.SetLocalPlaybackRate(rate);
+    }
+
+    NinjamTimingUpdate NinjamNetworkService::RequestServerTempo(
+        const engine::QuantisationTiming& timing, std::uint64_t rateRevision)
+    {
+        std::scoped_lock lock(_timingMutex);
+        return _timingCoordinator.RequestServerTempo(timing, rateRevision);
+    }
+
 	NinjamTimingUpdate NinjamNetworkService::RequestSyncToServer()
 	{
 		std::scoped_lock lock(_timingMutex);
