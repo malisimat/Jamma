@@ -668,6 +668,24 @@ TEST(GuiSlider, MetronomeLevelOwnerResetsRestoredLevelToUnity)
 	EXPECT_DOUBLE_EQ(1.0, slider->Value()); EXPECT_EQ(1u, receiver->ActionCount());
 }
 
+TEST(GuiSlider, PlaybackRateDoubleClickSurvivesOwnerRefresh)
+{
+	gui::SceneSettingsControls controls(0u, 0.0, io::JamFile::GlobalMidiQuantState{});
+	const auto entries = controls.SettingsEntries();
+	const auto entry = std::find_if(entries.begin(), entries.end(), [](const auto& item) { return item.Label == "Playback rate"; });
+	ASSERT_NE(entries.end(), entry);
+	const auto slider = std::dynamic_pointer_cast<GuiSlider>(entry->Control);
+	ASSERT_TRUE(slider);
+	auto receiver = std::make_shared<MockedSliderReceiver>(0.0); slider->SetReceiver(receiver);
+	controls.RefreshPlaybackRate(0.5, 0.5, false, false, 0.0, 0u);
+	FaderClickTestData::Click(slider, 0, {10, 10});
+	controls.RefreshPlaybackRate(0.5, 0.5, false, false, 0.0, 0u);
+	FaderClickTestData::Click(slider, 100, {10, 10});
+	EXPECT_DOUBLE_EQ(0.0, slider->Value());
+	EXPECT_DOUBLE_EQ(1.0, std::exp2(receiver->Value()));
+	EXPECT_EQ(1u, receiver->ActionCount());
+}
+
 TEST(GuiSlider, DoubleClickRequiresNearbyTimedClicksAndGainOptIn)
 {
 	for (const auto scenario : { 0, 1, 2, 3, 4 })

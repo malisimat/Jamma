@@ -309,7 +309,9 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 void SceneSettingsControls::RefreshPlaybackRate(double target, double applied, bool following,
     bool canRequest, double bpm, unsigned int bpi, bool unsupportedRemoteRate, bool aligning, bool controlPending)
 {
-    _playbackRateSlider->SetValue(std::log2(target), true);
+    const auto sliderValue = std::log2(target);
+    if (_playbackRateSlider->Value() != sliderValue)
+        _playbackRateSlider->SetValue(sliderValue, true);
     char text[96];
     if (controlPending) std::snprintf(text, sizeof(text), "%.3fx - waiting for capture", target);
     else if (following) std::snprintf(text, sizeof(text), aligning ? "%.3fx local - Aligning" : "%.3fx local - following server", target);
