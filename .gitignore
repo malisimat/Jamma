@@ -17,3 +17,4 @@ packages/
 vcpkg_installed/
 test/JammaLib_Tests/x64/
 Directory.Build.local.props
+/publish/

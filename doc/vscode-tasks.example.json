@@ -2,6 +2,19 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Publish Jamma (Release x64)",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", "${workspaceFolder}\\scripts\\publish.ps1",
+        "-MSBuild", "C:\\path\\to\\MSBuild.exe"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "build",
+      "problemMatcher": "$msCompile"
+    },
+    {
       "label": "Build JammaLib (Debug x64)",
       "type": "process",
       "command": "C:\\path\\to\\MSBuild.exe",

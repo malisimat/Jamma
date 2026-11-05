@@ -3,6 +3,7 @@
 ## Developer Resources
 
 - [Build and Test Guide](build.md)
+- [Portable Windows releases](publishing.md)
 - [Performance Console](performance-console.md)
 - [Real-Time Audio Guidance](realtime-audio.md)
 - [Jamma Concepts and Glossary](glossary.md)

@@ -1,5 +1,7 @@
 # Build and Test Guide
 
+For versioned unzip-and-run distribution folders, see [Portable Windows releases](publishing.md).
+
 ## Environment
 
 - Windows
