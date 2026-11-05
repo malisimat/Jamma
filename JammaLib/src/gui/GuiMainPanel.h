@@ -18,6 +18,7 @@ namespace gui
 		std::string Label;
 		std::shared_ptr<base::GuiElement> Control;
 		unsigned int Command = 0;
+		bool InlineLabel = false;
 	};
 	struct GuiMainPanelParams : public base::GuiElementParams
 	{

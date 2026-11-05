@@ -216,10 +216,10 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	_reclockButton = _SessionButton("Reclock");
 	_audioPauseButton = _SessionButton("Pause");
     _useMasterButton=_SessionButton("Use as master");
-    _masterTarget=_StatusLabel("Reclock from this loop - Shift-click",44u);
+    _masterTarget=_StatusLabel("Reclock from this loop - Shift-click", GuiLabelParams::DefaultHeight);
     _masterStatus=_StatusLabel("No chosen master",44u);
 	_syncToServerButton = _SessionButton("Sync to server");
-	_ninjamStatus = _StatusLabel("NINJAM disconnected", 44u);
+	_ninjamStatus = _StatusLabel("NINJAM disconnected", GuiLabelParams::DefaultHeight);
 	_resetAllButton = _SessionButton("Reset Session");
     _resetWithVstsButton=_SessionButton("Reset Session + VSTs");
 
@@ -362,7 +362,24 @@ std::shared_ptr<GuiLabel> SceneSettingsControls::_StatusLabel(const std::string&
 {
 	auto params = GuiLabelParams::PanelHeader(text, 320, height);
 	params.FontSize = graphics::FontOptions::FONT_SMALL;
+	params.Ellipsize = true;
 	return std::make_shared<GuiLabel>(params);
+}
+
+void SceneSettingsControls::SetDeviceStatus(const std::string& text)
+{
+	_deviceStatus->SetString(text);
+	// Empty feedback must not reserve three lines above Rescan; errors retain
+	// their original capacity, including validation errors set by the inputs.
+	const auto height = text.empty() ? 0u : text == "Ready" ? GuiLabelParams::DefaultHeight : 66u;
+	if (_deviceStatus->GetSize().Height == height) return;
+	_deviceStatus->SetSize({ _deviceStatus->GetSize().Width, height });
+	for (auto owner = _deviceStatus->Parent(); owner; owner = owner->Parent())
+		if (const auto panel = std::dynamic_pointer_cast<GuiMainPanel>(owner))
+		{
+			panel->SetViewportSize(panel->GetSize());
+			break;
+		}
 }
 
 std::shared_ptr<GuiButton> SceneSettingsControls::_SessionButton(const std::string& text)
@@ -464,6 +481,7 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 		if (entry.Page == SettingsPage::Midi) midiEntries.push_back(std::move(entry));
 	_audioChoiceNames.clear();
 	auto dropdown = GuiDropDownParams::PanelInput(300u);
+	dropdown.HorizSizing = base::LayoutSizing::Fill;
 	for (const auto& device : inventory.Devices)
 	{
 		_audioChoiceNames.push_back(device.Name);
@@ -486,10 +504,11 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 		entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiLabel>(detailsParams),0u});
 	}
 	const std::array<unsigned int,4> values{audioDraft.NumChannelsIn, audioDraft.NumChannelsOut, audioDraft.SampleRate, audioDraft.BufSize};
-	std::array<std::string,4> labels{"First N inputs (settles for 3 seconds)", "First N outputs (settles for 3 seconds)", "Sample rate (settles for 3 seconds; no takes only)", "Buffer size (settles for 3 seconds; negotiated on open)"};
+	const std::array<std::string,4> labels{"First N inputs:", "First N outputs:", "Sample rate:", "Buffer size:"};
+	std::string formatHint = "Applies after 3s. Rate: no takes. Buffer negotiated.";
 	if (const auto found = acceptedBufferSizes.find(audioDraft.Name); found != acceptedBufferSizes.end())
 	{
-		labels[3] += " Accepted:"; for (const auto size : found->second) labels[3] += " " + std::to_string(size);
+		formatHint += " Accepted:"; for (const auto size : found->second) formatHint += " " + std::to_string(size);
 	}
 	for (unsigned int i = 0; i < 4; ++i)
 	{
@@ -513,12 +532,12 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 				rates.InitIndex = static_cast<unsigned int>(current - _audioRateChoices.begin());
 			_audioSampleRateChoice = std::make_shared<GuiDropDown>(rates);
 			_audioSampleRateChoice->SetPopupManager(&popupManager);
-			entries.push_back({SettingsPage::Audio, labels[i], _audioSampleRateChoice, AudioInputControlIndex+i});
+			entries.push_back({SettingsPage::Audio, labels[i], _audioSampleRateChoice, AudioInputControlIndex+i, true});
 			continue;
 		}
 		auto params = GuiNumericInputParams::PanelInput(140u);
 		params.IntegerOnly = true; params.RejectOutOfRange = true;
-		params.OnInvalidValue = [this, i]() { _deviceStatus->SetString(i < 2u
+		params.OnInvalidValue = [this, i]() { SetDeviceStatus(i < 2u
 			? "Enter a whole number within the selected device's channel limit"
 			: "Enter a valid whole number; value exceeds allowed integer limits"); };
 		params.Min = i < 2u ? 0.0 : 1.0;
@@ -528,10 +547,11 @@ SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
 		params.Step = 1.0; params.Decimals = 0; params.InitValue = values[i];
 		_audioInputs[i] = std::make_shared<GuiNumericInput>(params);
 		if (i < 2u && (selected == inventory.Devices.end() || !selected->Probed)) _audioInputs[i]->SetEnabled(false);
-		entries.push_back({SettingsPage::Audio, labels[i], _audioInputs[i], AudioInputControlIndex+i});
+		entries.push_back({SettingsPage::Audio, labels[i], _audioInputs[i], AudioInputControlIndex+i, true});
 	}
-	entries.push_back({SettingsPage::Audio, "Active stream", _activeAudioStatus, 0u});
-	entries.push_back({SettingsPage::Audio, "Status", _deviceStatus, 0u});
+	entries.push_back({SettingsPage::Audio, "", _StatusLabel(formatHint, 44u), 0u});
+	entries.push_back({SettingsPage::Audio, "Active stream / status", _activeAudioStatus, 0u});
+	entries.push_back({SettingsPage::Audio, "", _deviceStatus, 0u});
 	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; params.Size.Height = GuiButtonParams::DefaultHeight; params.MinSize.Height = GuiButtonParams::DefaultHeight; params.TextFontSize = graphics::FontOptions::FONT_SMALL; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
 	button("Rescan audio devices", RefreshAudioControlIndex);
 	_midiChoices.clear(); _midiChoiceBindings.clear();

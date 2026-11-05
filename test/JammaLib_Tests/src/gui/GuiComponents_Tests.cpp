@@ -1434,6 +1434,62 @@ TEST(GuiMainPanel, MidiDeviceStackFillsPageAfterReplacementAndResize) {
 	EXPECT_EQ(width, toggle->GetSize().Width);
 }
 
+TEST(GuiMainPanel, AudioParametersShareInlineRowsAndRetainCommandsAfterReplacement) {
+	gui::SceneSettingsControls controls(0u, 0.0, io::JamFile::GlobalMidiQuantState::Mixed);
+	gui::GuiPopupManager popups;
+	auto owner = std::make_shared<GuiRecordingActionReceiver>();
+	io::UserConfig::AudioSettings draft;
+	draft.Name = "Test ASIO";
+	draft.SampleRate = 44100u;
+	audio::AsioInventory inventory;
+	const auto pages = controls.BuildDevicePages(inventory, draft, {}, {}, {}, popups, owner);
+	gui::GuiMainPanelParams params;
+	params.Size = { 1200u, 900u };
+	params.Settings = pages.Audio;
+	auto panel = std::make_shared<gui::GuiMainPanel>(params);
+	panel->Init();
+	panel->SetCommandOwner(owner);
+	panel->SetPage(gui::SettingsPage::Audio);
+	const auto checkRows = [&]() {
+		const auto device = controls.AudioDevice();
+		for (const auto& entry : pages.Audio)
+		{
+			if (!entry.InlineLabel) continue;
+			const auto row = entry.Control->Parent();
+			ASSERT_TRUE(row);
+			EXPECT_EQ(device->Parent(), row->Parent());
+			EXPECT_EQ(device->GetSize().Width, row->GetSize().Width);
+			EXPECT_EQ(gui::GuiStyle::ControlHeight, row->GetSize().Height);
+			EXPECT_NEAR(row->GetSize().Width * 0.65, entry.Control->GetSize().Width, 5.0);
+			EXPECT_EQ(row->TryGetChild(0)->GlobalPosition().Y, entry.Control->GlobalPosition().Y);
+		}
+	};
+	checkRows();
+	panel->SetViewportSize({ 40u, 40u });
+	panel->SetViewportSize({ 1200u, 900u });
+	checkRows();
+	panel->ReplacePageSettings(gui::SettingsPage::Audio, pages.Audio);
+	checkRows();
+	const auto page = controls.AudioDevice()->Parent();
+	controls.SetDeviceStatus("");
+	const auto collapsedHeight = page->GetSize().Height;
+	controls.SetDeviceStatus("Audio device could not be opened; choose another device or format");
+	EXPECT_EQ(collapsedHeight + 66u, page->GetSize().Height);
+	controls.SetDeviceStatus("");
+	EXPECT_EQ(collapsedHeight, page->GetSize().Height);
+	// Invalid numeric input also restores space immediately, before publication.
+	controls.AudioInput(3)->RequestFocus();
+	controls.AudioInput(3)->SetText("invalid", false);
+	controls.AudioInput(3)->FinalizeEdits();
+	EXPECT_EQ(collapsedHeight + 66u, page->GetSize().Height);
+	controls.AudioInput(0)->SetValue(1.0, true);
+	ASSERT_TRUE(owner->LastAction);
+	EXPECT_EQ(7201u, owner->LastAction->Index);
+	const auto decoded = controls.DecodeDeviceChange(*owner->LastAction);
+	ASSERT_TRUE(decoded);
+	EXPECT_TRUE(std::holds_alternative<gui::SceneSettingsControls::AudioValueChange>(*decoded));
+}
+
 TEST(GuiFocusManager, MovingOrClearingFocusFinalizesNumericEdits) {
 	GuiNumericInputParams params;
 	params.Min = 0; params.Max = 16; params.InitValue = 3; params.Decimals = 0;

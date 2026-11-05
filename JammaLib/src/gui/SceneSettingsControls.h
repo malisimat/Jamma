@@ -111,7 +111,7 @@ namespace gui
 		static bool IsOperationControl(unsigned int index);
 		void SetMidiChoiceRegistryId(std::size_t choice, const std::string& id);
 		void SetSessionEnabled(bool enabled, bool defaultEnabled);
-		void SetDeviceStatus(const std::string& text) { _deviceStatus->SetString(text); }
+		void SetDeviceStatus(const std::string& text);
 		void SetActiveAudioStatus(const std::string& text) { _activeAudioStatus->SetString(text); }
 		void SetFileStatus(const std::string& text) { _fileStatus->SetString(text); }
 		const auto& MidiDevice(std::size_t index) const { return _midiChoices.at(index).Toggle; }

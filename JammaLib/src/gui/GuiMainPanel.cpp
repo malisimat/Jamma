@@ -12,6 +12,36 @@ using namespace utils;
 
 namespace gui
 {
+	class GuiSettingsParameterRow : public GuiPanel
+	{
+	public:
+		explicit GuiSettingsParameterRow(const GuiSettingEntry& setting) : GuiPanel(_Params())
+		{
+			auto label = GuiLabelParams::PanelHeader(setting.Label, 260u, GuiStyle::ControlHeight);
+			label.FontSize = graphics::FontOptions::FONT_SMALL;
+			_children.push_back(std::make_shared<GuiLabel>(label));
+			_children.push_back(setting.Control);
+		}
+		void SetSize(Size2d size) override
+		{
+			GuiPanel::SetSize(size);
+			const auto gap = std::min(size.Width, GuiStackPanelParams::PanelRowSpacing);
+			const auto valueWidth = (size.Width - gap) * 65u / 100u;
+			const auto labelWidth = size.Width - gap - valueWidth;
+			_children[0]->SetSize({ labelWidth, size.Height });
+			_children[1]->SetPosition({ static_cast<int>(labelWidth + gap), 0 });
+			_children[1]->SetSize({ valueWidth, size.Height });
+		}
+	private:
+		static GuiElementParams _Params()
+		{
+			GuiElementParams params;
+			params.Size = { 400u, GuiStyle::ControlHeight };
+			params.HorizSizing = LayoutSizing::Fill;
+			return params;
+		}
+	};
+
 	// Decoration follows existing page rows, so grouping adds no layout height
 	// and never participates in picking or command routing.
 	class GuiSettingsSectionHeader : public GuiLabel
@@ -123,7 +153,7 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 		if (!setting.Control || setting.Page >= SettingsPage::Count) continue;
 		if (!_selectionOnly && setting.Page == SettingsPage::Session) continue;
 		auto& page = _pages[static_cast<size_t>(setting.Page)];
-		if (!setting.Label.empty())
+		if (!setting.Label.empty() && !setting.InlineLabel)
 		{
 			const auto labelHeight = setting.Label.size() > 30u
 				? 2u * GuiLabelParams::DefaultHeight : GuiLabelParams::DefaultHeight;
@@ -133,8 +163,9 @@ GuiMainPanel::GuiMainPanel(GuiMainPanelParams params) : GuiPanel(params),
 			page->AddChild(_selectionOnly ? std::make_shared<GuiLabel>(label)
 				: std::make_shared<GuiSettingsSectionHeader>(label));
 		}
-		page->AddChild(setting.Control);
-		_controlSizes.emplace_back(setting.Control, setting.Control->GetSize());
+		const auto control = setting.InlineLabel ? std::make_shared<GuiSettingsParameterRow>(setting) : setting.Control;
+		page->AddChild(control);
+		_controlSizes.emplace_back(control, control->GetSize());
 		auto binding = std::make_shared<GuiCommandReceiver>(setting.Command);
 		setting.Control->SetReceiver(binding);
 		_bindings.push_back(std::move(binding));
@@ -653,7 +684,8 @@ void GuiMainPanel::_LayoutSettings(int panelWidth, int panelHeight)
 		else
 		{
 			if (original != _controlSizes.end())
-				child->SetSize({ (std::dynamic_pointer_cast<GuiButton>(child) || std::dynamic_pointer_cast<GuiSlider>(child) ||
+				child->SetSize({ (child->GetHorizSizing() == LayoutSizing::Fill ||
+					std::dynamic_pointer_cast<GuiButton>(child) || std::dynamic_pointer_cast<GuiSlider>(child) ||
 					std::dynamic_pointer_cast<GuiStackPanel>(child))
 					? childWidth : std::min(childWidth, original->second.Width), original->second.Height });
 			if (auto stack = std::dynamic_pointer_cast<GuiStackPanel>(child))
@@ -727,7 +759,7 @@ void GuiMainPanel::ReplacePageSettings(SettingsPage pageId, const std::vector<Gu
 	for (const auto& setting : settings)
 	{
 		if (!setting.Control) continue;
-		if (!setting.Label.empty())
+		if (!setting.Label.empty() && !setting.InlineLabel)
 		{
 			const auto labelHeight = setting.Label.size() > 30u
 				? 2u * GuiLabelParams::DefaultHeight : GuiLabelParams::DefaultHeight;
@@ -736,12 +768,13 @@ void GuiMainPanel::ReplacePageSettings(SettingsPage pageId, const std::vector<Gu
 			labelParams.FontSize = graphics::FontOptions::FONT_SMALL;
 			page->AddChild(std::make_shared<GuiSettingsSectionHeader>(labelParams));
 		}
-		page->AddChild(setting.Control);
+		const auto control = setting.InlineLabel ? std::make_shared<GuiSettingsParameterRow>(setting) : setting.Control;
+		page->AddChild(control);
 		// A retained widget may currently be wrapped for a narrow viewport.
 		const auto original = std::find_if(previousSizes.begin(), previousSizes.end(),
 			[&setting](const auto& entry) { return entry.first == setting.Control; });
-		_controlSizes.emplace_back(setting.Control, original != previousSizes.end()
-			? original->second : setting.Control->GetSize());
+		_controlSizes.emplace_back(control, original != previousSizes.end()
+			? original->second : control->GetSize());
 		auto binding = std::make_shared<GuiCommandReceiver>(setting.Command, _commandOwner);
 		setting.Control->SetReceiver(binding);
 		_pageBindings[index].push_back(binding);
