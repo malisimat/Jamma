@@ -54,7 +54,8 @@ namespace gui
 	private:
 		static GuiLabelParams _TitleParams(GuiLabelParams params)
 		{
-			params.UseDarkFlatBackground(0.65f);
+			params.UseDarkFlatBackground(0.30f);
+			params.TintColor = { 0.04f, 0.04f, 0.04f };
 			params.FontSize = graphics::FontOptions::FONT_SMALL;
 			return params;
 		}
@@ -62,8 +63,8 @@ namespace gui
 		{
 			GuiElementParams params;
 			params.TextureShader = "colour";
-			params.TintColor = GuiStyle::Graphite();
-			params.TextureOpacity = 0.40f;
+			params.TintColor = { 0.04f, 0.04f, 0.04f };
+			params.TextureOpacity = 0.4f;
 			return params;
 		}
 		GuiPanel _background;
