@@ -25,10 +25,11 @@ namespace graphics
 			FONT_TINY,
 			FONT_SMALL,
 			FONT_MEDIUM,
-			FONT_LARGE
+			FONT_LARGE,
+			FONT_COMPACT
 		};
 
-		static const FontOptions::FontSize FontSizes[] = { FontOptions::FONT_LARGE, FontOptions::FONT_MEDIUM, FontOptions::FONT_SMALL, FontOptions::FONT_TINY };
+		static const FontOptions::FontSize FontSizes[] = { FontOptions::FONT_LARGE, FontOptions::FONT_MEDIUM, FontOptions::FONT_SMALL, FontOptions::FONT_TINY, FontOptions::FONT_COMPACT };
 		static constexpr unsigned int BasePixelHeight = 16u;
 
 		enum TextAlign
@@ -141,7 +142,8 @@ namespace graphics
 		}
 
 		GLuint InitVertexArray(const std::string& str, GLenum usage, GLuint* outPosBuffer = nullptr, GLuint* outUvBuffer = nullptr);
-		void Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars);
+		void Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars, glm::vec3 color = glm::vec3(1.0f));
+		bool CanDraw() const noexcept; // Resource/UI owner: atlas and shader availability only.
 		float MeasureString(const std::string& str) const;
 		float GetHeight() const;
 		

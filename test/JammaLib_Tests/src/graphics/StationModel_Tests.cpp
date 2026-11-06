@@ -2,6 +2,9 @@
 #include <cmath>
 #include "gtest/gtest.h"
 #include "graphics/StationModel.h"
+#include "graphics/QuantisationModel.h"
+#include "graphics/QuantisationDivisionModel.h"
+#include "midi/MidiQuantisation.h"
 #include <glm/geometric.hpp>
 
 using graphics::StationModel;
@@ -243,4 +246,63 @@ TEST(StationModel_TakeCore, ClosedBeveledDiscAndAnnulusStayInsideClearance)
 		EXPECT_LE(radius, nearest * 0.68f);
 		if (nearest >= 12) EXPECT_LE(radius, nearest - 12.0f);
 	}
+}
+
+
+// Detached colour scope must survive mixed takes and selection-depth changes.
+TEST(StationModel_QuantisationColours, StationScopeUsesAnyContainedMidi)
+{
+    std::vector<engine::QuantisationLoopTakeVisual> visuals(2);
+    visuals[1].ContainsMidiLoops = true;
+    StationModel::ApplyQuantisationColourScope(visuals, true, true);
+    EXPECT_TRUE(visuals[0].ContainsMidiLoops);
+    EXPECT_TRUE(visuals[1].ContainsMidiLoops);
+
+    StationModel::ApplyQuantisationColourScope(visuals, true, false);
+    EXPECT_FALSE(visuals[0].ContainsMidiLoops);
+    EXPECT_FALSE(visuals[1].ContainsMidiLoops);
+}
+
+TEST(StationModel_QuantisationColours, TakeScopeKeepsAudioAndMidiPalettesSeparate)
+{
+    std::vector<engine::QuantisationLoopTakeVisual> visuals(2);
+    visuals[1].ContainsMidiLoops = true;
+    StationModel::ApplyQuantisationColourScope(visuals, false, true);
+    EXPECT_FALSE(visuals[0].ContainsMidiLoops);
+    EXPECT_TRUE(visuals[1].ContainsMidiLoops);
+}
+
+
+template<class Model>
+class QuantisationColourProbe : public Model
+{
+public:
+    std::vector<float> ColourInstances(unsigned int location) const
+    {
+        for (const auto& attribute : this->_backInstanceAttributes)
+            if (attribute.AttributeIndex == location) return attribute.Data;
+        return {};
+    }
+};
+
+TEST(StationModel_QuantisationColours, BothMeshesCarryPaletteForEveryInstance)
+{
+    engine::QuantisationLoopTakeVisual audio{};
+    audio.LoopLengthSamps = 96000ul;
+    audio.GrainSamps = 24000u;
+    audio.LoopGrains = 4u;
+    audio.Fraction = midi::MidiQuantisationFraction::Whole;
+    auto midi = audio;
+    midi.ContainsMidiLoops = true;
+    const std::vector<engine::QuantisationLoopTakeVisual> visuals{ audio, midi };
+    QuantisationColourProbe<engine::QuantisationModel> gates;
+    QuantisationColourProbe<engine::QuantisationDivisionModel> divisions;
+    gates.SetLoopTakeVisuals(24000u, visuals);
+    divisions.SetLoopTakeVisuals(visuals);
+    for (const auto& colours : { gates.ColourInstances(5u), divisions.ColourInstances(6u) })
+    {
+        ASSERT_EQ(8u, colours.size());
+        for (size_t i = 0u; i < colours.size(); ++i)
+            EXPECT_FLOAT_EQ(i < 4u ? 0.0f : 1.0f, colours[i]);
+    }
 }

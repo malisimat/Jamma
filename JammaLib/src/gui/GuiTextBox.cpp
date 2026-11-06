@@ -25,6 +25,14 @@ GuiElementParams GuiTextBox::_MakeCaretParams(const std::string& texture)
 	return p;
 }
 
+GuiElementParams GuiTextBox::_MakeSelectionParams()
+{
+	auto p = _MakeCaretParams("blue");
+	p.TextureShader = "texture_tinted";
+	p.TintColor = { 0.2f, 0.38f, 0.6f };
+	return p;
+}
+
 GuiLabelParams GuiTextBox::_MakeLabelParams(const GuiTextBoxParams& params)
 {
 	GuiLabelParams lp;
@@ -51,6 +59,7 @@ GuiTextBox::GuiTextBox(GuiTextBoxParams params) :
 	_padding(params.Padding),
 	_editing(false),
 	_label(std::make_shared<GuiLabel>(_MakeLabelParams(params))),
+	_selectionQuad(_MakeSelectionParams()),
 	_caretQuad(_MakeCaretParams(params.CaretTexture)),
 	_receiver(params.Receiver)
 {
@@ -73,6 +82,12 @@ void GuiTextBox::SetText(const std::string& text, bool notify)
 }
 
 unsigned int GuiTextBox::CaretIndex() const { return _caret; }
+void GuiTextBox::BeginEditing(bool selectAll)
+{
+	_caret = static_cast<unsigned int>(_text.size());
+	_anchor = selectAll ? 0u : _caret;
+	_editing = true;
+}
 bool GuiTextBox::HasSelection() const { return _caret != _anchor; }
 unsigned int GuiTextBox::SelectionStart() const { return std::min(_caret, _anchor); }
 unsigned int GuiTextBox::SelectionLength() const { return std::max(_caret, _anchor) - std::min(_caret, _anchor); }
@@ -138,8 +153,9 @@ void GuiTextBox::_Backspace()
 
 	if (_caret > 0)
 	{
-		_text.erase(_text.begin() + (_caret - 1));
-		_caret--;
+		const auto end = _caret;
+		_MoveCaret(-1, false);
+		_text.erase(_caret, end - _caret);
 		_anchor = _caret;
 	}
 }
@@ -150,12 +166,18 @@ void GuiTextBox::_Delete()
 		return;
 
 	if (_caret < _text.size())
-		_text.erase(_text.begin() + _caret);
+	{
+		auto end = _caret + 1u;
+		while (end < _text.size() && (static_cast<unsigned char>(_text[end]) & 0xc0u) == 0x80u) ++end;
+		_text.erase(_caret, end - _caret);
+	}
 }
 
 void GuiTextBox::_SetCaret(unsigned int index, bool select)
 {
 	_caret = std::min(index, (unsigned int)_text.size());
+	while (_caret > 0u && _caret < _text.size() &&
+		(static_cast<unsigned char>(_text[_caret]) & 0xc0u) == 0x80u) --_caret;
 	if (!select)
 		_anchor = _caret;
 }
@@ -164,6 +186,8 @@ void GuiTextBox::_MoveCaret(int delta, bool select)
 {
 	int next = (int)_caret + delta;
 	next = std::clamp(next, 0, (int)_text.size());
+	if (delta > 0)
+		while (next < static_cast<int>(_text.size()) && (static_cast<unsigned char>(_text[next]) & 0xc0u) == 0x80u) ++next;
 	_SetCaret((unsigned int)next, select);
 }
 
@@ -178,6 +202,7 @@ unsigned int GuiTextBox::_CaretFromLocalX(int localX) const
 	float bestDist = std::abs(target);
 	for (unsigned int i = 1; i <= _text.size(); ++i)
 	{
+		if (i < _text.size() && (static_cast<unsigned char>(_text[i]) & 0xc0u) == 0x80u) continue;
 		const float x = font->MeasureString(_text.substr(0, i));
 		const float dist = std::abs(x - target);
 		if (dist < bestDist)
@@ -346,6 +371,7 @@ void GuiTextBox::_InitResources(ResourceLib& resourceLib, bool forceInit)
 	GuiElement::_InitResources(resourceLib, forceInit);
 	_label->SetParent(shared_from_this());
 	_label->InitResources(resourceLib, forceInit);
+	_selectionQuad.InitResources(resourceLib, forceInit);
 	_caretQuad.InitResources(resourceLib, forceInit);
 }
 
@@ -353,6 +379,7 @@ void GuiTextBox::_ReleaseResources()
 {
 	GuiElement::_ReleaseResources();
 	_label->ReleaseResources();
+	_selectionQuad.ReleaseResources();
 	_caretQuad.ReleaseResources();
 }
 
@@ -382,9 +409,8 @@ void GuiTextBox::Draw(base::DrawContext& ctx)
 	auto pos = Position();
 	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3((float)pos.X, (float)pos.Y, 0.f)));
 
-	_label->Draw(ctx);
-
 	auto font = _label->ResolvedFont();
+	Rect2d selectionBand, caretBand;
 	if (font && _hasFocus)
 	{
 		const auto labelPosition = _label->Position();
@@ -392,28 +418,28 @@ void GuiTextBox::Draw(base::DrawContext& ctx)
 		const Rect2d labelFrame{ labelPosition.X, labelPosition.Y,
 			labelPosition.X + static_cast<int>(labelSize.Width), labelPosition.Y + static_cast<int>(labelSize.Height) };
 		const auto line = _label->LineFrame().value();
-		auto drawBand = [this, &ctx](Rect2d band)
-		{
-			if (band.IsEmpty()) return;
-			_caretQuad.SetSize({ static_cast<unsigned int>(band.Right - band.Left), static_cast<unsigned int>(band.Top - band.Bottom) });
-			_caretQuad.SetPosition({ band.Left, band.Bottom });
-			_caretQuad.Draw(ctx);
-		};
-
-		// Selection underline.
 		if (HasSelection())
 		{
 			const float x0 = font->MeasureString(_text.substr(0, SelectionStart()));
 			const float x1 = font->MeasureString(_text.substr(0, SelectionStart() + SelectionLength()));
-			auto underline = ResolveTextBand(labelFrame, line, x0, x1);
-			underline.Top = std::min(underline.Top, underline.Bottom + 2);
-			drawBand(underline);
+			selectionBand = ResolveTextBand(labelFrame, line, x0, x1);
 		}
 
-		// Caret.
 		const float cx = font->MeasureString(_text.substr(0, _caret));
-		drawBand(ResolveTextBand(labelFrame, line, cx, cx + 2.0f));
+		caretBand = ResolveTextBand(labelFrame, line, cx, cx + 2.0f);
 	}
+	auto drawBand = [&ctx](GuiElement& quad, Rect2d band)
+	{
+		if (band.IsEmpty()) return;
+		quad.SetSize({ static_cast<unsigned int>(band.Right - band.Left), static_cast<unsigned int>(band.Top - band.Bottom) });
+		quad.SetPosition({ band.Left, band.Bottom });
+		quad.Draw(ctx);
+	};
+
+	// Keep the selected glyphs white over a dark, glyph-height fill.
+	drawBand(_selectionQuad, selectionBand);
+	_label->Draw(ctx);
+	drawBand(_caretQuad, caretBand);
 
 	glCtx.PopMvp();
 }

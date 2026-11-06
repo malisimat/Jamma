@@ -1,6 +1,11 @@
 #include "SceneSettingsControls.h"
+#include "../ninjam/NinjamTimingCoordinator.h"
+#include "../io/RigFile.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <limits>
+#include "GuiStackPanel.h"
 
 using namespace gui;
 using actions::GuiAction;
@@ -74,24 +79,24 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 			toggleParams.OverTexture = "stationmode_over";
 			toggleParams.DownTexture = "stationmode_down";
 			toggleParams.ToggledTexture = "stationmode_toggled";
-			toggleParams.ToggledOverTexture = "stationmode_over";
-			toggleParams.ToggledDownTexture = "stationmode_down";
+			toggleParams.ToggledOverTexture = "stationmode_toggled_over";
+			toggleParams.ToggledDownTexture = "stationmode_toggled_down";
 			break;
 		case 1:
 			toggleParams.Texture = "takemode";
 			toggleParams.OverTexture = "takemode_over";
 			toggleParams.DownTexture = "takemode_down";
 			toggleParams.ToggledTexture = "takemode_toggled";
-			toggleParams.ToggledOverTexture = "takemode_over";
-			toggleParams.ToggledDownTexture = "takemode_down";
+			toggleParams.ToggledOverTexture = "takemode_toggled_over";
+			toggleParams.ToggledDownTexture = "takemode_toggled_down";
 			break;
 		case 2:
 			toggleParams.Texture = "loopmode";
 			toggleParams.OverTexture = "loopmode_over";
 			toggleParams.DownTexture = "loopmode_down";
 			toggleParams.ToggledTexture = "loopmode_toggled";
-			toggleParams.ToggledOverTexture = "loopmode_over";
-			toggleParams.ToggledDownTexture = "loopmode_down";
+			toggleParams.ToggledOverTexture = "loopmode_toggled_over";
+			toggleParams.ToggledDownTexture = "loopmode_toggled_down";
 			break;
 		}
 
@@ -104,32 +109,48 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	_midiChannelOverride = std::make_shared<GuiMidiChannelOverride>(channel);
 
 
-	GuiNumericInputParams transportOffsetParams = GuiNumericInputParams::PanelInput(88u);
+	auto transportOffsetParams = GuiSliderParams::PanelHorizontal("yellow", 320u);
 	transportOffsetParams.Index = TransportOffsetControlIndex;
-	transportOffsetParams.Size = { 96, GuiNumericInputParams::DefaultHeight };
 	transportOffsetParams.Min = -1.0;
 	transportOffsetParams.Max = 1.0;
-	transportOffsetParams.Step = 0.005;
-	transportOffsetParams.Decimals = 3;
+	transportOffsetParams.Steps = 400u;
+	transportOffsetParams.DefaultValue = 0.0;
 	transportOffsetParams.InitValue = offset;
-	_transportOffsetInput = std::make_shared<GuiNumericInput>(transportOffsetParams);
-
+	_transportOffsetSlider = std::make_shared<GuiSlider>(transportOffsetParams);
+	_transportOffsetLabel = _StatusLabel("", GuiLabelParams::DefaultHeight);
+	RefreshOffsetPresentation(offset);
+    auto rate = GuiSliderParams::PanelHorizontal("purple", 320u);
+    rate.TintColor = glm::vec3(0.65f, 0.35f, 0.9f);
+    rate.DragOverTexture = "purple";
+    rate.Index = PlaybackRateControlIndex;
+    rate.Min = -1.0; rate.Max = 1.0; rate.Steps = 400u;
+    rate.DefaultValue = 0.0; rate.InitValue = 0.0;
+    _playbackRateSlider = std::make_shared<GuiSlider>(rate);
+    _playbackRateLabel = _StatusLabel("1.000x", GuiLabelParams::DefaultHeight);
+    _serverTempoLabel = _StatusLabel("", GuiLabelParams::DefaultHeight);
+    _requestServerTempoButton = _SessionButton("Request server BPM/BPI");
+    _requestServerTempoButton->SetEnabled(false);
 
 	GuiToggleParams metronomeToggleParams = GuiToggleParams::PanelPrimary();
 	metronomeToggleParams.Index = NinjamMetronomeControlIndex;
 	metronomeToggleParams.ToggleIndex = NinjamMetronomeControlIndex;
 	metronomeToggleParams.Text = "Metronome";
-	metronomeToggleParams.Size = { 120, 40u };
-	metronomeToggleParams.MinSize = { 120, 40u };
+	metronomeToggleParams.Size = { 120, GuiToggleParams::DefaultHeight };
+	metronomeToggleParams.MinSize = metronomeToggleParams.Size;
 	metronomeToggleParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
-	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_ON;
+	metronomeToggleParams.InitState = GuiToggleParams::TOGGLE_OFF;
 	_ninjamMetronomeToggle = std::make_shared<GuiToggle>(metronomeToggleParams);
+	auto level = GuiSliderParams::PanelHorizontal("yellow", 228u);
+	level.Index = MetronomeLevelControlIndex;
+	level.InitValue = 1.0;
+	level.DefaultValue = 1.0;
+	_metronomeLevel = std::make_shared<GuiSlider>(level);
 
 
 	GuiRadioParams globalMidiQuantRadioParams;
 	globalMidiQuantRadioParams.Index = 101u;
 	globalMidiQuantRadioParams.InitValue = static_cast<unsigned int>(quantisation);
-	globalMidiQuantRadioParams.Size = { 228, 40 };
+	globalMidiQuantRadioParams.Size = { 228, GuiToggleParams::DefaultHeight };
 
 	std::vector<GuiToggleParams> globalQuantToggleParams;
 	for (auto i = 0u; i < 3; ++i)
@@ -138,7 +159,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 		toggleParams.Text = i == 0 ? "Off" : i == 1 ? "Mixed" : "All";
 		toggleParams.TextureShader = "texture_tinted";
 		toggleParams.Position = { static_cast<int>(i * 76), 0 };
-		toggleParams.Size = { 72, 40 };
+		toggleParams.Size = { 72, GuiToggleParams::DefaultHeight };
 		toggleParams.Texture = "rounded_but";
 		toggleParams.OverTexture = "rounded_but_over";
 		toggleParams.DownTexture = "rounded_but_down";
@@ -151,7 +172,7 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 			toggleParams.TintColor = glm::vec3(1.0f, 0.34f, 0.30f);
 			break;
 		case 1:
-			toggleParams.TintColor = glm::vec3(1.0f, 0.75f, 0.20f);
+			toggleParams.TintColor = glm::vec3(0.30f, 0.60f, 1.0f);
 			break;
 		case 2:
 		default:
@@ -168,7 +189,6 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	auto tapParams = GuiButtonParams::PanelButton(180u);
 	tapParams.Index = TapTempoControlIndex;
 	tapParams.Text = "Tap tempo (Space)";
-	tapParams.Size.Height = 40u; tapParams.MinSize.Height = 40u;
 	tapParams.TextFontSize = graphics::FontOptions::FONT_SMALL;
 	_tapButton = std::make_shared<GuiButton>(tapParams);
 	GuiRadioParams subdivisionParams;
@@ -186,18 +206,54 @@ SceneSettingsControls::SceneSettingsControls(std::uint8_t channel, double offset
 	}
 	_midiSubdivisionRadio = std::make_shared<GuiRadio>(subdivisionParams);
 
+	_deviceStatus = _StatusLabel("Ready", 66u);
+	_activeAudioStatus = _StatusLabel("Audio stopped", 44u);
+	_fileStatus = _StatusLabel("Choose a folder on first Save", 44u);
+	_saveButton = _SessionButton("Save");
+	_saveDefaultJamButton = _SessionButton("Set as Default");
+	_loadButton = _SessionButton("Load");
+	_saveAsJamButton = _SessionButton("Save As...");
+	_reclockButton = _SessionButton("Reclock");
+	_audioPauseButton = _SessionButton("Pause");
+    _useMasterButton=_SessionButton("Use as master");
+    _masterTarget=_StatusLabel("Reclock from this loop - Shift-click", GuiLabelParams::DefaultHeight);
+    _masterStatus=_StatusLabel("No chosen master",44u);
+	_syncToServerButton = _SessionButton("Sync to server");
+	_ninjamStatus = _StatusLabel("NINJAM disconnected", GuiLabelParams::DefaultHeight);
+	_resetAllButton = _SessionButton("Reset Session");
+    _resetWithVstsButton=_SessionButton("Reset Session + VSTs");
+
 }
 
 std::vector<GuiSettingEntry> SceneSettingsControls::SettingsEntries() const
 {
 	return {
+		{ SettingsPage::Timing, "", _audioPauseButton, AudioPauseControlIndex },
 		{ SettingsPage::Timing, "Global MIDI quantisation", _globalMidiQuantRadio, 101u },
-		{ SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetInput, TransportOffsetControlIndex },
+		{ SettingsPage::Timing, "Playback rate", _playbackRateSlider, PlaybackRateControlIndex },
+        { SettingsPage::Timing, "", _playbackRateLabel, 0u },
+        { SettingsPage::Timing, "", _requestServerTempoButton, RequestServerTempoControlIndex },
+        { SettingsPage::Timing, "", _serverTempoLabel, 0u },
+        { SettingsPage::Timing, "Local phase offset (loops)", _transportOffsetSlider, TransportOffsetControlIndex },
+		{ SettingsPage::Timing, "", _transportOffsetLabel, 0u },
 		{ SettingsPage::Timing, "Subdivision: local grain / remote beat", _midiSubdivisionRadio, MidiSubdivisionControlIndex },
 		{ SettingsPage::Timing, "", _tapButton, TapTempoControlIndex },
+		{ SettingsPage::Timing, "Master clock", _reclockButton, ReclockControlIndex },
+        {SettingsPage::Timing,"",_useMasterButton,UseMasterControlIndex},
+        {SettingsPage::Timing,"",_masterTarget,0u},
+        {SettingsPage::Timing,"",_masterStatus,0u},
+		{ SettingsPage::Timing, "", _syncToServerButton, SyncToServerControlIndex },
+		{ SettingsPage::Timing, "", _ninjamStatus, 0u },
+		{ SettingsPage::Session, "Reset session", _resetAllButton, ResetAllControlIndex },
+        {SettingsPage::Session,"",_resetWithVstsButton,ResetWithVstsControlIndex},
 		{ SettingsPage::Midi, "MIDI channel override", _midiChannelOverride, MidiChannelOverrideControlIndex },
 		{ SettingsPage::Midi, "", std::make_shared<GuiLabel>(GuiLabelParams::PanelHeader("All off = unchanged", 300u)), 0u },
-		{ SettingsPage::Timing, "", _ninjamMetronomeToggle, NinjamMetronomeControlIndex }
+		{ SettingsPage::Timing, "Metronome", _ninjamMetronomeToggle, NinjamMetronomeControlIndex },
+		{ SettingsPage::Timing, "", _metronomeLevel, MetronomeLevelControlIndex },
+		{ SettingsPage::Session, "", _saveButton, SaveSessionControlIndex },
+		{ SettingsPage::Session, "", _saveDefaultJamButton, DefaultSessionControlIndex },
+		{ SettingsPage::Session, "", _loadButton, LoadSessionControlIndex },
+		{ SettingsPage::Session, "", _saveAsJamButton, SaveSessionAsControlIndex }
 	};
 }
 
@@ -209,8 +265,20 @@ std::vector<GuiSettingEntry> SceneSettingsControls::SelectionEntries() const
 std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const GuiAction& action,
 	double acceptedOffset) const
 {
-	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == TapTempoControlIndex)
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == AudioPauseControlIndex)
+		return ToggleAudioPause{};
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == RequestServerTempoControlIndex)
+        return RequestServerTempo{};
+    if (action.ElementType == GuiAction::ACTIONELEMENT_SLIDER && action.Index == PlaybackRateControlIndex)
+        if (const auto value = std::get_if<GuiAction::GuiDouble>(&action.Data); value && std::isfinite(value->Value))
+            return PlaybackRateChange{std::exp2(std::clamp(value->Value, -1.0, 1.0))};
+    if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == TapTempoControlIndex)
 		return TapTempo{};
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == ReclockControlIndex) return Reclock{};
+    if (action.ElementType==GuiAction::ACTIONELEMENT_BUTTON && action.Index==UseMasterControlIndex) return UseMaster{};
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == SyncToServerControlIndex) return SyncToServer{};
+	if (action.ElementType == GuiAction::ACTIONELEMENT_BUTTON && action.Index == ResetAllControlIndex) return ResetAll{};
+    if(action.ElementType==GuiAction::ACTIONELEMENT_BUTTON && action.Index==ResetWithVstsControlIndex) return ResetAll{engine::SessionResetMode::RemoveStationVsts};
 	if (auto value = std::get_if<GuiAction::GuiInt>(&action.Data))
 	{
 		if (action.ElementType == GuiAction::ACTIONELEMENT_RADIO)
@@ -231,29 +299,392 @@ std::optional<SceneSettingsControls::Change> SceneSettingsControls::Decode(const
 		if (action.ElementType == GuiAction::ACTIONELEMENT_TOGGLE && action.Index == NinjamMetronomeControlIndex)
 			return MetronomeChange{ value->Value == GuiToggleParams::TOGGLE_ON };
 	}
-	if (action.ElementType != GuiAction::ACTIONELEMENT_RACK) return std::nullopt;
-	if (action.Index == TransportOffsetControlIndex)
-	{
-		double offset = acceptedOffset;
-		if (auto text = std::get_if<GuiAction::GuiString>(&action.Data))
-		{
-			try
-			{
-				size_t consumed = 0;
-				const double parsed = std::stod(text->Value, &consumed);
-				if (consumed == text->Value.size() && std::isfinite(parsed)) offset = parsed;
-			}
-			catch (...) { /* Retain the accepted offset during invalid edits. */ }
-		}
-		else if (auto number = std::get_if<GuiAction::GuiDouble>(&action.Data)) offset = number->Value;
-		else return std::nullopt;
-		return OffsetChange{ offset }; // Scene retains engine-side validation and clamping.
-	}
+	if (action.ElementType == GuiAction::ACTIONELEMENT_SLIDER && action.Index == MetronomeLevelControlIndex)
+		if (auto value = std::get_if<GuiAction::GuiDouble>(&action.Data); value && std::isfinite(value->Value))
+			return MetronomeLevelChange{ static_cast<float>(std::clamp(value->Value, 0.0, 1.0)) };
+	if (action.ElementType == GuiAction::ACTIONELEMENT_SLIDER && action.Index == TransportOffsetControlIndex)
+		if (auto value = std::get_if<GuiAction::GuiDouble>(&action.Data))
+			return OffsetChange{ std::isfinite(value->Value) ? value->Value : acceptedOffset };
+
 	return std::nullopt;
+}
+
+void SceneSettingsControls::RefreshPlaybackRate(double target, double applied, bool following,
+    bool canRequest, double bpm, unsigned int bpi, bool unsupportedRemoteRate, bool aligning, bool controlPending)
+{
+    const auto sliderValue = std::log2(target);
+    if (_playbackRateSlider->Value() != sliderValue)
+        _playbackRateSlider->SetValue(sliderValue, true);
+    char text[96];
+    if (controlPending) std::snprintf(text, sizeof(text), "%.3fx - waiting for capture", target);
+    else if (following) std::snprintf(text, sizeof(text), aligning ? "%.3fx local - Aligning" : "%.3fx local - following server", target);
+    else if (target != applied) std::snprintf(text, sizeof(text), "%.3fx (%.3fx applied) - Settling", target, applied);
+    else std::snprintf(text, sizeof(text), "%.3fx", target);
+    _playbackRateLabel->SetString(unsupportedRemoteRate ? "Local: server source rate exceeds prepared reader limit" : text);
+    _requestServerTempoButton->SetEnabled(canRequest);
+    if (canRequest) std::snprintf(text, sizeof(text), "Request %.3f BPM / %u BPI", bpm, bpi);
+    else text[0] = '\0';
+    _serverTempoLabel->SetString(text);
 }
 
 void SceneSettingsControls::RefreshChannelPresentation(std::uint8_t channel)
 {
 	if (_midiChannelOverride->Channel() != channel)
 		_midiChannelOverride->SetChannel(channel);
+}
+
+std::string SceneSettingsControls::FormatOffset(double acceptedOffset)
+{
+	// Avoid displaying negative zero after rounding to three decimals.
+	if (std::abs(acceptedOffset) < 0.0005) acceptedOffset = 0.0;
+	char text[32];
+	std::snprintf(text, sizeof(text), "%+.3f loops", acceptedOffset);
+	return text;
+}
+
+void SceneSettingsControls::RefreshMasterPresentation(const std::string& target, const std::string& status, const std::string& current)
+{
+	_masterTarget->SetString(target.empty() ? "Select a take or loop, or Shift-click one" : "Target: " + target);
+	std::string text = current.empty() ? "No chosen master" : "Master: " + current;
+	// Accepted/unchanged feedback already names the master shown above.
+	if (!status.empty() && status != "Current master - " + current && status != "Already master - " + current)
+		text += "\n" + status;
+	_masterStatus->SetString(text);
+}
+
+void SceneSettingsControls::RefreshOffsetPresentation(double acceptedOffset)
+{
+	_transportOffsetSlider->SynchronizeValueFromOwner(acceptedOffset);
+	_transportOffsetLabel->SetString(FormatOffset(acceptedOffset));
+}
+
+std::shared_ptr<GuiLabel> SceneSettingsControls::_StatusLabel(const std::string& text, unsigned int height)
+{
+	auto params = GuiLabelParams::PanelHeader(text, 320, height);
+	params.FontSize = graphics::FontOptions::FONT_SMALL;
+	params.Ellipsize = true;
+	return std::make_shared<GuiLabel>(params);
+}
+
+void SceneSettingsControls::SetDeviceStatus(const std::string& text)
+{
+	_deviceStatus->SetString(text);
+	// Empty feedback must not reserve three lines above Rescan; errors retain
+	// their original capacity, including validation errors set by the inputs.
+	const auto height = text.empty() ? 0u : text == "Ready" ? GuiLabelParams::DefaultHeight : 66u;
+	if (_deviceStatus->GetSize().Height == height) return;
+	_deviceStatus->SetSize({ _deviceStatus->GetSize().Width, height });
+	for (auto owner = _deviceStatus->Parent(); owner; owner = owner->Parent())
+		if (const auto panel = std::dynamic_pointer_cast<GuiMainPanel>(owner))
+		{
+			panel->SetViewportSize(panel->GetSize());
+			break;
+		}
+}
+
+std::shared_ptr<GuiButton> SceneSettingsControls::_SessionButton(const std::string& text)
+{
+	auto params = GuiButtonParams::PanelButton(240u);
+	params.Text = text;
+	params.DispatchCommand = true;
+	params.Size.Height = GuiButtonParams::DefaultHeight;
+	params.MinSize.Height = GuiButtonParams::DefaultHeight;
+	params.TextFontSize = graphics::FontOptions::FONT_SMALL;
+	return std::make_shared<GuiButton>(params);
+}
+
+void SceneSettingsControls::RefreshNinjamStatus(ninjam::NinjamLocalTempoState state, bool connected, bool following, bool aligning)
+{
+	_syncToServerButton->SetEnabled(connected);
+	const char* text = "Local playback; server not followed";
+	if (!connected) text = "NINJAM disconnected";
+	else if (state == ninjam::NinjamLocalTempoState::AwaitingMaster) text = "Local timing; record a new master";
+	else if (state == ninjam::NinjamLocalTempoState::AwaitingServer) text = "Local playback; server tempo request pending";
+	else if (state == ninjam::NinjamLocalTempoState::AwaitingFreshSync) text = "Waiting for fresh server timing";
+	else if (following) text = aligning ? "Aligning to server timing" : "Following server timing";
+	_ninjamStatus->SetString(text);
+}
+
+void SceneSettingsControls::SetSessionEnabled(bool enabled, bool defaultEnabled)
+{
+	_saveButton->SetEnabled(true);
+	_saveAsJamButton->SetEnabled(true);
+	_loadButton->SetEnabled(enabled);
+	_saveDefaultJamButton->SetEnabled(defaultEnabled);
+}
+
+bool SceneSettingsControls::IsOperationControl(unsigned int index)
+{
+	return index >= AudioDeviceControlIndex && index < MidiDeviceControlLimit;
+}
+
+std::optional<SceneSettingsControls::DeviceChange> SceneSettingsControls::DecodeDeviceChange(const GuiAction& action) const
+{
+	switch (action.Index)
+	{
+	case SaveSessionControlIndex: return SaveSession{ (action.InputModifiers & base::Action::MODIFIER_ALT) != 0, false };
+	case SaveSessionAsControlIndex: return SaveSession{ true, false };
+	case DefaultSessionControlIndex: return SaveSession{ false, true };
+	case LoadSessionControlIndex: return LoadSession{};
+	case RefreshMidiControlIndex: return RefreshMidi{};
+	case RefreshAudioControlIndex: return RefreshAudio{};
+	case AudioDeviceControlIndex:
+		if (const auto value = std::get_if<GuiAction::GuiInt>(&action.Data);
+			value && value->Value >= 0 && static_cast<std::size_t>(value->Value) < _audioChoiceNames.size())
+			return AudioDeviceChange{ _audioChoiceNames[value->Value] };
+		return std::nullopt;
+	case AudioInputControlIndex + static_cast<unsigned int>(AudioField::SampleRate):
+		// A device choice can arrive before its page is rebuilt. Never decode an
+		// index from the previous device as a rate for the new draft.
+		if (_audioRateDeviceName != _audioDraft.Name) return std::nullopt;
+		if (const auto value = std::get_if<GuiAction::GuiInt>(&action.Data);
+			value && value->Value >= 0 && static_cast<std::size_t>(value->Value) < _audioRateChoices.size()
+			&& _audioRateChoices[value->Value] != 0u)
+			return AudioValueChange{ AudioField::SampleRate, _audioRateChoices[value->Value] };
+		return std::nullopt;
+	default: break;
+	}
+	if (action.Index >= AudioInputControlIndex && action.Index < AudioInputControlIndex + _audioInputs.size())
+	{
+		const auto index = action.Index - AudioInputControlIndex;
+		if (_audioInputs[index])
+			return AudioValueChange{ static_cast<AudioField>(index), static_cast<unsigned int>(_audioInputs[index]->Value()) };
+		return std::nullopt;
+	}
+	if (action.Index >= MidiDeviceControlIndex && action.Index < MidiDeviceControlLimit)
+	{
+		const auto index = action.Index - MidiDeviceControlIndex;
+		if (index < _midiChoices.size())
+		{
+			const auto& choice = _midiChoices[index];
+			return MidiDeviceChange{ index, choice.HardwareName, choice.RegistryId,
+				choice.Toggle->GetToggleState() == GuiToggleParams::TOGGLE_ON };
+		}
+	}
+	return std::nullopt;
+}
+
+void SceneSettingsControls::SetMidiChoiceRegistryId(std::size_t choice, const std::string& id)
+{
+	_midiChoices.at(choice).RegistryId = id;
+}
+
+SceneSettingsControls::DevicePages SceneSettingsControls::BuildDevicePages(
+	const audio::AsioInventory& inventory, const io::UserConfig::AudioSettings& audioDraft,
+	const std::unordered_map<std::string, std::vector<unsigned int>>& acceptedBufferSizes,
+	const midi::MidiConnectionResult& midi, const std::vector<io::UserConfig::MidiSettings>& midiDraft,
+	GuiPopupManager& popupManager, const std::shared_ptr<base::ActionReceiver>& receiver)
+{
+	std::vector<GuiSettingEntry> entries;
+	std::vector<GuiSettingEntry> midiEntries;
+	for (auto entry : SettingsEntries())
+		if (entry.Page == SettingsPage::Midi) midiEntries.push_back(std::move(entry));
+	_audioChoiceNames.clear();
+	auto dropdown = GuiDropDownParams::PanelInput(300u);
+	dropdown.HorizSizing = base::LayoutSizing::Fill;
+	for (const auto& device : inventory.Devices)
+	{
+		_audioChoiceNames.push_back(device.Name);
+		dropdown.Items.push_back(device.Name + (device.Probed ? "" : " (unavailable)"));
+	}
+	if (std::find(_audioChoiceNames.begin(), _audioChoiceNames.end(), audioDraft.Name) == _audioChoiceNames.end())
+	{
+		_audioChoiceNames.push_back(audioDraft.Name); dropdown.Items.push_back(audioDraft.Name + " (missing)");
+	}
+	dropdown.InitIndex = static_cast<unsigned int>(std::find(_audioChoiceNames.begin(), _audioChoiceNames.end(), audioDraft.Name) - _audioChoiceNames.begin());
+	_audioDeviceChoice = std::make_shared<GuiDropDown>(dropdown);
+	_audioDeviceChoice->SetPopupManager(&popupManager);
+	entries.push_back({SettingsPage::Audio, "ASIO device", _audioDeviceChoice, AudioDeviceControlIndex});
+	const auto selected = std::find_if(inventory.Devices.begin(), inventory.Devices.end(), [&audioDraft](const auto& device){return device.Name == audioDraft.Name;});
+	if (selected != inventory.Devices.end())
+	{
+		const std::string details = "Limits: " + std::to_string(selected->InputChannels) + " in / " + std::to_string(selected->OutputChannels) + " out";
+		auto detailsParams = GuiLabelParams::PanelHeader(details, 320);
+		detailsParams.FontSize = graphics::FontOptions::FONT_SMALL;
+		entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiLabel>(detailsParams),0u});
+	}
+	const std::array<unsigned int,4> values{audioDraft.NumChannelsIn, audioDraft.NumChannelsOut, audioDraft.SampleRate, audioDraft.BufSize};
+	const std::array<std::string,4> labels{"First N inputs:", "First N outputs:", "Sample rate:", "Buffer size:"};
+	std::string formatHint = "Applies after 3s. Rate: no takes. Buffer negotiated.";
+	if (const auto found = acceptedBufferSizes.find(audioDraft.Name); found != acceptedBufferSizes.end())
+	{
+		formatHint += " Accepted:"; for (const auto size : found->second) formatHint += " " + std::to_string(size);
+	}
+	for (unsigned int i = 0; i < 4; ++i)
+	{
+		if (i == static_cast<unsigned int>(AudioField::SampleRate))
+		{
+			_audioRateDeviceName = audioDraft.Name;
+			_audioRateChoices = selected != inventory.Devices.end() && selected->Probed
+				? selected->SampleRates : std::vector<unsigned int>{};
+			auto rates = GuiDropDownParams::PanelInput(140u);
+			for (const auto rate : _audioRateChoices) rates.Items.push_back(std::to_string(rate) + " Hz");
+			const auto current = std::find(_audioRateChoices.begin(), _audioRateChoices.end(), audioDraft.SampleRate);
+			if (current == _audioRateChoices.end() && audioDraft.SampleRate != 0u)
+			{
+				// Preserve an existing rate when a device cannot offer it (for
+				// example while takes prevent changing the running sample rate).
+				rates.InitIndex = static_cast<unsigned int>(_audioRateChoices.size());
+				_audioRateChoices.push_back(0u);
+				rates.Items.push_back(std::to_string(audioDraft.SampleRate) + " Hz (unavailable)");
+			}
+			else if (current != _audioRateChoices.end())
+				rates.InitIndex = static_cast<unsigned int>(current - _audioRateChoices.begin());
+			_audioSampleRateChoice = std::make_shared<GuiDropDown>(rates);
+			_audioSampleRateChoice->SetPopupManager(&popupManager);
+			entries.push_back({SettingsPage::Audio, labels[i], _audioSampleRateChoice, AudioInputControlIndex+i, true});
+			continue;
+		}
+		auto params = GuiNumericInputParams::PanelInput(140u);
+		params.IntegerOnly = true; params.RejectOutOfRange = true;
+		params.OnInvalidValue = [this, i]() { SetDeviceStatus(i < 2u
+			? "Enter a whole number within the selected device's channel limit"
+			: "Enter a valid whole number; value exceeds allowed integer limits"); };
+		params.Min = i < 2u ? 0.0 : 1.0;
+		params.Max = i < 2u && selected != inventory.Devices.end() && selected->Probed
+			? static_cast<double>(i == 0u ? selected->InputChannels : selected->OutputChannels)
+			: static_cast<double>((std::numeric_limits<unsigned int>::max)());
+		params.Step = 1.0; params.Decimals = 0; params.InitValue = values[i];
+		_audioInputs[i] = std::make_shared<GuiNumericInput>(params);
+		if (i < 2u && (selected == inventory.Devices.end() || !selected->Probed)) _audioInputs[i]->SetEnabled(false);
+		entries.push_back({SettingsPage::Audio, labels[i], _audioInputs[i], AudioInputControlIndex+i, true});
+	}
+	entries.push_back({SettingsPage::Audio, "", _StatusLabel(formatHint, 44u), 0u});
+	entries.push_back({SettingsPage::Audio, "Active stream / status", _activeAudioStatus, 0u});
+	entries.push_back({SettingsPage::Audio, "", _deviceStatus, 0u});
+	auto button = [&](const std::string& text, unsigned int command){ auto params = GuiButtonParams::PanelButton(240u); params.Text = text; params.DispatchCommand = true; params.Size.Height = GuiButtonParams::DefaultHeight; params.MinSize.Height = GuiButtonParams::DefaultHeight; params.TextFontSize = graphics::FontOptions::FONT_SMALL; entries.push_back({SettingsPage::Audio,"",std::make_shared<GuiButton>(params),command}); };
+	button("Rescan audio devices", RefreshAudioControlIndex);
+	_midiChoices.clear(); _midiChoiceBindings.clear();
+	midiEntries.push_back({SettingsPage::Midi, "MIDI input selection",
+		_StatusLabel(midi.Inventory.Error, midi.Inventory.Error.empty() ? 0u : 66u), 0u});
+	// Existing registry entries remain independent even when hardware selectors
+	// coincide. Inventory-only choices acquire their ID when first selected.
+	auto choices = midiDraft;
+	for (const auto& device : midi.Inventory.Devices)
+		if (std::none_of(choices.begin(), choices.end(), [&](const auto& choice) { return choice.Name == device.Name; }))
+			choices.push_back({device.Name, false, {}});
+	std::shared_ptr<GuiStackPanel> midiGroup;
+	for (const auto& choice : choices)
+	{
+		if (_midiChoices.size() >= 1000u) break;
+		if (_midiChoices.size() % 128u == 0u)
+		{
+			GuiStackPanelParams groupParams; groupParams.Size = {300u, 8u}; groupParams.Spacing = 8u;
+			midiGroup = std::make_shared<GuiStackPanel>(groupParams);
+			midiEntries.push_back({SettingsPage::Midi,"",midiGroup,0u});
+		}
+		auto params = GuiToggleParams::PanelPrimary(); params.Size = {300u,36u}; params.HorizSizing = base::LayoutSizing::Fill;
+		params.InitState = choice.Enabled ? GuiToggleParams::TOGGLE_ON : GuiToggleParams::TOGGLE_OFF;
+		const auto attempt = std::find_if(midi.Attempts.begin(), midi.Attempts.end(),
+			[&choice](const auto& a){return !choice.Id.empty() && a.RegistryId == choice.Id;});
+		std::string status = "disabled";
+		if (attempt != midi.Attempts.end()) switch (attempt->Status)
+		{
+		case midi::MidiConnectionStatus::Connected: status = "connected"; break;
+		case midi::MidiConnectionStatus::Missing: status = "missing"; break;
+		case midi::MidiConnectionStatus::Ambiguous: status = "ambiguous"; break;
+		case midi::MidiConnectionStatus::Failed: status = "failed"; break;
+		case midi::MidiConnectionStatus::CapacityExceeded: status = "capacity exceeded"; break;
+		default: break;
+		}
+		params.Text = choice.Name + (choice.Id.empty() ? "" : " [" + choice.Id + "]") + " (" + status + ")";
+		params.TextFontSize = graphics::FontOptions::FONT_SMALL;
+		params.TextEllipsize = true;
+		auto control = std::make_shared<GuiToggle>(params);
+		auto binding = std::make_shared<GuiCommandReceiver>(MidiDeviceControlIndex+static_cast<unsigned int>(_midiChoices.size()), receiver);
+		control->SetReceiver(binding); _midiChoiceBindings.push_back(binding);
+		midiGroup->AddChild(control); midiGroup->SetSize({300u, static_cast<unsigned int>((_midiChoices.size() % 128u + 1u) * 44u - 8u)}); midiGroup->ComputeLayout();
+		_midiChoices.push_back({choice.Name, choice.Id, control});
+	}
+	auto refreshMidi = GuiButtonParams::PanelButton(240u); refreshMidi.Text = "Refresh MIDI devices"; refreshMidi.DispatchCommand = true;
+	refreshMidi.Size.Height = GuiButtonParams::DefaultHeight; refreshMidi.MinSize.Height = GuiButtonParams::DefaultHeight; refreshMidi.TextFontSize = graphics::FontOptions::FONT_SMALL;
+	midiEntries.push_back({SettingsPage::Midi, "", std::make_shared<GuiButton>(refreshMidi), RefreshMidiControlIndex});
+	return { std::move(entries), std::move(midiEntries) };
+}
+
+SceneSettingsControls::DraftChange SceneSettingsControls::EditDeviceDraft(const DeviceChange& command,
+	const audio::AsioInventory& inventory, const std::vector<io::UserConfig::SerialSettings>& serialDevices,
+	bool allowRateFallback, unsigned int activeSampleRate)
+{
+	if (const auto value = std::get_if<AudioDeviceChange>(&command))
+	{
+		_audioDraft.Name = value->Name;
+		// A pending rate edit belongs to the old device. Start the new request
+		// from the running rate before choosing a supported fallback.
+		if (activeSampleRate != 0u) _audioDraft.SampleRate = activeSampleRate;
+		const auto found = std::find_if(inventory.Devices.begin(), inventory.Devices.end(), [this](const auto& d){ return d.Name == _audioDraft.Name; });
+		if (found != inventory.Devices.end() && found->Probed)
+		{
+			_audioDraft.NumChannelsIn = std::min(_audioDraft.NumChannelsIn, found->InputChannels);
+			_audioDraft.NumChannelsOut = std::min(_audioDraft.NumChannelsOut, found->OutputChannels);
+			if (!_audioDraft.NumChannelsIn && !_audioDraft.NumChannelsOut) { _audioDraft.NumChannelsOut = std::min(2u, found->OutputChannels); if (!_audioDraft.NumChannelsOut) _audioDraft.NumChannelsIn = std::min(2u, found->InputChannels); }
+			if (allowRateFallback && std::find(found->SampleRates.begin(), found->SampleRates.end(), _audioDraft.SampleRate) == found->SampleRates.end() && !found->SampleRates.empty())
+				_audioDraft.SampleRate = std::find(found->SampleRates.begin(), found->SampleRates.end(), found->PreferredSampleRate) != found->SampleRates.end()
+					? found->PreferredSampleRate : found->SampleRates.front();
+		}
+		++_audioDraftRevision;
+		return DraftChange::Device;
+	}
+	if (std::holds_alternative<AudioValueChange>(command))
+	{
+		const auto& change = std::get<AudioValueChange>(command);
+		using Field = SceneSettingsControls::AudioField;
+		if (change.Field == Field::SampleRate)
+		{
+			if (change.Value == 0u || _audioRateDeviceName != _audioDraft.Name ||
+				std::find(_audioRateChoices.begin(), _audioRateChoices.end(), change.Value) == _audioRateChoices.end())
+				return DraftChange::None;
+		}
+		if (change.Field == Field::Inputs) _audioDraft.NumChannelsIn = change.Value;
+		if (change.Field == Field::Outputs) _audioDraft.NumChannelsOut = change.Value;
+		if (change.Field == Field::SampleRate) _audioDraft.SampleRate = change.Value;
+		if (change.Field == Field::BufferSize) _audioDraft.BufSize = change.Value;
+		++_audioDraftRevision;
+		return change.Field == AudioField::Inputs || change.Field == AudioField::Outputs ? DraftChange::Channels : DraftChange::Format;
+	}
+	if (std::holds_alternative<MidiDeviceChange>(command))
+	{
+		const auto& choice = std::get<MidiDeviceChange>(command);
+		const bool enabled = choice.Enabled;
+		auto found = std::find_if(_midiDraft.begin(), _midiDraft.end(), [&choice](const auto& d){ return d.Id == choice.RegistryId; });
+		if (found == _midiDraft.end())
+		{
+			std::string id;
+
+			for (size_t suffix = 1u;; ++suffix)
+			{
+				id = "midi-" + std::to_string(suffix);
+				const bool midiCollision = std::any_of(_midiDraft.begin(), _midiDraft.end(), [&](const auto& device) { return device.Id == id; });
+				const bool serialCollision = std::any_of(serialDevices.begin(), serialDevices.end(),
+					[&](const auto& device) { return device.Name == id; });
+				if (id != io::RigFile::KeyboardDevice && !midiCollision && !serialCollision) break;
+			}
+			SetMidiChoiceRegistryId(choice.Choice, id);
+			_midiDraft.push_back({choice.Name, enabled, std::move(id)});
+		}
+		else found->Enabled = enabled;
+		++_midiDraftRevision;
+		return DraftChange::Midi;
+	}
+	return DraftChange::None;
+}
+
+void SceneSettingsControls::SetAudioDraftFromStream(const audio::AudioStreamParams& params)
+{
+	auto draft = AudioDraft();
+	// Startup may resolve a legacy/default request or negotiate stream geometry.
+	// Show the running configuration without rewriting the accepted rig on disk.
+	draft.Name = params.Name;
+	draft.SampleRate = params.SampleRate;
+	draft.NumChannelsIn = params.NumInputChannels;
+	draft.NumChannelsOut = params.NumOutputChannels;
+	draft.BufSize = params.BufSize;
+	draft.NumBuffers = params.NumBuffers;
+	SetAudioDraft(std::move(draft));
+}
+
+void SceneSettingsControls::RefreshAudioPause(bool paused, bool enabled)
+{
+	_audioPauseButton->SetText(paused ? "Resume" : "Pause");
+	_audioPauseButton->SetEnabled(enabled);
 }

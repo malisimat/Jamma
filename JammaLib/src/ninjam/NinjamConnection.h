@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -170,6 +171,7 @@ namespace ninjam
 		unsigned int ExportAnomalyCount() const noexcept;
 
 	private:
+		friend class NinjamConnectionTimingTestAccess;
 		static constexpr unsigned int MinimumOutputChannels = 4u;
 		static constexpr unsigned int ReservedMonitorOutputChannels = 2u;
 		static bool IsAuthFailure(const std::string& err);
@@ -192,7 +194,7 @@ namespace ninjam
 		void _ApplyLocalChannels();
 		void _UpdateSnapshot();
 		void _PublishRemoteTiming(const NinjamRemoteTiming& timing) noexcept;
-		NinjamRemoteTiming _ReadPublishedRemoteTiming() const noexcept;
+		std::optional<NinjamRemoteTiming> _ReadPublishedRemoteTiming() const noexcept;
 		unsigned int _AssignOutputChannel(const std::string& userName);
 		void _ResizeExportDelayLines();
 		static void _WriteExportDelayLine(std::vector<std::shared_ptr<audio::AudioBuffer>>& lines,
@@ -266,6 +268,10 @@ namespace ninjam
 
 		// One job-thread writer publishes the accepted NJClient timing tuple;
 		// the audio callback performs a bounded coherent read.
+		// Owned only by the serialized audio reader; successful invalid reads replace it.
+		NinjamRemoteTiming _audioRemoteTiming{};
+		std::uint64_t _audioRemoteTimingResetRevision = 0u;
+		std::atomic<std::uint64_t> _remoteTimingResetRevision{0u};
 		std::atomic<std::uint64_t> _remoteTimingSequence{ 0u };
 		std::atomic_bool _remoteTimingIsConnected{ false };
 		std::atomic_uint _remoteTimingIntervalLength{ 0u };

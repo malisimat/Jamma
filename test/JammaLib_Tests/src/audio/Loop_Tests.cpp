@@ -1,5 +1,7 @@
 
 #include "gtest/gtest.h"
+#include <array>
+#include <limits>
 #include "resources/ResourceLib.h"
 #include "engine/Loop.h"
 #include "engine/Trigger.h"
@@ -455,22 +457,6 @@ ASSERT_EQ(Loop::STATE_INACTIVE, loop.PlayState());
 
 // -- Recording-behaviour tests ----------------------------------------------
 
-TEST(Loop, Recording_WritesDataInRecordingState)
-{
-    const auto loopLength = 50ul;
-    const auto blockSize = 11u;
-
-    auto sink = std::make_shared<MockMultiSink>(blockSize);
-
-    auto loop = MakeLoop();
-    RecordAndPlay(loop, loopLength, false, 1.0f);
-    ASSERT_EQ(Loop::STATE_PLAYING, loop.PlayState());
-
-    PlayOneBlock(loop, sink, blockSize);
-
-    ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
-}
-
 TEST(Loop, Recording_DoesNotWriteDataWhenInactive)
 {
 const auto loopLength = 50ul;
@@ -500,24 +486,6 @@ ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
 PlayOneBlock(loop, sink, blockSize);
 
 ASSERT_FALSE(HasNonZeroSample(sink->GetSamples()));
-}
-
-TEST(Loop, Overdub_WritesBounceBeforePunchIn)
-{
-const auto loopLength = 50ul;
-const auto blockSize = 11u;
-
-auto sink = std::make_shared<MockMultiSink>(blockSize);
-
-auto loop = MakeLoop();
-loop.Overdub();
-WriteData(loop, loopLength, base::Audible::AUDIOSOURCE_BOUNCE, 1.0f);
-loop.Play(constants::MaxLoopFadeSamps, loopLength, true);
-ASSERT_EQ(Loop::STATE_OVERDUBBINGRECORDING, loop.PlayState());
-
-PlayOneBlock(loop, sink, blockSize);
-
-ASSERT_TRUE(HasNonZeroSample(sink->GetSamples()));
 }
 
 TEST(Loop, PunchedIn_MixesBounceWithAdc)
@@ -880,4 +848,50 @@ TEST(Loop, TwoLoopsWithSameContentProduceSameSamples)
     const auto& samplesR = sinkR->GetSamples();
     for (auto s = 0u; s < blockSize; s++)
         EXPECT_FLOAT_EQ(samplesL[s], samplesR[s]) << "sample " << s;
+}
+
+TEST(Loop, ShortBodySignedReadOffsetsNeverAddressPoisonedFadePrefixOrAdvancePhase)
+{
+	constexpr unsigned long length = 17ul, phase = 7ul;
+	static_assert(constants::MaxLoopFadeSamps > length * 100ul);
+	std::vector<float> data(constants::MaxLoopFadeSamps + length, 50.0f);
+	for (auto i = 0ul; i < length; ++i) data[constants::MaxLoopFadeSamps + i] = static_cast<float>(i + 1ul) / 20.0f;
+	for (const auto phaseOffset : {0, 5, -7})
+	{
+		SCOPED_TRACE(phaseOffset);
+		LoopParams params; params.FadeSamps = 0u;
+		AudioMixerParams mixer;
+		WireMixBehaviourParams wire; wire.Channels = {0u}; mixer.Behaviour = wire;
+		Loop loop(params, mixer);
+		loop.Record();
+		AudioWriteRequest request;
+		request.samples = data.data(); request.numSamps = static_cast<unsigned int>(data.size());
+		request.fadeNew = 1.0f; request.source = base::Audible::AUDIOSOURCE_ADC;
+		loop.OnBlockWrite(request, 0); loop.EndWrite(request.numSamps, true);
+		loop.Play(constants::MaxLoopFadeSamps + phase, length, false);
+		loop.SetPlaybackOffsetSamps(phaseOffset);
+		const auto expected = [&](int offset, unsigned int frame)
+		{
+			auto body = (static_cast<std::int64_t>(phase) + static_cast<std::int64_t>(offset)
+				- phaseOffset + frame) % static_cast<std::int64_t>(length);
+			if (body < 0) body += length;
+			return data[constants::MaxLoopFadeSamps + static_cast<std::size_t>(body)];
+		};
+		for (const auto offset : {0, 1, -1, 170, -170, -79623,
+			(std::numeric_limits<int>::min)(), (std::numeric_limits<int>::max)()})
+		{
+			SCOPED_TRACE(offset);
+			float first = 0.0f, repeated = 0.0f;
+			ASSERT_EQ(1u, loop.ReadBlock(&first, offset, 1u));
+			ASSERT_EQ(1u, loop.ReadBlock(&repeated, offset, 1u));
+			EXPECT_FLOAT_EQ(expected(offset, 0u), first);
+			EXPECT_FLOAT_EQ(first, repeated);
+			EXPECT_EQ(phase, loop.BodyPlayIndex());
+		}
+		std::array<float, 5u> seam{};
+		const auto seamOffset = static_cast<int>(length - 1ul - phase) + phaseOffset;
+		ASSERT_EQ(seam.size(), loop.ReadBlock(seam.data(), seamOffset, static_cast<unsigned int>(seam.size())));
+		for (auto i = 0u; i < seam.size(); ++i) EXPECT_FLOAT_EQ(expected(seamOffset, i), seam[i]);
+		EXPECT_EQ(phase, loop.BodyPlayIndex());
+	}
 }

@@ -1,6 +1,7 @@
 #pragma once
 #include "../vst/VstRackSlot.h"
 #include "../audio/InputHistory.h"
+#include "../audio/PlaybackRate.h"
 
 // Recorded performance layer within a Station; owns take state, MIDI material,
 // timing anchors, effects, and its Loops without owning remote follow policy.
@@ -9,11 +10,13 @@
 #include <atomic>
 #include <bitset>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <vector>
 #include <memory>
 #include "Loop.h"
 #include "TriggerCaptureTiming.h"
+#include "../ninjam/NinjamLoopAlignment.h"
 #include "CameraRecordingObservation.h"
 #include "../graphics/CameraBounds.h"
 #include "../graphics/StationModel.h"
@@ -27,6 +30,7 @@
 #include "../gui/GuiRack.h"
 #include "../io/JamFile.h"
 #include "../vst/VstChain.h"
+#include "../vst/RackMove.h"
 #include "../base/TriggerPunchTarget.h"
 #include "../base/PublishedAudioSnapshot.h"
 
@@ -66,6 +70,8 @@ namespace engine
 	public:
 		std::string Id;
 		unsigned int FadeSamps;
+		float SampleRate = static_cast<float>(constants::DefaultSampleRate);
+		unsigned int MidiSeamMergeWindowMs = constants::DefaultMidiSeamMergeWindowMs;
 		std::vector<LoopParams> Loops;
 	};
 
@@ -75,6 +81,8 @@ namespace engine
 		public base::TriggerPunchTarget
 	{
 	public:
+		struct AudioState;
+		struct RenderState;
 		enum LoopTakeSource
 		{
 			SOURCE_ADC,
@@ -129,10 +137,13 @@ namespace engine
 		virtual void OnBlockWriteChannel(unsigned int channel,
 			const base::AudioWriteRequest& request,
 			int writeOffset) override;
+		std::shared_ptr<const RenderState> PrepareRenderState() const;
+		void ZeroPrepared(unsigned int numSamps, base::Audible::AudioSourceType source, const RenderState* prepared);
 		void WriteBlock(const std::shared_ptr<base::MultiAudioSink> dest,
 			const std::shared_ptr<base::BounceWriter> bounceWriter,
 			int indexOffset,
-			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr);
+			unsigned int numSamps, const audio::DacRenderContext* dac = nullptr,
+			const RenderState* prepared = nullptr);
 		void SetActiveBounce(std::shared_ptr<LoopTake> sourceTake,
 			std::shared_ptr<base::BounceWriter> writer) noexcept;
 		void ProcessActiveBounce(int sourceOffset, unsigned int numSamps);
@@ -151,6 +162,8 @@ namespace engine
 		virtual bool DeSelect() override;
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
+		// UI admission only: audition replacement source without changing raw flags.
+		bool AllowReplacementPlayback() noexcept;
 		// Audio-boundary group application changes persistent state only. It never
 		// propagates to new leaves or alters recording-owned source-mute controls.
 		void SetGroupMutedAudio(bool muted) noexcept
@@ -168,6 +181,13 @@ namespace engine
 		std::string SourceId() const;
 		LoopTakeSource TakeSourceType() const;
 		const std::vector<std::shared_ptr<Loop>>& GetLoops() const { return _loops; }
+		// Owner/job-side restore lookup includes material awaiting ordinary publication.
+        std::shared_ptr<Loop> FindStagedAudioLoopById(const std::string& id) const;
+        // Serialized import may precede the first child presentation commit.
+        std::pair<std::shared_ptr<Loop>,unsigned long> TimingMaterialForRestore() const;
+        bool HasCompletedTimingMaterial() const;
+		// Owner/job-side restoration admission, before staged audio publication.
+		bool HasRestorableLoopMaterial() const noexcept { return !_backLoops.empty() || !_midiLoops.empty(); }
 		std::vector<std::vector<unsigned long>> SnapshotAudioRoutesForExport() const;
 		double MasterLevelForExport() const;
 		std::vector<double> BusLevelsForExport() const;
@@ -189,8 +209,12 @@ namespace engine
 			{ _captureSourceMuteControl->Acquire(); }
 		void ReleaseTriggerSourceMuteAudio() noexcept override
 			{ _captureSourceMuteControl->Release(); }
-		bool IsMuted() const override
-			{ return Tweakable::IsMuted() || _captureSourceMuteControl->IsMuted(); }
+		bool IsUserOrSourceMuted() const noexcept { return Tweakable::IsMuted() || _captureSourceMuteControl->IsMuted(); }
+		bool IsMuted() const override { return IsUserOrSourceMuted() || IsStationMuted(); }
+		bool IsStationMuted() const noexcept { return _stationMuteControl && _stationMuteControl->load(std::memory_order_acquire); }
+		bool IsSourceMuted() const noexcept { return _captureSourceMuteControl->IsMuted(); }
+		// Structural owner binds before Station membership publication. No parent pointer/cycle.
+		void SetStationMuteControl(const std::shared_ptr<const std::atomic<bool>>& control);
 		// Structural owner only; retains a control handle, never the source take.
 		void AcquireReplacementSourceMute(const std::shared_ptr<LoopTake>& source) noexcept;
 		unsigned long NumRecordedSamps() const;
@@ -226,7 +250,8 @@ namespace engine
 		void CompleteLocalMasterQuantisationOnOwner() noexcept;
 		void CancelLocalMasterQuantisationOnOwner() noexcept;
 		bool PrepareLocalMasterQuantisation(unsigned int grainSamps,
-			std::uint64_t rebasedTransportStartSamps) noexcept;
+			std::uint64_t rebasedTransportStartSamps,
+			unsigned int masterTapLengthSamps = 0u, unsigned int masterTapDivisions = 0u) noexcept;
 		bool TryClaimPreparedMidiQuantisationAtAudioBoundary() noexcept;
 		void ReleasePreparedMidiQuantisationClaimAtAudioBoundary() noexcept;
 		void ActivatePreparedMidiQuantisationAtAudioBoundary() noexcept;
@@ -248,7 +273,7 @@ namespace engine
 		unsigned int NumBusChannels() const;
 		// Staging only — actual load/unload happens on the job thread after
 		// CommitChanges() queues the appropriate JOB_LOADVST / JOB_UNLOADVST job.
-		void LoadVstPlugin(std::wstring path,
+		std::string LoadVstPlugin(std::wstring path,
 			std::vector<std::uint8_t> initialState = {});
 		// Startup-only synchronous counterpart used by JAM reconstruction.
 		bool LoadVstPluginSynchronously(const std::wstring& path,
@@ -256,14 +281,33 @@ namespace engine
 			bool bypass = false, const std::string& stateId = {});
 		void UnloadVstPlugin(size_t index);
 		vst::VstRackSlot GetVstRackSlot() const;
-		bool LoadManagedVstPlugin(std::wstring path);
+		bool LoadManagedVstPlugin(std::wstring path, const std::string& identity = {});
 		bool UnloadManagedVstPlugin(const std::string& identity);
 		void ForceUnloadAllVstPlugins();
-		void SetSampleRate(float sampleRate);
+		// Owner-side playback format refresh; sample-only updates retain the seam policy.
+		void SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs = std::nullopt);
 		bool ReconfigureVstFormat(float sampleRate, unsigned int blockSize);
 		float GetSampleRate() const noexcept { return _sampleRate; }
 		unsigned int GetLastBufSize() const noexcept { return _lastBufSize; }
 		std::shared_ptr<vst::IVstPlugin> GetVstPlugin(size_t index) const;
+		std::vector<vst::VstRackSlot> GetVstRackSlots(std::size_t offset = 0u) const;
+		std::uint64_t RackRevision() const noexcept { return _rackRevision.load(std::memory_order_acquire); }
+		bool MoveVstSlot(const vst::RackMove& move);
+		void SetAllowedMidiChannels(const std::vector<int>& channels);
+		const std::vector<int>& AllowedMidiChannels() const noexcept { return _allowedMidiChannels; }
+		std::uint16_t AllowedMidiChannelMask() const noexcept { return _allowedMidiChannelMask; }
+		const std::array<midi::MidiChannelRoute,16>& MidiChannelRoutes() const noexcept { return _midiChannelRoutes; }
+		bool SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes, std::uint64_t revision);
+		bool RestoreMidiRouting(const std::vector<int>& channels, std::array<midi::MidiChannelRoute,16> routes);
+		std::shared_ptr<vst::VstChain> PreparedVstChain() const { return _vstChain.load(); }
+
+		void SetAutomationTopologyChangedCallback(std::function<void()> changed);
+		std::shared_ptr<vst::IVstPlugin> FindVstPlugin(const vst::IVstPlugin* observer,
+			const std::string& identity, std::size_t& index) const
+		{
+			const auto chain = _vstChain.load(std::memory_order_acquire);
+			return chain ? chain->FindPlugin(observer, identity, index) : nullptr;
+		}
 		std::vector<io::JamFile::VstEntry> VstEntries() const;
 		bool TryGroupVstEntries(std::vector<io::JamFile::VstEntry>& output) const;
 		bool TryRestoreGroupVstEntry(const io::JamFile::VstEntry& entry);
@@ -277,17 +321,14 @@ namespace engine
 			return chain && chain->ContainsPlugin(plugin);
 		}
 
-		// Read-only, real-time-safe view of this take's aggregate VST
-		// processing latency, in samples (sum across the published chain).
-		// Plumb-only for now: not yet folded into any playback-position
-		// compensation -- see doc/ninjam-live-loop-latency-sync-planC.md §2/§7
-		// and IVstPlugin::GetLatencySamples.
-		void PollPlaybackPluginChanges() const noexcept;
-		unsigned int RecordedPlaybackLatencySamps() const noexcept;
+		// Structural polling and material compensation use the accepted render
+		// record when supplied, matching the audio block's chains and buffers.
+		void PollPlaybackPluginChanges(const RenderState* prepared = nullptr) const noexcept;
+		unsigned int RecordedPlaybackLatencySamps(const RenderState* prepared = nullptr) const noexcept;
 		bool CanConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps,
-			unsigned int stationLatencySamps) const noexcept;
+			unsigned int stationLatencySamps, const RenderState* prepared = nullptr) const noexcept;
 		bool ConfigureRecordedPlaybackCompensation(unsigned int referenceLatencySamps,
-			unsigned int stationLatencySamps);
+			unsigned int stationLatencySamps, const RenderState* prepared = nullptr);
 		int CurrentVstLatencySamps() const noexcept
 		{
 			auto chain = _vstChain.borrow();
@@ -327,16 +368,54 @@ namespace engine
 		// its generation gate and shifts each entity by the common signed delta.
 		void ApplyAcceptedTimingCorrection(long long deltaSamps,
 			std::uint64_t generation, bool relocateMidi = false) noexcept;
+		void ApplyRemoteTiming(const ninjam::RemoteLoopTiming& timing) noexcept;
+		void CaptureRecordingBaselineAtAudioBoundary(const RemoteTransportGeometry& geometry,
+			std::uint64_t sceneSample) noexcept;
+		void BeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std::uint64_t deviceStart,
+			const audio::PlaybackRateHistory* history, bool followingRemote, double legacyRemoteRate = 1.0) noexcept;
+		bool CanBeginPlaybackRateBlock(const audio::PlaybackRateBlock& block, std::uint64_t deviceStart,
+			bool followingRemote, double legacyRemoteRate, bool allowContinuation = true) noexcept;
+		std::optional<double> SourceProgressBetweenDeviceSamples(std::uint64_t first, std::uint64_t last) const noexcept
+			{ return _sourceRateHistory.QueryDifference(first, last); }
+        enum class SourceEventMapStatus { Mapped, Future, Missing };
+        struct SourceEventMapping { SourceEventMapStatus Status; std::uint32_t Sample = 0u; };
+        SourceEventMapping MapSourceDeltaToDeviceSample(std::uint32_t origin, double delta) const noexcept;
+		double RecordingPlaybackRate() const noexcept { return _recordingPlaybackRate.load(std::memory_order_acquire); }
+		void RestoreRecordingPlaybackRate(double rate) noexcept;
+		double MidiSourcePositionAtFrame(unsigned int frame) const noexcept;
+		double MidiSourcePhaseAtFrame(unsigned int frame, unsigned long length) const noexcept;
+		bool HasPlaybackRateBlock() const noexcept { return _hasPlaybackRateBlock; }
+		std::uint64_t PlaybackRateRevision() const noexcept { return _playbackRateBlock.Revision; }
+		std::uint64_t RequiredRateHistoryStart(std::uint64_t fallback) const noexcept;
+		void CancelRateCaptureBefore(std::uint64_t earliest) noexcept;
+		void ResetPlaybackRateHistoryForDevice(unsigned int sampleRate);
+		bool PlaybackRateAligned() const noexcept { return !_sourceTransitionActive && _sourcePhaseError == 0.0 && _pendingSourcePhaseCorrection == 0.0; }
+		std::optional<double> CaptureSourcePositionAtDeviceSample(std::uint32_t sample) const noexcept;
+		std::optional<unsigned long> CaptureSourceLengthAtDeviceSample(std::uint32_t sample) const noexcept;
+		bool HasCaptureRateMapping() const noexcept { return _captureRateOriginReady.load(std::memory_order_acquire); }
+		std::int32_t SavedSharedPlaybackOffset() const noexcept
+			{ return _sharedPlaybackTrajectoryActive.load(std::memory_order_acquire) ? _desiredSharedPlaybackOffset.load(std::memory_order_acquire) : 0; }
+		bool IsIndependentRecording() const noexcept { return _independentRecording; }
+		RemoteTransportGeometry RecordingGeometry() const noexcept
+		{
+			const auto packed = _recordingBaselinePacked.load(std::memory_order_acquire);
+			return { static_cast<unsigned long>(packed >> 32u), static_cast<unsigned int>(packed) };
+		}
+		unsigned long RecordingMasterLengthSamps() const noexcept
+			{ return static_cast<unsigned long>(_recordingBaselinePacked.load(std::memory_order_acquire) >> 32u); }
+		unsigned int RecordingBeatsPerInterval() const noexcept
+			{ return static_cast<unsigned int>(_recordingBaselinePacked.load(std::memory_order_acquire)); }
 		void CaptureSceneAnchors(std::uint64_t sceneCoordinateSamps) noexcept;
 		void InvalidateSceneAnchors() noexcept;
 		void ResetTimingEpoch() noexcept;
 		// Capture/restore use an already-mapped common source coordinate. Entity
 		// anchors and modulo lengths remain local to the take and its loops.
-		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps) noexcept;
-		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps) noexcept;
+		void CaptureMappedSourceAnchors(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample = 0u) noexcept;
+		void RestoreMappedSourceCoordinate(std::int64_t sourceCoordinateSamps, std::uint64_t sceneSample = 0u) noexcept;
 		// Audio-thread absolute setter. The target is persistent so an empty take
 		// can reconcile when it first becomes playable.
-		void SetLocalTransportOffsetSamps(long long targetSamps) noexcept;
+		void SetLocalTransportOffsetSamps(long long targetSamps, double masterRecordingRate = 1.0,
+            unsigned long remoteLength = 0ul, unsigned long legacySourceLength = 0ul) noexcept;
 		// Non-audio initialization before this take enters an audio snapshot.
 		void SetInitialLocalTransportOffsetSamps(long long targetSamps) noexcept;
 		std::uint64_t QueuedExternalPhaseCorrectionCount() const noexcept
@@ -361,7 +440,8 @@ namespace engine
         bool HasMidiDevicePhaseObservation() const noexcept { return _hasMidiDevicePhaseObservation.load(std::memory_order_acquire); }
 		std::uint32_t CaptureBoundarySample() const noexcept { return _captureBoundarySample.load(std::memory_order_acquire); }
 		void BeginCaptureAudioBoundary(std::uint64_t deviceSample, std::uint64_t sceneSample, std::uint64_t absoluteSample) noexcept;
-		bool AudioCaptureReady(unsigned int count, int offset = 0) const noexcept;
+		void SetCaptureInputHistoryAtAudioBoundary(const audio::InputHistoryView& history) noexcept;
+		bool AudioCaptureReady(unsigned int count, int offset = 0, const AudioState* preparedAudio = nullptr) const noexcept;
 
 		// Atomic logical cancellation; destructive Ditch requires stopped/retired readers.
 		void CancelCapture(bool sourceLoss = false) noexcept;
@@ -388,6 +468,10 @@ namespace engine
 			std::uint32_t globalSampleNow) noexcept;
 		std::vector<midi::MidiEvent> BuildMidiPunchInLiveTransitionEvents(std::uint32_t punchSample) const;
 		std::vector<midi::MidiEvent> BuildMidiPunchOutLiveTransitionEvents(std::uint32_t punchSample) const;
+		float RecordedMidiVelocityScale() const noexcept { return _masterMixer->UnmutedVelocityScale(); }
+		unsigned int ReadPreparedMidiBlock(std::span<const std::shared_ptr<midi::MidiLoop>> sources,
+			std::uint32_t globalSample, std::uint32_t numSamples,
+			midi::IMidiOutputSink& sink, unsigned int firstOutputIndex, bool rawVelocity = true, const AudioState* preparedAudio = nullptr) noexcept;
 		unsigned int ReadMidiBlock(std::uint32_t globalSample,
 			std::uint32_t numSamples,
 			midi::IMidiOutputSink& sink,
@@ -399,7 +483,7 @@ namespace engine
 		// share _midiCaptureMutex; the audio callback reads only the loop snapshot.
 		bool PublishMidiEdit(const std::shared_ptr<midi::MidiLoop>& loop,
 			const midi::MidiLoop::EditState& edit,
-			std::uint64_t* acceptedRevision = nullptr);
+			std::uint64_t* acceptedRevision = nullptr, midi::MidiLoop::EditState* accepted = nullptr);
 		const std::vector<unsigned int>& MidiLoopChannels() const noexcept { return _midiLoopChannels; }
 		const std::vector<std::string>& MidiLoopDevices() const noexcept { return _midiLoopDevices; }
 		struct MidiStreamExport
@@ -413,6 +497,7 @@ namespace engine
 		{
 			std::vector<MidiStreamExport> Streams;
 			unsigned long PlayIndex = 0ul;
+			std::optional<std::int64_t> SourcePosition;
 			unsigned long LoopLengthSamps = 0ul;
 			midi::MidiQuantisationSettings Quantisation;
 			std::uint32_t BaseIntervalSamps = 0u;
@@ -467,9 +552,10 @@ namespace engine
 		std::uint64_t FirstRecordBlockSceneSamps() const noexcept;
 		bool SetMidiLoopQuantisationOverride(const std::shared_ptr<midi::MidiLoop>& loop, const midi::MidiLoop::QuantisationOverride& value);
 		void SetMidiBaseGrid(std::uint32_t interval, std::uint32_t divisions) noexcept;
+		void SetTransportMidiBaseGrid(std::uint32_t interval, std::uint32_t divisions, double masterRecordingRate) noexcept;
 		bool IsCompletedRecording() const noexcept;
 		void SetRemoteMidiQuantisationGrid(const RemoteTransportGeometry& geometry,
-			std::int64_t originSamps) noexcept;
+			std::int64_t originSamps, unsigned long legacySourceLength = 0ul) noexcept;
 		void SetRackVisibility(bool visible);
 		std::shared_ptr<gui::GuiRack> GetGuiRack() const { return _guiRack; }
 		gui::GuiRackParams::RackState GetRackState() const;
@@ -477,6 +563,7 @@ namespace engine
 		void CollapseRouterToChannels();
 
 	protected:
+		void _PrepareSceneGeometry();
 		static unsigned int _CalcLoopHeight(unsigned int takeHeight, unsigned int numLoops);
 		static std::int32_t _ClampPhaseOffset(std::int64_t offsetSamps) noexcept;
 
@@ -488,6 +575,7 @@ namespace engine
 			base::AudioSource::AudioSourceType source) override;
 		virtual void _ArrangeChildren() override;
 
+	public:
 		struct AudioState
 		{
 			// Snapshot pins keep retired loops alive until the job thread reclaims the state.
@@ -496,9 +584,23 @@ namespace engine
             bool OrdinaryAudioCapture = false;
 			std::vector<std::shared_ptr<audio::AudioMixer>> AudioMixers;
 			std::vector<std::shared_ptr<audio::AudioBuffer>> AudioBuffers;
+			std::vector<std::shared_ptr<audio::AudioMixer>> OutputMixers;
 			std::vector<float> VstBlockScratch;
 			std::vector<float*> VstBlockPtrs;
+			std::vector<float> InstrumentScratch;
+			std::vector<float*> InstrumentPtrs;
 		};
+
+		// Captured off callback together with the Station delivery topology. Audio
+		// never independently borrows a newer chain or MIDI source membership.
+		struct RenderState
+		{
+			std::shared_ptr<const AudioState> Audio;
+			std::shared_ptr<vst::VstChain> Chain;
+			std::vector<std::shared_ptr<vst::VstChain>> LoopChains;
+			std::vector<std::shared_ptr<midi::MidiLoop>> MidiSources;
+		};
+	protected:
 
 		using MidiLoopSnapshot = std::vector<std::shared_ptr<midi::MidiLoop>>;
 
@@ -526,6 +628,7 @@ namespace engine
 			base::AudioSource::AudioSourceType source) const;
 
 	private:
+		void _ApplyAudioPhaseOffset() noexcept;
 		static bool _HasMidiQuantisationGestureModifiers(base::Action::Modifiers modifiers) noexcept;
 		static unsigned long _NormalizeLoopIndex(long long index, unsigned long loopLength) noexcept;
 		static std::uint32_t _NormalizeMidiLoopOffset(std::uint32_t offset,
@@ -608,7 +711,7 @@ namespace engine
         std::atomic<std::int64_t> _midiCaptureTransportOrigin{0};
         std::atomic<bool> _hasMidiDevicePhaseObservation{false};
         std::atomic<std::uint64_t> _midiDevicePhaseObservation{0u}; // callback publishes coherent device sample + phase
-        unsigned long _MidiPhaseAtDeviceSample(std::uint32_t sample, unsigned long length) const noexcept;
+        std::optional<unsigned long> _MidiPhaseAtDeviceSample(std::uint32_t sample, unsigned long length) const noexcept;
         std::uint32_t _MidiPhysicalCaptureOffset(std::uint32_t sample) const noexcept;
 		bool _ordinaryAudioCapture = false; // structural owner, published in AudioState
         TriggerCaptureTiming _triggerCaptureTiming;
@@ -642,6 +745,7 @@ namespace engine
 		std::atomic<std::uint64_t> _preparedLocalMasterBaseGridPacked{ 0u };
 		std::atomic<std::uint64_t> _preparedLocalMasterQuantisationPacked{ 0u };
 		std::atomic<std::uint64_t> _preparedLocalMasterTransportStart{ 0u };
+		std::atomic<unsigned long> _preparedMasterTapLengthSamps{ 0ul };
 		std::atomic<unsigned long> _midiVisualPlayIndex;
 		std::atomic<unsigned long> _midiVisualLoopLength;
 		// Diagnostic scalars only: audio writer, job readers; lifetime is pinned by
@@ -665,11 +769,60 @@ namespace engine
 		std::atomic<std::uint64_t> _consumedTimingCorrectionCount{ 0u };
 		// Audio-thread-only generation gate for the unified audio-boundary command.
 		std::uint64_t _audioTimingGeneration{ 0u };
+		// Recording geometry is published atomically; the active map belongs to audio.
+		std::atomic<std::uint64_t> _recordingBaselinePacked{ 0u };
+		std::atomic<double> _recordingPlaybackRate{ 1.0 };
+		std::atomic_bool _recordingPlaybackRatePending{ false };
+		audio::PlaybackRateBlock _playbackRateBlock;
+		double _playbackRateBaseline = 1.0;
+		// Callback-only readers share the exact recurrence result for their query edge.
+		mutable std::optional<unsigned int> _midiProgressFrame;
+		mutable double _midiProgress = 0.0;
+		double _MidiSourceProgressAtFrame(unsigned int frame) const noexcept;
+		double _midiSourceFraction = 0.0;
+		std::int64_t _midiSourceWhole = 0;
+		bool _midiSourceOriginInitialised = false;
+		bool _hasPlaybackRateBlock = false;
+		const audio::PlaybackRateHistory* _playbackRateHistory = nullptr; // Callback-only borrowed owner.
+		const audio::PlaybackRateHistory* _masterRateHistory = nullptr;
+		std::uint64_t _playbackDeviceStart = 0u;
+		audio::SourcePosition _captureRateOrigin;
+		std::uint64_t _captureContentPhysicalOrigin = 0u; // Callback-owned capture admission edge.
+		std::optional<double> _captureOutputLatencyProgress; // Frozen on the same source ruler.
+		audio::SourcePosition _captureMidiRateOrigin;
+		std::uint64_t _captureMidiPhysicalOrigin = 0u;
+		bool _midiCaptureRateMapped = false; // MIDI owner, protected by existing capture mutex.
+		bool _MapPendingMidiCaptureRate() noexcept;
+		bool _InitialiseCaptureRateOrigin(const audio::PlaybackRateHistory& history, std::uint64_t effectiveStart) noexcept;
+		std::optional<std::uint32_t> _MappedMidiCaptureOffset(std::uint32_t sample) const noexcept;
+		std::atomic_bool _captureRateOriginReady{ false };
+		std::atomic<std::uint64_t> _captureRateDeviceAnchor{ 0u };
+		std::atomic<const audio::PlaybackRateHistory*> _captureRateHistory{ nullptr };
+		audio::PlaybackRateHistory _sourceRateHistory{ 1u };
+		std::uint64_t _sourceRateHistoryWindow = 0u;
+		bool _sourceRateHistoryStarted = false;
+		std::shared_ptr<LoopTake> _captureRateParent; // Set before publication; callback borrows without ownership changes.
+		bool _SeedSourceRateHistory(const audio::PlaybackRateHistory& history, std::uint64_t first,
+			std::uint64_t end, bool sourceRuler) noexcept;
+		static void _ApplyRecordingRate(audio::PlaybackRateBlock& block, double recordingRate) noexcept;
+		std::atomic<std::uint64_t> _midiRateHistoryConsumedThrough{ 0u };
+		bool _captureUsesRateMapping = false; // Callback-owned; once enabled it remains on through completion.
+		double _sourceVelocity = 1.0;
+		double _sourcePhaseError = 0.0;
+		double _pendingSourcePhaseCorrection = 0.0;
+		bool _sourceTransitionActive = false;
+		bool _sourceTrajectoryInitialised = false;
+		bool _sourceFollowingRemote = false;
+		double _previousRemoteSourceRate = 1.0;
+		std::atomic_bool _recordingBaselinePending{ false };
+		bool _independentRecording = false; // Owner sets before publishing a new take.
+		ninjam::SyncPhaseMap _recordingPhaseMap;
 		std::atomic<bool> _isPunchInActive;
 		std::atomic<bool> _isMidiPunchInActive;
 		std::shared_ptr<gui::GuiRack> _guiRack;
 		std::shared_ptr<graphics::TakeCoreModel> _takeCore;
 		std::shared_ptr<audio::AudioMixer> _masterMixer;
+		std::shared_ptr<const std::atomic<bool>> _stationMuteControl;
 		std::shared_ptr<audio::CaptureSourceMuteControl> _captureSourceMuteControl =
 			std::make_shared<audio::CaptureSourceMuteControl>();
 		std::shared_ptr<audio::CaptureSourceMuteControl> _replacementSourceMuteControl;
@@ -677,6 +830,7 @@ namespace engine
 		float _parentVisualScale = 1.0f;
 		std::vector<std::shared_ptr<Loop>> _loops;
 		std::vector<std::shared_ptr<Loop>> _backLoops;
+        bool _restoredCompletedMaterial=false; // Serialized file construction; never admits a fresh inactive take.
 		std::vector<unsigned int> _recordInputChannels;
 		std::vector<std::shared_ptr<midi::MidiLoop>> _midiLoops;
 		std::vector<unsigned int> _midiLoopChannels;
@@ -700,12 +854,16 @@ namespace engine
 		mutable std::mutex _midiCaptureMutex;
 		base::PublishedAudioSnapshot<const MidiLoopSnapshot> _midiLoopSnapshot;
 		std::atomic<std::uint8_t> _promotionTopologyGate{ 0u }; // 1 callback, 2 owner.
+		base::PublishedAudioSnapshot<const AudioState>::Lease _promotionAudioLoopLease; // Callback only.
 		base::PublishedAudioSnapshot<const MidiLoopSnapshot>::Lease _promotionMidiLoopLease; // Callback only.
 		std::atomic<std::uint64_t> _midiQuantisationPacked;
 		std::atomic<std::uint8_t> _globalMidiQuantStatePacked{
 			static_cast<std::uint8_t>(io::JamFile::GlobalMidiQuantState::Off)
 		};
 		std::atomic<std::int32_t> _midiInheritedPhaseOffsetSamps{ 0 };
+		std::atomic<std::int32_t> _desiredSharedPlaybackOffset{ 0 };
+		std::int32_t _appliedSharedPlaybackOffset = 0;
+		std::atomic_bool _sharedPlaybackTrajectoryActive{ false };
 		std::atomic<std::uint64_t> _midiTransportStartSamps{ 0u };
 		std::atomic<std::uint64_t> _firstRecordBlockSceneSamps{ 0u };
 		// Audio callback publishes the captured start; the record-end job reads it.
@@ -714,8 +872,10 @@ namespace engine
 		// lock or allocation on any real-time path.
 		// Job writer; callback/UI readers consume interval and divisions as one value.
 		std::atomic<std::uint64_t> _midiBaseGridPacked{ 0u };
+		std::atomic<double> _midiBaseGridRecordingRate{ 0.0 };
 		std::atomic<std::uint64_t> _remoteMidiGridSequence{ 0u };
 		std::atomic<std::uint32_t> _remoteMidiIntervalSamps{ 0u };
+		std::atomic<std::uint32_t> _remoteMidiSourceIntervalSamps{ 0u };
 		std::atomic<std::uint32_t> _remoteMidiBpi{ 0u };
 		std::atomic<std::int64_t> _remoteMidiOriginSamps{ 0 };
 		std::atomic_bool _midiQuantisationUpdatePending;
@@ -724,20 +884,32 @@ namespace engine
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _audioBuffers;
 		std::vector<std::shared_ptr<audio::AudioBuffer>> _backAudioBuffers;
 		base::PublishedAudioSnapshot<const AudioState> _audioState;
+		const AudioState* _renderAudioState = nullptr; // Scoped synchronous leaf-to-Take routing only.
 		// Live VST chain published atomically for lock-free audio-thread reads.
 		base::PublishedAudioSnapshot<vst::VstChain> _vstChain;
 		std::shared_ptr<vst::VstChain> _backVstChain;
 		std::atomic<bool> _flipVstChain{ false };
+		// Non-audio membership/commit only; propagated to child loops. Weak
+		// Station capture avoids retaining a removed hierarchy or touching audio.
+		std::function<void()> _automationTopologyChanged;
 		std::vector<actions::JobAction> _pendingVstLoads;
 		std::vector<actions::JobAction> _pendingVstUnloads;
-		float _sampleRate{ static_cast<float>(constants::DefaultSampleRate) };
+		unsigned int _midiSeamMergeWindowMs;
+		float _sampleRate;
 		// _vstPluginPaths: written on job thread (OnAction), read on main thread (VstEntries).
 		// Access is guarded by _vstPathsMutex in both directions.
 		mutable std::mutex _vstPathsMutex;
 		std::vector<std::wstring> _vstPluginPaths;
 		std::vector<io::JamFile::VstEntry> _vstSavedEntries;
+		std::vector<std::string> _pendingDeletedVstRouteIds; // Job staging, applied on serialized commit.
 		// UI stages requests, job completes them. Audio never reads this counter.
 		std::atomic<unsigned int> _vstJobsPending{ 0u };
+		std::atomic<std::uint64_t> _rackRevision{1u};
+		std::vector<int> _allowedMidiChannels{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+		std::uint16_t _allowedMidiChannelMask = 0xffffu;
+		std::array<midi::MidiChannelRoute,16> _midiChannelRoutes{};
+		std::vector<std::shared_ptr<audio::AudioMixer>> _generatorMixers;
+
 		// Startup-only metadata. Runtime lane pointers are installed by Station only
 		// after every chain named by these references has been constructed.
 		std::vector<PendingAutomationBinding> _pendingAutomationBindings;

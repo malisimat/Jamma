@@ -2,14 +2,18 @@
 
 #include <functional>
 #include <array>
+#include <span>
+#include <variant>
 #include "GuiButton.h"
 #include "GuiSlider.h"
 #include "GuiToggle.h"
 #include "GuiRouter.h"
+#include "GuiStationLabel.h"
 #include "ActionReceiver.h"
 
 namespace gui
 {
+	class GuiVstRack;
 	class GuiRackParams :
 		public base::GuiElementParams
 	{
@@ -56,6 +60,10 @@ namespace gui
 		std::vector<int> AllowedMidiChannels;
 		std::function<void(const std::vector<int>&)> OnAllowedMidiChannelsChanged;
 		bool EnableVstControl = false;
+		bool EnableStationLabel = false;
+		bool EnableVstRack = false;
+		// MIDI filters and cables belong to the rack currently presented at this depth.
+		bool EnableVstRackMidiRouting = false;
 		std::function<void(base::Action::Modifiers)> OnVstControl;
 	};
 
@@ -67,7 +75,10 @@ namespace gui
 
 	public:
 		static constexpr unsigned int RackStateNotificationIndex = ~0u;
+		static constexpr unsigned int MidiGridOpenedNotificationIndex = ~0u - 2u;
 		static constexpr unsigned int MidiChannelToggleBaseIndex = 100u;
+		static constexpr unsigned int MidiDeselectAllIndex = 116u;
+		static constexpr unsigned int MidiSelectAllIndex = 117u;
 		static constexpr unsigned int VstControlActionIndex = ~0u - 1u;
 		void Init() override;
 		enum class VstControlState { Empty, Closed, Open, Failed, Loading };
@@ -75,13 +86,30 @@ namespace gui
 		void SetVstControlCallback(std::function<void(base::Action::Modifiers)> callback);
 		void SetVstControlText(const std::string& text);
 		std::shared_ptr<GuiButton> GetVstControl() const;
+		std::shared_ptr<GuiStationLabel> StationLabel() const { return _stationLabel; }
+		std::shared_ptr<GuiVstRack> VstRack() const { return _vstRack; }
 
 		virtual void SetSize(utils::Size2d size) override;
+		unsigned int ConstrainHeight(unsigned int height) const noexcept;
 		virtual void SetVisible(bool visible) override;
 		void SetMasterControlsVisible(bool visible);
 		bool IsInView(utils::Size2d viewport) const;
 
 		virtual actions::ActionResult OnAction(actions::GuiAction action) override;
+
+		// Borrowed intents are consumed synchronously while the source action lives.
+		// The hierarchy owner applies mixer/topology consequences after decoding.
+		struct PanelOpened { GuiRackParams::RackState State; };
+		struct MidiGridOpened {};
+		struct InputCountChange { unsigned int Count; };
+		struct RouteChange
+		{
+			std::span<const std::pair<unsigned int, unsigned int>> Connections;
+			std::vector<unsigned int> OutputsFor(unsigned int input) const;
+		};
+		struct LevelChange { unsigned int Index; double Value; };
+		using ControlIntent = std::variant<std::monostate, PanelOpened, MidiGridOpened, InputCountChange, RouteChange, LevelChange>;
+		static ControlIntent DecodeControlAction(const actions::GuiAction& action) noexcept;
 
 		GuiRackParams::RackState GetRackState() const;
 		void SetRackState(GuiRackParams::RackState state, bool bypassUpdates);
@@ -93,6 +121,8 @@ namespace gui
 		void ClearRoutes();
 		const std::vector<std::pair<unsigned int, unsigned int>>& Routes() const { return _router->Routes(); }
 		void SetAllowedMidiChannels(const std::vector<int>& channels, bool bypassUpdates);
+		void SetAllowedMidiChannelsCallback(std::function<void(const std::vector<int>&)> callback)
+		{ _rackParams.OnAllowedMidiChannelsChanged = std::move(callback); }
 
 		std::shared_ptr<gui::GuiSlider> GetMasterSlider() const;
 		std::shared_ptr<gui::GuiSlider> GetChannelSlider(unsigned int index) const;
@@ -100,6 +130,7 @@ namespace gui
 	protected:
 		static const utils::Size2d _SliderGap;
 		static const unsigned int _ChannelTogglePaddingLeft;
+		static const unsigned int _ChannelExpanderInset;
 		static const unsigned int _RouterSpacingY;
 		static const utils::Size2d _ChannelToggleSize;
 		static const utils::Size2d _RouterToggleSize;
@@ -108,9 +139,6 @@ namespace gui
 		static constexpr unsigned int _MinimumScaleLayoutHeight = 55u;
 		static constexpr unsigned int _DragHeight = 28u;
 		static constexpr unsigned int _DragOverhang = 2u;
-		static const utils::Size2d _MidiChannelToggleSize;
-		static const utils::Size2d _MidiChannelToggleGap;
-		static const unsigned int _MidiChannelPanelPadding;
 
 		virtual void _InitReceivers() override;
 
@@ -142,6 +170,9 @@ namespace gui
 		std::shared_ptr<gui::GuiRouter> _router;
 		std::shared_ptr<base::GuiElement> _midiChannelPanel;
 		std::vector<std::shared_ptr<gui::GuiToggle>> _midiChannelToggles;
+		std::array<std::shared_ptr<GuiButton>, 2> _midiSelectionButtons;
 		GuiRackParams _rackParams;
+		std::shared_ptr<GuiStationLabel> _stationLabel;
+		std::shared_ptr<GuiVstRack> _vstRack;
 	};
 }

@@ -35,6 +35,7 @@ namespace gui
 	public:
 		static constexpr unsigned int DefaultHeight = 22u;
 		static constexpr unsigned int HeaderHeight = 22u;
+		static constexpr int HeaderBottomSpacing = 6;
 		static constexpr unsigned int HeaderMinWidth = 40u;
 		static constexpr unsigned int RowWidth = 260u;
 		static constexpr unsigned int RowHeight = 24u;
@@ -64,6 +65,18 @@ namespace gui
 			params.VerticalAlign = GuiTextVerticalAlign::Center;
 			params.ClipText = true;
 			return params;
+		}
+
+		// A flat fill for labels that do not already sit on a panel or button.
+		void UseDarkFlatBackground(float opacity = 0.72f)
+		{
+			Texture.clear();
+			TextureShader = "colour";
+			TintColor = {0.18f, 0.20f, 0.23f};
+			TextureOpacity = opacity;
+			TextInsetX = std::max(TextInsetX, 8);
+			ClipText = true;
+			Ellipsize = true;
 		}
 
 		static GuiLabelParams PanelScrollRow(const std::string& text)
@@ -115,6 +128,7 @@ namespace gui
 
 	public:
 		std::string String;
+		glm::vec3 TextColor{1.0f};
 		// Positive enables word wrapping within the assigned label width. Zero or
 		// negative keeps a dynamic, single-line label.
 		int WrapWidth = 0;
@@ -133,6 +147,7 @@ namespace gui
 	public:
 		GuiLabel(GuiLabelParams guiParams);
 		void SetString(const std::string& str);
+		void SetTextColor(glm::vec3 color) { _textColor = color; }
 		std::optional<float> MeasureText(const std::string& text) const;
 		static std::string FitText(const std::string& text, float width,
 			const std::function<float(const std::string&)>& measure);
@@ -162,6 +177,7 @@ namespace gui
 
 	private:
 		std::string _str;
+		glm::vec3 _textColor{1.0f};
 		std::string _pendingStr;
 		utils::Position2d _textInset;
 		bool _centerHorizontally;

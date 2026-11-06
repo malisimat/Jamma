@@ -20,12 +20,14 @@ namespace midi
 			std::uint8_t Pitch;
 			std::size_t On, Off;
 			bool Ambiguous;
+			std::uint8_t Flags = 0u;
 		};
 		struct Target
 		{
 			std::uint32_t Start = 0u, End = 0u;
 			std::uint8_t Pitch = 0u;
 			std::optional<std::size_t> NoteIndex;
+			std::uint32_t PointerOffset = 0u; // Chosen wrapped edge occurrence, frozen by capture.
 		};
 		std::vector<Note> Notes;
 		static MidiGridTargets Build(const MidiLoop::EditState& source)
@@ -33,87 +35,33 @@ namespace midi
 			MidiGridTargets result;
 			const auto count = source.EventCount;
 			if (count == 0u) return result;
-			std::vector<MidiEvent> displayed(count);
-			MidiQuantisation::BuildQuantisedPlaybackEvents(source.Events.data(), count,
-				source.LoopLengthSamps, source.Quantisation, source.QuantisationTransportStartSamps,
-				displayed.data(), false);
-			std::vector<std::size_t> order(count), off(count, count);
-			std::vector<bool> ambiguous(count, false);
-			std::array<std::size_t, MidiEvent::PairingSlotCount> head, tail;
-			head.fill(count); tail.fill(count);
-			std::vector<std::size_t> next(count, count);
-			std::vector<std::vector<std::size_t>> crossingOn(MidiEvent::PairingSlotCount), crossingOff(MidiEvent::PairingSlotCount);
-			for (std::size_t i = 0; i < count; ++i)
+			for (const auto& projected : MidiLoop::BuildEditorNotes(source))
 			{
-				const auto& ev = source.Events[i];
-				if (ev.sampleOffset >= source.LoopLengthSamps) continue;
-				const auto slot = ev.PairingSlot();
-				if (ev.flags & MidiEvent::TriggerSeamEndpoint)
+				const auto& note = projected.Note;
+				result.Notes.push_back({note.StartSample, note.StartSample + note.DurationSamples,
+					note.Note, projected.On, projected.Off, projected.Ambiguous, note.Flags});
+			}
+			return result;
+		}
+		Target ResolveEdge(double sample, std::uint8_t pitch, double pixelsPerSample, std::uint32_t length) const
+		{
+			Target result; double closest = 1e30;
+			if (!std::isfinite(sample)) return result;
+			for (std::size_t i = 0u; i < Notes.size(); ++i)
+			{
+				const auto& note = Notes[i];
+				if (note.Pitch != pitch || note.Ambiguous) continue;
+				for (auto occurrence = 0u; occurrence <= (note.End > length ? 1u : 0u); ++occurrence)
 				{
-					if (ev.IsNoteOn()) crossingOn[slot].push_back(i);
-					else if (ev.IsNoteOff()) crossingOff[slot].push_back(i);
-					continue;
-				}
-
-				if (ev.IsNoteOn())
-				{
-					if (head[slot] != count)
-					{
-						ambiguous[i] = true;
-						for (auto j = head[slot]; j != count; j = next[j]) ambiguous[j] = true;
-					}
-					if (head[slot] == count) head[slot] = i;
-					else next[tail[slot]] = i;
-					tail[slot] = i;
-				}
-				else if (ev.IsNoteOff() && head[slot] != count)
-				{
-					off[head[slot]] = i;
-					head[slot] = next[head[slot]];
+					const auto offset = occurrence ? length : 0u;
+					const auto at = sample + static_cast<double>(offset);
+					if (LoopGridGeometry::NoteEditHandle(at, note.Start, note.End, pixelsPerSample) == LoopGridGeometry::EditHandle::Move) continue;
+					const auto distance = std::min(std::abs(at - note.Start), std::abs(at - note.End));
+					if ((pixelsPerSample > 0.0 ? distance * pixelsPerSample > 6.0 : distance > 0.0)
+						|| distance > closest || (distance == closest && result.NoteIndex == i)) continue;
+					closest = distance; result = {note.Start, note.End, pitch, i, offset};
 				}
 			}
-			std::iota(order.begin(), order.end(), 0u);
-			for (std::size_t slot = 0u; slot < crossingOn.size(); ++slot)
-				for (std::size_t i = 0u; i < (std::min)(crossingOn[slot].size(), crossingOff[slot].size()); ++i)
-				{
-					const auto on = crossingOn[slot][i], release = crossingOff[slot][i];
-					off[on] = release;
-					const auto start = displayed[on].sampleOffset;
-					const auto duration = source.LoopLengthSamps - source.Events[on].sampleOffset + source.Events[release].sampleOffset;
-					result.Notes.push_back({start, start + duration, displayed[on].data1, on, release, false});
-				}
-			const auto priority = [](const MidiEvent& e) { return e.IsNoteOff() ? 0 : e.IsNoteOn() ? 2 : 1; };
-			std::stable_sort(order.begin(), order.end(), [&](auto a, auto b) {
-				return displayed[a].sampleOffset != displayed[b].sampleOffset
-					? displayed[a].sampleOffset < displayed[b].sampleOffset
-					: priority(displayed[a]) < priority(displayed[b]);
-			});
-			std::array<std::size_t, MidiEvent::PairingSlotCount> active;
-			active.fill(count);
-			const auto emit = [&](std::size_t on, std::uint32_t end, std::size_t displayedOff) {
-				const auto& ev = displayed[on];
-				if (end > ev.sampleOffset)
-					result.Notes.push_back({ev.sampleOffset, end, ev.data1, on, off[on],
-						ambiguous[on] || off[on] != displayedOff});
-			};
-			for (auto i : order)
-			{
-				const auto& ev = displayed[i];
-				if (ev.sampleOffset >= source.LoopLengthSamps) continue;
-				if (source.Events[i].flags & MidiEvent::TriggerSeamEndpoint) continue;
-				auto& on = active[ev.PairingSlot()];
-				if (ev.IsNoteOn())
-				{
-					if (on != count) emit(on, ev.sampleOffset, count);
-					on = i;
-				}
-				else if (ev.IsNoteOff() && on != count)
-				{
-					emit(on, ev.sampleOffset, i);
-					on = count;
-				}
-			}
-			for (auto on : active) if (on != count) emit(on, source.LoopLengthSamps, count);
 			return result;
 		}
 		Target Resolve(std::uint32_t sample, std::uint8_t pitch,

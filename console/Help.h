@@ -41,7 +41,7 @@ MAIN WINDOW KEYS
     Hover to disambiguate multiple selected loops; the editor button also opens it.
   Space                     Tap tempo on press and hold timing grids until release.
     Works with Ctrl and in the editor; typing in a text field keeps Space local.
-  Ctrl+Shift+R              Arm reclock; remote timing requires Stay local first.
+  Reclock (Timing settings) Arm reclock; remote timing requires Stay local first.
   Ctrl+Shift+V              Insert a VST on the hovered station/take/loop at current depth.
   Ctrl+Shift+E              Open the first VST editor for that hovered target.
   Hold ` or numeric keypad 0  Reveal routing cables (Ctrl+` toggles console).

@@ -49,6 +49,11 @@ namespace ninjam
 		Expired
 	};
 
+	enum class NinjamLocalTempoState : std::uint8_t
+	{
+		Following, AwaitingMaster, AwaitingServer, StayLocal, AwaitingFreshSync
+	};
+
 	struct NinjamTempoRequest
 	{
 		float Bpm = 0.0f;
@@ -71,6 +76,8 @@ namespace ninjam
 		engine::RemoteTransportGeometry Geometry;
 		// Origin on the musical transport ruler, not the device sample counter.
 		std::int64_t OriginSamps = 0;
+		// Acknowledging a local reclock/tap keeps the master just recorded.
+		bool PreserveRecordedMaster = false;
 	};
 
 	struct NinjamTimingUpdate
@@ -199,6 +206,20 @@ namespace ninjam
 		NinjamTimingUpdate Connect(const NinjamTempoJoinOptions& options,
 			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
 		NinjamTimingUpdate Disconnect() noexcept;
+		NinjamTimingUpdate BeginLocalTiming() noexcept;
+        void BindLocalTimingVersion(std::uint64_t version) noexcept;
+        NinjamTimingUpdate RollbackLocalTiming(std::uint64_t version,const std::optional<engine::QuantisationTiming>& localTiming,
+            bool hasLocalContent,utils::Timer& clock,std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());
+		NinjamTimingUpdate PushActivatedLocalTempo(const engine::QuantisationTiming& timing,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+		NinjamTimingUpdate RequestSyncToServer() noexcept;
+		NinjamTimingUpdate SetLocalPlaybackRate(double rate) noexcept;
+        NinjamTimingUpdate RejectUnsupportedFollow(std::uint64_t version, std::uint64_t epoch) noexcept;
+		NinjamTimingUpdate RequestServerTempo(const engine::QuantisationTiming& timing,
+			std::uint64_t rateRevision,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+		NinjamLocalTempoState LocalTempoState() const noexcept { return _localTempoState; }
+		NinjamLocalFollowPolicy FollowPolicy() const noexcept { return _activeFollowPolicy; }
 		NinjamTimingUpdate ObserveSessionStatus(const NinjamSessionTimingStatus& status,
 			const NinjamTempoJoinOptions& options,
 			const std::optional<engine::QuantisationTiming>& localTiming) noexcept;
@@ -229,6 +250,7 @@ namespace ninjam
 			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
 		TempoRequestState RequestState() const noexcept { return _requestState; }
 		bool IsConnected() const noexcept { return _tracker.IsConnected(); }
+		double LocalPlaybackRate() const noexcept { return _playbackRate; }
 		std::uint64_t SessionEpoch() const noexcept { return _sessionEpoch; }
 		void SetDiagnosticsCaptureEnabled(bool enabled) noexcept;
 		NinjamTimingDiagnostics ObserveAppliedTimingReceipt(
@@ -242,13 +264,16 @@ namespace ninjam
 			float remoteBpm) noexcept;
 
 	private:
+		double _playbackRate = 1.0;
+		std::uint64_t _playbackRateRevision = 0u;
+		void _CancelTempoRequest() noexcept;
 		void _SetPendingTempoChange(const NinjamTempoChange& change);
 		static bool _MatchesRequest(const NinjamTiming& timing,
 			const engine::QuantisationTiming& request) noexcept;
 		static std::optional<NinjamTempoChange> _MakeProposal(const NinjamTiming& timing) noexcept;
 		NinjamTimingUpdate _AcceptTempoChange(const NinjamTempoChange& change,
 			const std::optional<engine::QuantisationTiming>& localTiming,
-			utils::Timer& clock, std::chrono::steady_clock::time_point now);
+			utils::Timer& clock, std::chrono::steady_clock::time_point now, bool preserveRecordedMaster = false);
 		NinjamTimingUpdate _PublishRemoteDesired(const NinjamTempoChange& change,
 			NinjamLocalFollowPolicy policy, NinjamDesiredTimingIntent intent,
 			bool remoteGridChanged) noexcept;
@@ -268,6 +293,27 @@ namespace ninjam
 			long long valueSamps = 0,
 			std::uint64_t limitSamps = 0u,
 			std::uint64_t appliedSessionEpoch = 0u) noexcept;
+        struct PriorLocalTimingIntent
+        {
+            std::uint64_t Version=0u,Session=0u,Follow=0u;
+            NinjamLocalTempoState Mode=NinjamLocalTempoState::Following;
+            unsigned long SourceMaster=0ul,SentWrap=0ul;
+            std::optional<engine::QuantisationTiming> Requested;
+            std::optional<std::chrono::steady_clock::time_point> Started,FirstSuccess;
+            TempoRequestState RequestState=TempoRequestState::Idle;
+            bool Confirmed=false;
+            unsigned int Retries=0u;
+            std::uint64_t SentObservation=0u;
+            std::optional<NinjamTempoChange> Pending,Ignored,Observed;
+        };
+        std::optional<PriorLocalTimingIntent> _priorLocalTiming;
+        bool _restoringFollowing=false;
+        std::optional<NinjamTempoChange> _priorFollowingObservation;
+		NinjamLocalTempoState _localTempoState = NinjamLocalTempoState::Following;
+		std::optional<std::uint64_t> _followObservationFence;
+		std::optional<std::chrono::steady_clock::time_point> _localTempoRequestStartedAt;
+		std::uint64_t _followRevision = 0u;
+		unsigned long _sourceMasterIntervalLengthSamps = 0ul;
 		NinjamTimingTracker _tracker;
 		NinjamTempoJoinOptions _options{};
 		// Serialized by the service mutex; never reset revisions across reconnects.

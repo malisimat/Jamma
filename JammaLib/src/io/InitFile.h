@@ -25,6 +25,8 @@ namespace io
 
 	struct InitFile
 	{
+		// Empty paths select independent startup generation, not a malformed config.
+		static std::optional<InitFile> Read(const std::wstring& path);
 		static std::optional<InitFile> FromStream(std::stringstream ss);
 		static bool ToStream(InitFile ini, std::stringstream& ss);
 		static const std::string DefaultJson(std::string roamingPath);

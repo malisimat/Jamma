@@ -49,7 +49,7 @@ void Image::Draw(DrawContext& ctx)
 	auto texture = _texture.lock();
 	auto shader = _shader.lock();
 
-	if (!texture || !shader)
+	if ((!texture && _imageParams.Shader != "colour") || !shader)
 		return;
 	if (GetSize().Width == 0u || GetSize().Height == 0u) return;
 	auto opacity = ctx.WithOpacity(_imageParams.Opacity);
@@ -74,8 +74,11 @@ void Image::Draw(DrawContext& ctx)
 
 	glBindVertexArray(_vertexArray);
 
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, texture->GetId());
+	if (texture)
+	{
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, texture->GetId());
+	}
 	if (tintMask)
 	{
 		glActiveTexture(GL_TEXTURE1);
@@ -85,7 +88,7 @@ void Image::Draw(DrawContext& ctx)
 
 	glDrawArrays(GL_TRIANGLES, 0, _vertexCount);
 
-	glBindTexture(GL_TEXTURE_2D, 0);
+	if (texture) glBindTexture(GL_TEXTURE_2D, 0);
 	if (tintMask)
 	{
 		glActiveTexture(GL_TEXTURE1);
@@ -136,6 +139,12 @@ void Image::_ReleaseResources()
 bool Image::_InitTexture(ResourceLib& resourceLib)
 {
 	_tintMask.reset();
+	if (_imageParams.Shader == "colour" && _drawParams.Texture.empty())
+	{
+		_texture.reset();
+		_isNinePatch = false;
+		return true;
+	}
 	auto textureOpt = resourceLib.GetResource(_drawParams.Texture);
 	
 	if (!textureOpt.has_value())

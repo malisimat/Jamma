@@ -72,6 +72,20 @@ void HierarchySelection::Clear(const LockedStations& view)
 	}
 }
 
+std::optional<GroupTargetId> HierarchySelection::MuteTarget(const LockedStations& view, const std::vector<unsigned char>& path)
+{
+    const auto target = Resolve(view,path);
+    if (!target) return std::nullopt;
+    if (const auto station = std::dynamic_pointer_cast<Station>(target)) return GroupTargetId{GroupTargetKind::Station,station->Id(),{}, {}};
+    auto take = std::dynamic_pointer_cast<LoopTake>(target);
+    const auto loop = std::dynamic_pointer_cast<Loop>(target);
+    if (!take) take = std::dynamic_pointer_cast<LoopTake>(target->Parent());
+    if (!take) return std::nullopt;
+    const auto station = std::dynamic_pointer_cast<Station>(take->Parent());
+    if (!station) return std::nullopt;
+    return GroupTargetId{loop ? GroupTargetKind::AudioLoop : GroupTargetKind::Take,station->Id(),take->Id(),loop ? loop->Id() : std::string{}};
+}
+
 void HierarchySelection::SetMuted(const LockedStations& view, const std::vector<unsigned char>& path, bool muted)
 {
 	// Caller holds the scene lock across target resolution and membership access.
@@ -83,7 +97,7 @@ void HierarchySelection::SetMuted(const LockedStations& view, const std::vector<
 	};
 	if (auto station = std::dynamic_pointer_cast<Station>(target))
 	{
-		for (const auto& take : station->GetLoopTakes()) setMuted(take);
+		setMuted(station); // Station retains intent and preserves explicit child fan-out.
 	}
 	else if (auto tweakable = std::dynamic_pointer_cast<Tweakable>(target))
 		setMuted(tweakable);
@@ -131,4 +145,138 @@ void HierarchySelection::SelectAllLocal(const LockedStations& view, base::Select
 				}
 		}
 	}
+}
+
+void HierarchySelection::ApplyAppearance(const LockedStations& view, const Appearance& appearance)
+{
+	// Presentation follows committed changes while the caller still holds the
+	// hierarchy lock; no render observer sees intermediate click/paint shading.
+	if (appearance.ClearPicking)
+		for (const auto& station : view.Stations) station->SetPicking3d(false);
+	if (appearance.HighlightHover)
+		if (auto hovered = Resolve(view, appearance.HoverPath)) hovered->SetPicking3d(true);
+	if (appearance.HighlightMidiSiblings)
+	{
+		if (auto hovered = Resolve(view, appearance.HoverPath))
+		{
+			if (auto take = std::dynamic_pointer_cast<LoopTake>(hovered->Parent()))
+			{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (midiLoop->Model() == hovered)
+					{
+						for (const auto& sibling : take->GetMidiLoops())
+							if (auto model = sibling->Model()) model->SetPicking3d(true);
+						break;
+					}
+			}
+		}
+	}
+	// A click has a short-lived pressed appearance. Keep it separate from
+	// persistent selection and hover, and clear it when the gesture becomes paint.
+	for (const auto& station : view.Stations)
+	{
+		station->SetClickPressed(false);
+		for (const auto& take : station->GetLoopTakes())
+		{
+			for (const auto& loop : take->GetLoops())
+				if (auto model = loop->Model()) model->SetClickPressed(false);
+			for (const auto& midiLoop : take->GetMidiLoops())
+				if (auto model = midiLoop->Model()) model->SetClickPressed(false);
+		}
+	}
+	if (appearance.ClickPressed)
+	{
+		if (auto pressed = Resolve(view, appearance.HoverPath))
+		{
+			const bool mutePressed = appearance.MutePressed;
+			const auto pressTakeLoops = [mutePressed](const std::shared_ptr<LoopTake>& take) {
+				for (const auto& loop : take->GetLoops())
+					if (auto model = loop->Model()) model->SetClickPressed(true, mutePressed);
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true, mutePressed);
+			};
+			if (auto station = std::dynamic_pointer_cast<Station>(pressed))
+			{
+				station->SetClickPressed(true, mutePressed);
+				for (const auto& take : station->GetLoopTakes())
+					pressTakeLoops(take);
+			}
+			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed))
+				pressTakeLoops(take);
+			else if (auto loop = std::dynamic_pointer_cast<Loop>(pressed))
+			{
+				if (auto model = loop->Model()) model->SetClickPressed(true, mutePressed);
+			}
+			else if (auto take = std::dynamic_pointer_cast<LoopTake>(pressed->Parent()))
+			{
+				for (const auto& midiLoop : take->GetMidiLoops())
+					if (auto model = midiLoop->Model()) model->SetClickPressed(true, mutePressed);
+			}
+		}
+	}
+}
+
+bool HierarchySelection::HasSelection(const LockedStations& view)
+{
+	for (const auto& station : view.Stations)
+	{
+		if (!station)
+			continue;
+
+		if (station->IsSelected())
+			return true;
+
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take)
+				continue;
+
+			if (take->IsSelected())
+				return true;
+
+			for (const auto& loop : take->GetLoops())
+			{
+				if (loop && loop->IsSelected())
+					return true;
+			}
+			for (const auto& loop : take->GetMidiLoops())
+			{
+				if (loop && loop->Model() && loop->Model()->IsSelected())
+					return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+HierarchySelection::Outcome HierarchySelection::ApplyLocked(const LockedStations& view, const EditBatch& batch)
+{
+	Outcome outcome{ batch.ClearSelection };
+	std::array<bool, 2> selectedBeforeClear{};
+	if (batch.ClearSelection)
+	{
+		for (std::size_t index = 0u; index < batch.ChangeCount; ++index)
+			if (const auto target = Resolve(view, batch.Changes[index].Path)) selectedBeforeClear[index] = target->IsSelected();
+		Clear(view);
+	}
+	for (std::size_t index = 0u; index < batch.ChangeCount; ++index)
+	{
+		const auto& change = batch.Changes[index];
+		if (change.Operation == Edit::Select || change.Operation == Edit::Deselect)
+		{
+			if (auto target = Resolve(view, change.Path))
+			{
+				outcome.CollapseRacks = true;
+				const bool wasSelected = target->IsSelected();
+				SetSelected(view, target, batch.Depth, change.Operation == Edit::Select);
+				// Exclusive clear/reselect and repeated paint do not create new recency.
+				if (!wasSelected && !selectedBeforeClear[index] && target->IsSelected())
+					outcome.NewlySelected[outcome.NewlySelectedCount++] = target;
+			}
+		}
+		else SetMuted(view, change.Path, change.Operation == Edit::Mute);
+	}
+	ApplyAppearance(view, batch.Presentation);
+	return outcome;
 }

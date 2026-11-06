@@ -102,6 +102,10 @@ TEST(Json, ParsesString) {
 	auto res = std::get<std::string>(kv);
 
 	ASSERT_EQ("hello", res);
+
+	auto embedded = JsonMock::FromStream(std::stringstream("{\"string\":\"bad\\u0000id\"}"));
+	ASSERT_TRUE(embedded.has_value());
+	EXPECT_EQ(std::string("bad\0id", 6u), std::get<std::string>(embedded->KeyValues["string"]));
 }
 
 TEST(Json, ParsesStringInt) {

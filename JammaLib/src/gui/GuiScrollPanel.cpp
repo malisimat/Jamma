@@ -48,6 +48,14 @@ GuiScrollPanel::GuiScrollPanel(GuiScrollPanelParams params) :
 
 void GuiScrollPanel::SetContent(std::shared_ptr<base::GuiElement> content)
 {
+	if (_contentHost)
+	{
+		_contentHost->ClearPointerState();
+		// Pages can be retained and reattached later. Retire only the wrapper.
+		_contentHost->RemoveChild(_content);
+		_contentHost->ReleaseResources();
+		_contentHost->DetachGuiOwnershipForRetirement();
+	}
 	_content = std::move(content);
 	_contentHost.reset();
 	if (_content)
@@ -158,6 +166,21 @@ void GuiScrollPanel::SetScrollOffset(int offset)
 
 	const int maxOff = MaxScrollOffset();
 	_scrollBar->SetValue(maxOff > 0 ? (double)_scrollOffset / (double)maxOff : 0.0);
+}
+
+void GuiScrollPanel::ScrollToVisible(Rect2d bounds)
+{
+	if (!_content) return;
+	const int viewport = static_cast<int>(_orientation == GuiScrollOrientation::Horizontal ? ViewportWidth() : ViewportHeight());
+	if (viewport <= 0) return;
+	const int content = static_cast<int>(_orientation == GuiScrollOrientation::Horizontal ? _ContentWidth() : _ContentHeight());
+	const int low = _orientation == GuiScrollOrientation::Horizontal ? bounds.Left : bounds.Bottom;
+	const int high = _orientation == GuiScrollOrientation::Horizontal ? bounds.Right : bounds.Top;
+	const int visibleLow = _orientation == GuiScrollOrientation::Horizontal ? _scrollOffset : content - viewport - _scrollOffset;
+	const int visibleHigh = visibleLow + viewport;
+	if (low >= visibleLow && high <= visibleHigh) return;
+	const int desiredLow = low < visibleLow ? low : high - viewport;
+	SetScrollOffset(_orientation == GuiScrollOrientation::Horizontal ? desiredLow : content - viewport - desiredLow);
 }
 
 void GuiScrollPanel::SetScrollFraction(double fraction)

@@ -1,4 +1,5 @@
 #include "PerformanceGroupPersistence.h"
+#include "NativeMidiSidecar.h"
 #include <set>
 #include "../utils/StringUtils.h"
 
@@ -15,7 +16,16 @@ bool PerformanceGroupPersistence::ValidateIdentities(const JamFile& jam)
     for (const auto& station : jam.Stations)
     {
         if (!add(stations, station.Id)) return false;
-        for (const auto& plugin : station.VstChain) if (!add(plugins, plugin.Id)) return false;
+        // Invalid/over-limit Station racks are preserved as inactive recovery
+        // data. Validate hierarchy identity normally, but let Station perform
+        // bounded rack admission rather than rejecting or erasing its raw IDs.
+        bool inactiveRack = station.VstChain.size() > 32u;
+        std::set<std::string> rackIds;
+        for (const auto& plugin : station.VstChain)
+            if (!plugin.Id.empty() && (!NativeMidiSidecar::ValidatePluginIdentity(plugin.Id) || !rackIds.insert(plugin.Id).second)) inactiveRack = true;
+        if (!inactiveRack)
+            for (const auto& plugin : station.VstChain)
+                if (!plugin.Id.empty() && !plugins.insert(plugin.Id).second) return false;
         for (const auto& take : station.LoopTakes)
         {
             if (!add(takes, take.Id)) return false;

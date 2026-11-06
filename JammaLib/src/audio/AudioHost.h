@@ -1,14 +1,17 @@
 #pragma once
+#include "PlaybackRate.h"
 
 // Audio-callback boundary: applies complete published state, owns Timer/map updates,
 // and fans policy-neutral operations to entities that retain their own cursors.
 
 #include <array>
+#include <limits>
 #include <memory>
 #include <vector>
 #include <mutex>
 #include <atomic>
 #include <functional>
+#include <chrono>
 #include "AudioDevice.h"
 #include "ChannelMixer.h"
 #include "NinjamMetronome.h"
@@ -139,9 +142,17 @@ namespace audio
 		}
 		
 		AudioDevice* GetDevice() const { return _audioDevice.get(); }
+		bool HasMatchingRunningStream(const io::UserConfig::AudioSettings& request);
+		bool HasOpenStream(); // Serialized control callers; includes paused streams.
+		// Window lifecycle owner: notification observation only, no hardware polling.
+		bool ObserveBackendReset(bool deviceChange = false,
+			std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+		bool SuspendResetStream(std::string& error);
 		
 		std::shared_ptr<ChannelMixer> GetChannelMixer() { return _channelMixer; }
 		void SetNinjamMetronomeEnabled(bool enabled) noexcept { _ninjamMetronomeEnabled.store(enabled, std::memory_order_release); }
+		void SetMetronomeLevel(float level) noexcept;
+		float MetronomeLevel() const noexcept { return _metronomeLevel.load(std::memory_order_acquire); }
 		bool NinjamMetronomeEnabled() const noexcept { return _ninjamMetronomeEnabled.load(std::memory_order_acquire); }
 		std::optional<ninjam::NinjamTiming> LatestNinjamTiming() const noexcept
 		{
@@ -150,6 +161,24 @@ namespace audio
 		void PublishDesiredTiming(const ninjam::NinjamDesiredTransportState& desired);
 		std::optional<ninjam::NinjamDesiredTimingReceipt> LastAppliedDesiredTiming() const noexcept;
 		void PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept;
+        struct PlaybackRateReceipt
+        {
+            double Target = 1.0, Applied = 1.0;
+            std::uint64_t Revision = 0u;
+            bool Following = false;
+            bool UnsupportedRemoteRate = false;
+            bool Aligning = false;
+            std::uint64_t AuthorityVersion = 0u, SessionEpoch = 0u;
+            std::uint32_t MasterLength = 0u, Grain = 0u, FullBpi = 0u;
+            double Tempo = 0.0;
+            std::uint64_t MasterRevision = 0u;
+            bool ControlPending = false;
+            bool Settled() const noexcept { return !ControlPending && Target == Applied; }
+        };
+        std::optional<PlaybackRateReceipt> ObservePlaybackRate() const noexcept;
+        const PlaybackRateHistory& RateHistory() const noexcept { return _playbackRateHistory; }
+        void InitialisePlaybackRate(double rate) noexcept; // Callback quiescent.
+
 		struct LocalMasterTimingReceipt
 		{
 			std::uint64_t Version = 0u;
@@ -157,13 +186,13 @@ namespace audio
 			std::uint32_t NewPhaseSamps = 0u;
 			std::uint32_t NewMasterLengthSamps = 0u;
 		};
-		void CancelLocalMasterTiming(std::uint64_t version) noexcept
-			{ _localMasterCancelledVersion.store(version, std::memory_order_seq_cst); }
+		bool CancelLocalMasterTiming(std::uint64_t version) noexcept;
 		void CommitLocalMasterTiming(std::uint64_t version) noexcept
-			{ _localMasterCommitVersion.store(version, std::memory_order_seq_cst); }
-		std::uint64_t PublishLocalMasterTiming(unsigned int seedSamps,
+			{ if (_localMasterActivationGate.load(std::memory_order_seq_cst)==(version << 2u)) _localMasterCommitVersion.store(version, std::memory_order_seq_cst); }
+		bool CanPublishLocalMasterTiming() const noexcept { return _localMasterTimingMailbox.CanPublish(); }
+        std::uint64_t PublishLocalMasterTiming(unsigned int seedSamps,
 			std::uint32_t masterLengthSamps, utils::Timer::QuantisationType type,
-			const engine::LoopTake* targetTake, const engine::Loop* targetLoop) noexcept;
+			const engine::LoopTake* targetTake, const engine::Loop* targetLoop, unsigned int beatsPerInterval = 0u) noexcept;
 		std::optional<LocalMasterTimingReceipt> LastPreparedLocalMasterTiming() const noexcept;
 		std::uint64_t LocalMasterPreparationRetryVersion() const noexcept
 			{ return _localMasterPreparationRetryVersion.load(std::memory_order_seq_cst); }
@@ -184,6 +213,8 @@ namespace audio
 
 	private:
 		friend class NinjamAudioBoundaryTestAccess;
+		void AdoptLocalSourceMasterAtAudioBoundary(
+			const std::vector<std::shared_ptr<engine::Station>>& stations, unsigned long length) noexcept;
 		bool _Init(std::shared_ptr<ninjam::NinjamController> controller, TickCallback tickCallback,
 			std::shared_ptr<utils::Timer> clock, bool generatedRig, const AsioInventory* inventory, bool exactSelection);
 		friend class LocalMasterPromotionSafetyTestAccess;
@@ -224,11 +255,13 @@ namespace audio
 			utils::Timer::QuantisationType Type = utils::Timer::QUANTISE_OFF;
 			const engine::LoopTake* TargetTake = nullptr;
 			const engine::Loop* TargetLoop = nullptr;
+            unsigned int BeatsPerInterval = 0u;
 		};
 		class LocalMasterTimingMailbox
 		{
 		public:
-			std::uint64_t Publish(const LocalMasterTimingRequest& request) noexcept;
+			bool CanPublish() const noexcept { return _sequence.load(std::memory_order_seq_cst)<=(std::numeric_limits<std::uint64_t>::max() >> 2u)-2u; }
+            std::uint64_t Publish(const LocalMasterTimingRequest& request) noexcept;
 			std::optional<LocalMasterTimingRequest> ConsumeLatest() noexcept;
 			void Acknowledge(std::uint64_t version) noexcept { _consumedSequence = version; }
 		private:
@@ -238,8 +271,10 @@ namespace audio
 			std::atomic<utils::Timer::QuantisationType> _type{ utils::Timer::QUANTISE_OFF };
 			std::atomic<const engine::LoopTake*> _targetTake{ nullptr };
 			std::atomic<const engine::Loop*> _targetLoop{ nullptr };
+            std::atomic<unsigned int> _beatsPerInterval{0u};
 			std::uint64_t _consumedSequence = 0u; // callback owner
 		};
+        bool TryClaimLocalMasterActivation(std::uint64_t version) noexcept;
 		void ApplyLocalMasterTimingAtAudioBoundary(
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
 			utils::Timer* timingClock) noexcept;
@@ -251,6 +286,7 @@ namespace audio
 			utils::Timer* timingClock) noexcept;
 		void ApplyPendingRigSnapshotAtAudioBoundary() noexcept;
 		void ApplyPendingGroupMuteAtAudioBoundary() noexcept;
+		void ApplyBorrowedGroupMuteAtAudioBoundary(const engine::GroupMuteApplication* application) noexcept;
 		void PublishRigTriggerTransitionAtAudioBoundary() noexcept;
 		void ApplyLocalTransportOffsetAtAudioBoundary(
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
@@ -289,6 +325,11 @@ namespace audio
 		AsioOpenReport _asioOpenReport;
 		AsioInventory _asioInventory; // lifecycle owner writes; UI reads under control exclusion
 		bool _backendLifetimeUncertain = false;
+		bool _backendResetObserved = false; // Serialized lifecycle owner.
+		friend class AsioStreamTestAccess;
+		std::chrono::steady_clock::time_point _deviceChangeUntil{}, _lastDeviceHeartbeatAt{};
+		std::chrono::milliseconds _deviceStallThreshold{500};
+		std::uint64_t _lastDeviceHeartbeat = 0u;
 		// Lifecycle writes; job admission recovery reads. Failure stays closed until explicit recovery.
 		std::atomic<bool> _callbackRecoveryBlocked{false}; // lifecycle owner; blocks resume/replacement until stop is confirmed
 		// A driver that cannot confirm stop retains its callback userdata. The context
@@ -307,6 +348,9 @@ namespace audio
 		std::unique_ptr<CallbackContext> _callbackContext;
 		bool _lastInitReplacedStream = false;
 		std::shared_ptr<ChannelMixer> _channelMixer;
+		void MixMetronome(float* output, unsigned int channels, unsigned int frames,
+			unsigned int sampleRate, const ninjam::NinjamTiming& remote, const utils::Timer* clock, const PlaybackRateBlock& rateBlock) noexcept;
+		bool _metronomeWasRemote = false;
 		NinjamMetronome _ninjamMetronome;
 		ninjam::NinjamMetronomeTimingState _ninjamMetronomeTimingState;
 		ninjam::NinjamTimingObservationMailbox _ninjamTimingMailbox;
@@ -327,12 +371,49 @@ namespace audio
 		std::atomic<unsigned long> _lastAppliedSourceLengthSamps{ 0ul };
 		std::atomic<unsigned long> _lastAppliedRemoteLengthSamps{ 0ul };
 		std::atomic<std::int64_t> _lastAppliedSourceCoordinateSamps{ 0 };
+        std::atomic<unsigned int> _lastAppliedGridBpi{0u};
+        std::atomic<float> _lastAppliedGridTempo{0.0f};
+        std::atomic<std::int64_t> _lastAppliedGridOrigin{0};
+        std::atomic<bool> _lastAppliedPreserveMaster{false};
+    public:
+        struct LocalMasterReference
+        {
+            unsigned long Length = 0ul;
+            unsigned int Grain = 0u, Bpi = 0u;
+            utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
+            double RecordingRate = 1.0;
+        };
+        // Exporter holds the existing callback drain and session writer exclusion.
+        std::optional<LocalMasterReference> LocalMasterReferenceForSaveAfterReadersStopped() const noexcept;
+    private:
+        LocalMasterReference _localMasterReference;
+        PlaybackRate _playbackRate;
+        PlaybackRateHistory _playbackRateHistory{1u};
+        std::uint64_t _rateHistoryWindow = 0u;
+        std::atomic<std::uint64_t> _rateReceiptSequence{0u}, _rateReceiptRevision{0u};
+        std::atomic<double> _rateReceiptTarget{1.0}, _rateReceiptApplied{1.0};
+        std::atomic<bool> _rateReceiptFollowing{false};
+        std::atomic<bool> _rateReceiptUnsupported{false}, _rateReceiptAligning{false};
+        std::atomic<std::uint64_t> _rateReceiptAuthorityVersion{0u}, _rateReceiptEpoch{0u};
+        std::atomic<bool> _rateReceiptPending{false};
+        bool _playbackControlPending = false;
+        bool _playbackAuthoritySuspended = false;
+        double _pendingPlaybackTarget = 1.0;
+        unsigned int _rateAdmissionFrames = 0u;
+        bool _unsupportedRemoteRate = false, _playbackAligning = false; // Audio-owned.
+        std::atomic<std::uint32_t> _rateReceiptMasterLength{0u}, _rateReceiptGrain{0u}, _rateReceiptFullBpi{0u};
+        std::atomic<double> _rateReceiptTempo{0.0};
+        std::atomic<std::uint64_t> _rateReceiptMasterRevision{0u};
+        void PublishPlaybackRateReceipt(const utils::Timer* clock = nullptr, unsigned sampleRate = 0u) noexcept;
 		LocalTransportOffsetLoopFracMailbox _localTransportOffsetLoopFracMailbox;
 		LocalMasterTimingMailbox _localMasterTimingMailbox;
 		LocalMasterTimingRequest _preparedLocalMasterTiming{}; // Callback owner.
 		std::uint64_t _preparedLocalMasterSceneSample = 0u;
 		std::uint32_t _preparedLocalMasterPhase = 0u;
-		std::atomic<std::uint64_t> _localMasterCommitVersion{ 0u };
+		// Low bits: preparing=0, activation claimed=1, activated=2, cancelled=3.
+        static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+        std::atomic<std::uint64_t> _localMasterActivationGate{0u};
+        std::atomic<std::uint64_t> _localMasterCommitVersion{ 0u };
 		std::atomic<std::uint64_t> _localMasterCancelledVersion{ 0u };
 		std::atomic<std::uint64_t> _localMasterActivatedVersion{ 0u };
 		std::atomic<std::uint64_t> _localMasterPreparationRetryVersion{ 0u };
@@ -348,7 +429,10 @@ namespace audio
 		double _localTransportOffsetLoopFrac = 0.0;
 		unsigned long _localTransportOffsetMasterLength = 0ul;
 		long long _localTransportOffsetTargetSamps = 0;
-		std::atomic_bool _ninjamMetronomeEnabled{ true };
+        std::uint64_t _localTransportOffsetTimingVersion = 0u;
+        double _localTransportOffsetReferenceRate = 1.0;
+		std::atomic_bool _ninjamMetronomeEnabled{ false };
+		std::atomic<float> _metronomeLevel{ 1.0f };
 
 		std::atomic<std::uint64_t> _audioSampleCounter{ 0 };
 		// Replaced only with callback admission closed, then read by callback.
@@ -399,6 +483,8 @@ namespace audio
 		ninjam::NinjamLocalFollowPolicy _activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 		ninjam::NinjamDesiredTransportState _appliedNinjamTiming{};
 		ninjam::SyncPhaseMap _syncPhaseMap;
+		// Recording geometry survives loss/suspension of remote authority. Audio-owned.
+		unsigned long _retainedNinjamSourceLengthSamps = 0ul;
 		bool _captureMappedSourceAnchorsAfterOffset = false;
 		bool _mappedSourceHandledAtCommandBoundary = false;
 		TickCallback _tickCallback;

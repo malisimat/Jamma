@@ -2,6 +2,8 @@
 // per-entity phase remains below AudioHost in the engine hierarchy.
 #include "Timer.h"
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 using namespace utils;
 
@@ -82,6 +84,11 @@ void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 {
 	(void)loopCountIncrement;
 	_sceneSamplePos.fetch_add(sampsIncrement, std::memory_order_relaxed);
+	const auto progress = _blockMusicalAdvance >= 0.0 ? _blockMusicalAdvance : static_cast<double>(sampsIncrement);
+	_blockMusicalAdvance = -1.0;
+	const auto fractionalProgress = _musicalFraction.load(std::memory_order_relaxed) + progress;
+	const auto wholeProgress = static_cast<std::uint64_t>(fractionalProgress);
+	_musicalFraction = fractionalProgress - static_cast<double>(wholeProgress);
 
 	const auto loopLength = _seedSourceLengthSamps.load(std::memory_order_acquire);
 	if (0ul == loopLength)
@@ -89,7 +96,7 @@ void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 
 	const auto sampleOffset = static_cast<std::uint64_t>(_sampOffset.load(std::memory_order_relaxed));
 	const auto wideLoopLength = static_cast<std::uint64_t>(loopLength);
-	const auto totalSamps = sampleOffset + static_cast<std::uint64_t>(sampsIncrement);
+	const auto totalSamps = sampleOffset + wholeProgress;
 	const auto wraps = totalSamps / wideLoopLength;
 	const auto next = totalSamps % wideLoopLength;
 
@@ -99,8 +106,34 @@ void Timer::Tick(unsigned int sampsIncrement, unsigned int loopCountIncrement)
 	_sampOffset.store(static_cast<unsigned int>(next), std::memory_order_relaxed);
 }
 
+void Timer::SetBlockMusicalAdvance(double sourceSamples, double appliedRate) noexcept
+{
+	if (std::isfinite(sourceSamples) && sourceSamples >= 0.0
+		&& sourceSamples <= static_cast<double>((std::numeric_limits<unsigned int>::max)()))
+		_blockMusicalAdvance = sourceSamples;
+	if (std::isfinite(appliedRate) && appliedRate > 0.0)
+		_appliedPlaybackRate.store(appliedRate, std::memory_order_relaxed);
+}
+
+void Timer::SetMasterRecordingPlaybackRate(double rate) noexcept
+{
+	_masterRecordingPlaybackRate.store(std::isfinite(rate) && rate >= 0.5 && rate <= 2.0 ? rate : 1.0,
+		std::memory_order_relaxed);
+}
+
+void Timer::SetMasterBeatsPerInterval(unsigned int beats) noexcept
+{
+    _masterBeatsExplicit.store(beats != 0u, std::memory_order_relaxed);
+    _masterBeatsPerInterval.store(beats <= static_cast<unsigned int>((std::numeric_limits<std::int32_t>::max)()) ? beats : 0u,
+        std::memory_order_relaxed);
+}
+
 void Timer::Clear()
 {
+	_masterBeatsExplicit.store(false, std::memory_order_relaxed);
+	_masterBeatsPerInterval.store(0u, std::memory_order_relaxed);
+	_musicalFraction = 0.0;
+	_blockMusicalAdvance = -1.0;
 	CancelRecordingSeedOnOwner(_recordingSeedPublishedVersion.load(std::memory_order_acquire));
 	_quantiseSamps.store(0u, std::memory_order_release);
 	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
@@ -116,6 +149,9 @@ bool Timer::IsQuantisable() const
 void Timer::SetQuantisation(unsigned int quantiseSamps,
 	QuantisationType quantisation)
 {
+	_masterBeatsExplicit.store(false, std::memory_order_relaxed);
+	_masterBeatsPerInterval.store(0u, std::memory_order_relaxed);
+	_musicalFraction.store(0.0, std::memory_order_relaxed);
 	_quantiseSamps.store(quantiseSamps, std::memory_order_release);
 	_seedSourceLengthSamps.store(0ul, std::memory_order_release);
 	_sampOffset.store(0u, std::memory_order_release);
@@ -125,6 +161,10 @@ void Timer::SetQuantisation(unsigned int quantiseSamps,
 
 void Timer::SetSeedSourceLength(unsigned long loopLengthSamps)
 {
+    const auto grain = QuantiseSamps();
+    SetMasterBeatsPerInterval(grain && loopLengthSamps
+        ? static_cast<unsigned int>((static_cast<std::uint64_t>(loopLengthSamps) + grain / 2u) / grain) : 0u);
+    _masterBeatsExplicit.store(false, std::memory_order_relaxed);
 	_seedSourceLengthSamps.store(loopLengthSamps, std::memory_order_release);
 	if (0ul == loopLengthSamps)
 	{
@@ -144,6 +184,7 @@ bool Timer::InitialiseAbsoluteSamplePos(std::uint64_t absoluteSamplePos) noexcep
 	if (loopLength == 0ul)
 		return false;
 
+	_musicalFraction.store(0.0, std::memory_order_relaxed);
 	const auto wideLoopLength = static_cast<std::uint64_t>(loopLength);
 	_loopCount.store(absoluteSamplePos / wideLoopLength, std::memory_order_release);
 	_sampOffset.store(static_cast<unsigned int>(absoluteSamplePos % wideLoopLength),
@@ -187,17 +228,16 @@ void Timer::SetMasterLoopSampleOffset(unsigned long sampleOffsetSamps) noexcept
 
 MusicalPosition Timer::LocalMusicalPosition(unsigned int sampleRate) const noexcept
 {
-	const auto masterLength = SeedSourceLength();
-	const auto samplesPerBeat = QuantiseSamps();
-	if (masterLength == 0ul || samplesPerBeat == 0u || sampleRate == 0u
-		|| masterLength % samplesPerBeat != 0ul)
-		return {};
-
-	const auto beatsPerInterval = static_cast<std::int32_t>(masterLength / samplesPerBeat);
-	const auto phase = static_cast<unsigned long>(SampOffset()) % masterLength;
-	return { true, false, static_cast<double>(LoopCount()) * beatsPerInterval
-		+ static_cast<double>(phase) / samplesPerBeat,
-		60.0 * sampleRate / samplesPerBeat, beatsPerInterval };
+    const auto masterLength = SeedSourceLength();
+    const auto beats = MasterBeatsPerInterval();
+    if (masterLength == 0ul || beats == 0u || sampleRate == 0u) return {};
+    const auto grain = QuantiseSamps();
+    if (!_masterBeatsExplicit.load(std::memory_order_relaxed) && (!grain || masterLength % grain != 0u)) return {};
+    const auto phase = static_cast<double>(SampOffset() % masterLength)
+        + _musicalFraction.load(std::memory_order_relaxed);
+    return {true, false, static_cast<double>(LoopCount()) * beats + phase * beats / masterLength,
+        60.0 * sampleRate * beats / masterLength * AppliedPlaybackRate() / MasterRecordingPlaybackRate(),
+        static_cast<std::int32_t>(beats)};
 }
 
 MusicalPosition Timer::CurrentMusicalPosition(unsigned int sampleRate) const noexcept
@@ -279,6 +319,10 @@ bool Timer::ApplyCommand(const Command& command) noexcept
 	_audioGeneration = command.Generation;
 	if (command.Type == CommandType::ReplaceTiming)
 	{
+        _musicalFraction.store(0.0, std::memory_order_relaxed);
+        SetMasterBeatsPerInterval(command.QuantiseSamps && command.SeedLengthSamps
+            ? static_cast<unsigned int>((static_cast<std::uint64_t>(command.SeedLengthSamps) + command.QuantiseSamps / 2u) / command.QuantiseSamps) : 0u);
+        _masterBeatsExplicit.store(false, std::memory_order_relaxed);
 		_quantiseSamps.store(command.QuantiseSamps, std::memory_order_relaxed);
 		_quantisation.store(command.Quantisation, std::memory_order_relaxed);
 		_seedSourceLengthSamps.store(command.SeedLengthSamps, std::memory_order_relaxed);
@@ -336,6 +380,41 @@ std::tuple<unsigned long, int> utils::Timer::QuantiseLength(unsigned long length
 	const auto quantisation = _quantisation.load(std::memory_order_acquire);
 	if (0u == quantiseSamps)
 		return std::make_tuple(length, 0);
+
+    const auto fullBeats = MasterBeatsPerInterval();
+    const auto interval = SeedSourceLength();
+    if (_masterBeatsExplicit.load(std::memory_order_relaxed) && fullBeats && interval && quantisation != QUANTISE_OFF)
+    {
+        const auto boundary = [interval, fullBeats](std::uint64_t beat) noexcept {
+            return (beat * interval + fullBeats / 2u) / fullBeats;
+        };
+        std::uint64_t nearest = 0u;
+        const auto distance = [length](std::uint64_t value) noexcept {
+            return value > length ? value - length : length - value;
+        };
+        const auto consider = [&](std::uint64_t value) noexcept {
+            if (value <= (std::numeric_limits<unsigned long>::max)()
+                && (distance(value) < distance(nearest)
+                    || (distance(value) == distance(nearest) && value > nearest))) nearest = value;
+        };
+        if (quantisation == QUANTISE_MULTIPLE)
+        {
+            const auto beat = static_cast<std::uint64_t>(length) * fullBeats / interval;
+            consider(boundary(beat));
+            consider(boundary(beat + 1u));
+        }
+        else
+        {
+            for (std::uint64_t multiple = 1u; multiple <= 128u; multiple *= 2u)
+            {
+                consider(boundary(multiple));
+                consider(multiple * interval); // An odd full interval remains a valid boundary.
+            }
+        }
+        const auto error = static_cast<std::int64_t>(length) - static_cast<std::int64_t>(nearest);
+        return {static_cast<unsigned long>(nearest), static_cast<int>(std::clamp<std::int64_t>(error,
+            (std::numeric_limits<int>::min)(), (std::numeric_limits<int>::max)()))};
+    }
 
 	switch (quantisation)
 	{

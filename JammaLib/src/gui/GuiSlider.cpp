@@ -122,6 +122,18 @@ void GuiSlider::SetValue(double value, bool bypassUpdates)
 	OnValueChange(bypassUpdates);
 }
 
+void GuiSlider::SynchronizeValueFromOwner(double value)
+{
+	if (!_isDragging)
+	{
+		SetValue(value, true);
+		return;
+	}
+	if (value == Value()) return;
+	_valueOffset = value - _initValue;
+	OnValueChange(true);
+}
+
 void GuiSlider::SetDragParams(utils::Position2d dragOffset,
 	utils::Size2d dragSize,
 	utils::Size2d dragGap)
@@ -252,6 +264,14 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 		return cancelled;
 	}
 
+	if (_isDragging && (action.Touch != _dragTouch || action.Index != _dragIndex ||
+		action.State != TouchAction::TOUCH_UP))
+	{
+		// A different pointer or a repeated press cannot finish a pending reset.
+		ClearPointerState();
+		return ActionResult::NoAction();
+	}
+
 	auto res = GuiElement::OnAction(action);
 
 	//if (res.IsEaten)
@@ -267,7 +287,10 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 			auto oldValue = _initValue;
 			_clickMoved = _clickMoved || std::abs(action.Position.X - _initClickPos.X) > GetSystemMetrics(SM_CXDOUBLECLK) / 2 ||
 				std::abs(action.Position.Y - _initClickPos.Y) > GetSystemMetrics(SM_CYDOUBLECLK) / 2;
-			if (_clickMoved || !RouteHitTest(action.Position)) _resetOnRelease = false;
+			if (_clickMoved || !RouteHitTest(action.Position) ||
+				action.GetActionTime() < _clickStartTime ||
+				action.GetActionTime() - _clickStartTime > std::chrono::milliseconds(GetDoubleClickTime()))
+				_resetOnRelease = false;
 			_hasLastClick = !_resetOnRelease && _mouseClick && !_clickMoved && RouteHitTest(action.Position) &&
 				action.GetActionTime() >= _clickStartTime &&
 				action.GetActionTime() - _clickStartTime <= std::chrono::milliseconds(GetDoubleClickTime());
@@ -276,16 +299,17 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 				_lastClickTime = _clickStartTime;
 				_lastClickPos = _initClickPos;
 			}
-			_initValue = _resetOnRelease ? 1.0 : oldValue + _valueOffset;
+			_initValue = _resetOnRelease ? *_sliderParams.DefaultValue : oldValue + _valueOffset;
 			_valueOffset = 0.0;
-			if (_resetOnRelease) OnValueChange(false);
+			if (_resetOnRelease && _initValue != oldValue) OnValueChange(false);
 			_resetOnRelease = false;
 			ApplyHoverPoint(action.Position);
 
 			ActionResult res;
 			res.IsEaten = true;
 			res.ResultType = ACTIONRESULT_DEFAULT;
-			res.Undo = std::make_shared<GuiActionUndo>(oldValue, GuiElement::shared_from_this());
+			if (_initValue != oldValue)
+				res.Undo = std::make_shared<GuiActionUndo>(oldValue, GuiElement::shared_from_this());
 
 			return res;
 		}
@@ -298,8 +322,9 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 			{
 				_mouseClick = action.Touch == TouchAction::TOUCH_MOUSE && action.Index == 0;
 				_clickStartTime = action.GetActionTime();
-				_resetOnRelease = _sliderParams.ResetToUnityOnDoubleClick && _sliderParams.Min <= 1.0 &&
-					_sliderParams.Max >= 1.0 && _mouseClick && _hasLastClick &&
+				_resetOnRelease = _sliderParams.DefaultValue && std::isfinite(*_sliderParams.DefaultValue) &&
+					*_sliderParams.DefaultValue >= _sliderParams.Min &&
+					*_sliderParams.DefaultValue <= _sliderParams.Max && _mouseClick && _hasLastClick &&
 					_clickStartTime >= _lastClickTime &&
 					_clickStartTime - _lastClickTime <= std::chrono::milliseconds(GetDoubleClickTime()) &&
 					std::abs(action.Position.X - _lastClickPos.X) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
@@ -307,6 +332,8 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 				_hasLastClick = false;
 				_clickMoved = false;
 				_isDragging = true;
+				_dragTouch = action.Touch;
+				_dragIndex = action.Index;
 				_initClickPos = action.Position;
 				_initDragPos = _dragElement.Position();
 				_valueOffset = 0.0;
@@ -329,6 +356,13 @@ ActionResult GuiSlider::OnAction(TouchAction action)
 ActionResult GuiSlider::OnAction(TouchMoveAction action)
 {
 	ActionResult res = ActionResult::NoAction();
+	if (action.Origin == TouchMoveAction::Provenance::CaptureCancellation ||
+		(_isDragging && (action.Touch != _dragTouch || action.Index != _dragIndex)))
+	{
+		res.IsEaten = _isDragging;
+		ClearPointerState();
+		return res;
+	}
 
 	if (!_InteractionAvailable())
 	{
@@ -441,8 +475,9 @@ void GuiSlider::ClearPointerState()
 	if (_isDragging)
 	{
 		_isDragging = false;
+		const bool changed = _valueOffset != 0.0;
 		_valueOffset = 0.0;
-		OnValueChange(false);
+		if (changed) OnValueChange(false);
 	}
 }
 
@@ -781,7 +816,8 @@ double GuiSlider::CalcValueOffset(GuiSliderParams params,
 	double dragFrac = 0.0;
 
 	auto dragLength = CalcDragLength(params, size);
-	if (dragLength == 0u || !(params.Max > params.Min))
+	if (dragLength == 0u || !(params.Max > params.Min) ||
+		(dragPos.X == initDragPos.X && dragPos.Y == initDragPos.Y))
 		return 0.0;
 
 	if (params.Scale == GuiSliderParams::SliderScale::Decibels)

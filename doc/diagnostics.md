@@ -7,21 +7,31 @@ of at most 4096 bytes at UTF-8 boundaries, retaining the tail. The existing
 256-entry console handoff reports dropped entries when producers outrun the UI.
 Closing the console hides it; capture and the existing transcript continue.
 
-`startup.log` starts before configuration, device discovery, and Scene creation.
-The same capture event reaches the console once and the file once. It includes
-ordinary worker output as well as explicit boot messages. Startup ends when the
-first rendered Scene has drained its initial job queue, including queued plugin
-loads. Initial jobs retain explicit startup origin through completion, so their late
-failures still reach the file. A 30-second window after startup enters the UI loop
-bounds the general tee if jobs keep arriving; its expiry emits a warning. A blocked UI cannot drain diagnostics
-or enforce that deadline until it resumes. Explicit runtime scopes/jobs stay in the console even while the general startup window remains open. Unspecified producers inherit that window; explicit startup producers retain file attribution after it closes. Early orderly returns flush pending startup text before closing the log.
+`run.log` starts before configuration, device discovery, and Scene creation and
+continues through worker/plugin shutdown. It lives beside the selected defaults
+file (normally `%LOCALAPPDATA%\Jamma\run.log`); `JAMMA_DEFAULTS_PATH` redirects
+both. Its first entry records `run-start=YYYY-MM-DDThh:mm:ss+hh:mm` and the app
+version, with the actual local UTC offset (UTC is used if zone lookup fails).
+The same capture event reaches the console once and the file once. Verbose
+categories are admitted by their producer; capture does not apply another
+verbosity filter or depend on console visibility. Warnings/errors emitted by
+the existing unconditional producers therefore survive nonverbose settings.
 
-The file rotates through startup.log.1, .2 and .3 and is capped at 1 MiB per launch.
-Directory, rotation, open, write, flush and size-limit failures report once through
-the console ring and Windows debugger output, bypassing streams to avoid
-recursion. A saturated console still reports its lost-entry count when drained;
-the startup file tee is independent of console saturation. A completely full
-file cannot retain its own size-limit warning.
+Startup origin is still tracked until the first rendered Scene has drained its
+initial job queue, with a 30-second general startup deadline. Explicit queued
+startup jobs retain their origin after that deadline. Completion only changes
+origin attribution: all subsequent runtime output still reaches run.log.
+Early orderly returns flush pending text before closing the log.
+
+The file rotates at launch and whenever another entry would exceed 1 MiB,
+retaining run.log.1, .2 and .3 (at most 4 MiB total). Older generations are
+intentionally discarded; the run-start entry can age out in a long run.
+Oversized capture lines split at UTF-8 boundaries without dropping their tail.
+Directory, rotation, open, write and flush failures disable that file sink and
+report once through the console ring and Windows debugger, bypassing captured
+streams to avoid recursion. Console saturation does not prevent file writes;
+the console reports its lost-entry count when drained. A full/denied file cannot
+retain its own failure warning; there is no retry loop or recursive sink logging.
 
 ## Sources and limits
 
@@ -34,6 +44,7 @@ file cannot retain its own size-limit warning.
 | Audio callback stream status | Atomic bit mask, drained by UI |
 | MIDI inventory/connect/disconnect and serial failures | Existing unconditional C++ diagnostics, now including workers |
 | NINJAM refresh and caught job/app exceptions | C++ capture, including formerly swallowed refresh exceptions |
+| App CRT stdout/stderr and current Windows standard output/error handles | Separate pipes drained by one off-callback reader into the same sink; FILE buffering requires producer fflush |
 | OpenGL callback | C++ capture, replacing the application's raw C stderr callback |
 | Console creation failure | Existing unconditional C++ diagnostic, retained in capture |
 
@@ -45,13 +56,28 @@ use bounded events or counters. Backend errors use a single-attempt mailbox and
 status counters, with no waiting, allocation, formatting, locks or I/O added to
 the callbacks.
 
-Raw C stdout/stderr from third-party code, wide streams, OutputDebugString from
-third parties, separate processes, and arbitrary SDK-specific logging callbacks
-are not redirected. Catchable C++ exceptions are diagnosed at app/job/refresh
+The app CRT stdout/stderr descriptors and current Win32 standard handles are
+redirected for ordinary off-callback library diagnostics. A reader drains their
+separate pipes, preserving each stream's partial text; raw partial lines publish
+on reader idle/shutdown. Stop flushes CRT FILE buffers, restores descriptors and
+handles, drains a bounded snapshot of queued pipe bytes, then joins the reader
+before detaching capture. Duplicated writer handles cannot keep shutdown waiting
+for EOF. Calls after producer shutdown are outside this ownership contract.
+
+Raw CRT/Win32 writes can block on pipe capacity and are **not supported from
+real-time callbacks**; third-party code must use its bounded diagnostic callback
+where available. C++ suppression cannot intercept raw CRT calls. Wide C++ streams,
+OutputDebugString from third parties, cached/privately opened handles, a plugin's
+separate CRT with its own FILE objects, separate processes, and arbitrary
+SDK-specific logging callbacks are not guaranteed to be captured. Cross-stream
+arrival order reflects reader scheduling; stdout and stderr fragments never
+merge. A producer's unflushed FILE buffer may be lost on abnormal termination.
+
+Catchable C++ exceptions are diagnosed at app/job/refresh
 boundaries. Any unexpected Scene worker exception reports once, stops job mutation and notifies the UI to run normal Shutdown. The failed worker waits off callback for Shutdown to publish permanent ingress closure, acknowledges it, and joins; final-save failures also remain inside this boundary. No failed structural pump is retried. The worker retains one immutable failure record (4096 bytes including terminator, with an explicit truncation marker) before publishing failure. After join the UI presents it in a modal, independent of console lifetime or ring overflow. If the modal is unavailable, direct Win32 I/O writes/flushes `worker-failure.log` beside the selected defaults file; `JAMMA_DEFAULTS_PATH` therefore redirects this fallback too. The fallback replaces only the previous failure record. If that sink also fails, direct debugger output receives the detail. These exit sinks bypass captured streams. Access violations, process termination, driver crashes, stack
 corruption and arbitrary plugin crashes have no recovery guarantee. No fatal
 handler flushes iostream state: its locks/allocators may already be compromised.
-Use the Windows debugger/crash reporting for fatal failures; startup.log contains
+Use the Windows debugger/crash reporting for fatal failures; run.log contains
 only output successfully written before the failure.
 
 ## Thread ownership
@@ -60,8 +86,14 @@ only output successfully written before the failure.
   its mutex; the UI restores stream buffers after producer shutdown. Stop flushes
   registered fragments, disables sinks and detaches their references. TLS keeps
   State alive safely after Stop, without retaining sink owners.
-- StartupLog: setup/destruction on UI; Append and failure consumption under the
+- StartupLog (continuous run.log): setup/destruction on UI; Append and failure consumption under the
   capture mutex. No callback accesses its handle or file state.
+- CrtCapture: UI owns process descriptor/handle setup, saved descriptors, Stop and
+  destruction. Its one reader owns pipe reads and its capture TLS fragments; read
+  handles and stop-event handle stay immutable until it joins. The manual-reset
+  event hands shutdown to the reader. UI restores writers before signalling it,
+  then joins before closing read/event handles or detaching ConsoleCapture. No
+  callback enters this facility; library producers stop before teardown.
 - DiagnosticThread: suppression flag belongs to each callback thread. Suppressed
   counts/status bits are atomic. The backend mailbox transitions idle -> writing
   -> ready -> reading -> idle; release/acquire publishes complete records. Only

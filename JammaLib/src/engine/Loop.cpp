@@ -1,4 +1,5 @@
 #include "Loop.h"
+#include "../vst/RackState.h"
 #include <algorithm>
 #include <cmath>
 #include <new>
@@ -18,6 +19,303 @@ namespace engine
 			return loop.Index;
 		}
 	};
+}
+
+
+void engine::Loop::SetPlaybackRateBlockAtAudioBoundary(const audio::PlaybackRateBlock& block,
+    double recordingRate) noexcept
+{
+    if (!std::isfinite(recordingRate) || recordingRate <= 0.0) return;
+    _playbackRateBlock = block;
+    _recordingPlaybackRate = recordingRate;
+    if (LoopLength()) { _InitialisePlaybackOffset(); _PreparePlaybackOffsetTarget(); }
+}
+
+float engine::Loop::_ReadSourceBodySample(double sourcePosition, unsigned int frame) const noexcept
+{
+    const auto length = LoopLength();
+    if (!length) return 0.0f;
+    auto body = std::fmod(sourcePosition, static_cast<double>(length));
+    if (body < 0.0) body += length;
+    const auto first = static_cast<unsigned long>(body);
+    const auto fraction = body - first;
+    const auto read = [&](unsigned long phase) noexcept
+    {
+        if (!TriggerCaptureReady(phase, 1u)) return 0.0f;
+        const auto storage = constants::MaxLoopFadeSamps + phase;
+        if (storage >= _bufferBank.Length()) return 0.0f;
+        const auto sample = _ReadSpectralSample(storage, frame, AudioSourceGeneration());
+        if (_loopParams.FadeSamps && phase >= length - _loopParams.FadeSamps)
+        {
+            const auto fade = phase - (length - _loopParams.FadeSamps);
+            const auto prefix = constants::MaxLoopFadeSamps + fade - _loopParams.FadeSamps;
+            return _hanning->Mix(_ReadSpectralSample(prefix, frame, AudioSourceGeneration()), sample, fade);
+        }
+        return sample;
+    };
+    const auto next = first + 1 == length ? 0ul : first + 1;
+    return static_cast<float>(read(first) * (1.0 - fraction) + read(next) * fraction);
+}
+
+void engine::Loop::SetCaptureRateHistoryAtAudioBoundary(const audio::PlaybackRateHistory* history,
+    std::uint64_t physicalInputStart, const audio::SourcePosition& sourceOrigin, double baseline) noexcept
+{
+    _captureRateHistory = history;
+    _capturePhysicalInputStart = physicalInputStart;
+    _captureSourceOrigin = sourceOrigin;
+    _captureRecordingRate = baseline;
+}
+
+void engine::Loop::SetCaptureInputHistoryAtAudioBoundary(const audio::InputHistoryView& history,
+    unsigned int channel) noexcept
+{
+    _captureInputHistory = history;
+    _captureInputChannel = channel;
+    FlushPendingCaptureAtAudioBoundary();
+}
+
+void engine::Loop::FlushPendingCaptureAtAudioBoundary() noexcept
+{
+    if (!_triggerCapture || !_captureRateHistory || !TriggerCaptureCoverageValid()) return;
+    _FlushMappedCapture(false);
+    // The source pointer is borrowed only while ProcessActiveBounce pins it.
+    if (_captureSource) _FlushMappedCapture(true);
+}
+
+void engine::Loop::_QueueMappedCapture(const base::AudioWriteRequest& request, int writeOffset,
+    bool residual) noexcept
+{
+    if (!request.numSamps) return;
+    const auto signedStart = static_cast<std::int64_t>(_capturePhysicalInputStart) + writeOffset;
+    if (signedStart < 0 || request.numSamps > constants::MaxBlockSize)
+    { _triggerCaptureCoverageValid.store(false, std::memory_order_release); return; }
+    const auto start = static_cast<std::uint64_t>(signedStart);
+    auto& capture = _captureQueues[residual ? 1u : 0u];
+    if (residual)
+    {
+        if (_captureResidualStart && start != _captureResidualEnd)
+        { _triggerCaptureCoverageValid.store(false, std::memory_order_release); return; }
+        if (!_captureResidualStart) _captureResidualStart = start;
+        const auto end = start + request.numSamps;
+        if (capture.Count)
+        {
+            const auto oldest = capture.Regions[capture.First].Cursor;
+            if (end > oldest + _captureResidualSamples.size())
+            { _triggerCaptureCoverageValid.store(false, std::memory_order_release); return; }
+        }
+        for (unsigned int frame = 0; frame < request.numSamps; ++frame)
+            _captureResidualSamples[(start + frame) % _captureResidualSamples.size()] = request.samples[frame * request.stride];
+        _captureResidualEnd = end;
+    }
+    if (capture.Count == capture.Regions.size())
+    { _triggerCaptureCoverageValid.store(false, std::memory_order_release); return; }
+    auto& region = capture.Regions[(capture.First + capture.Count++) % capture.Regions.size()];
+    region = {start, start + request.numSamps, request.fadeNew, request.fadeCurrent,
+        residual ? _captureSource : nullptr, residual && _captureSource ? _captureSource->AudioSourceGeneration() : 0u,
+        _captureSourceBodyOrigin};
+    if (residual && _captureSource) region.SourceOffset = PlaybackOffsetCursor(*_captureSource);
+    FlushPendingCaptureAtAudioBoundary();
+}
+
+void engine::Loop::_FlushMappedCapture(bool residual) noexcept
+{
+    auto& capture = _captureQueues[residual ? 1u : 0u];
+    auto& published = residual ? _triggerBounceThrough : _triggerAdcThrough;
+    auto through = published.load(std::memory_order_relaxed);
+    const auto captureEnd = _triggerCaptureEnd.load(std::memory_order_acquire);
+    bool wrote = false;
+    const auto publish = [&]() noexcept
+    {
+        if (wrote) _InvalidateAudioSource();
+        published.store(through, std::memory_order_release);
+        if (!residual) _triggerAdcBlockThrough = through;
+    };
+    unsigned int work = 0u;
+    while (capture.Count && TriggerCaptureCoverageValid())
+    {
+        auto& region = capture.Regions[capture.First];
+        if (through >= captureEnd) { capture.First = capture.Count = 0u; break; }
+        if (residual && (!region.SourceIdentity || region.SourceIdentity != _captureSource
+            || region.SourceGeneration != _captureSource->AudioSourceGeneration()))
+        { _triggerCaptureCoverageValid.store(false, std::memory_order_release); break; }
+        const auto point = _captureRateHistory->Query(region.Cursor);
+        if (!point) { _triggerCaptureCoverageValid.store(false, std::memory_order_release); break; }
+        auto position = point->Coordinate.Difference(_captureSourceOrigin) / _captureRecordingRate + constants::MaxLoopFadeSamps;
+        while (region.Cursor < region.End)
+        {
+            const auto block = _captureRateHistory->DescribeAt(region.Cursor);
+            if (!block) { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
+            auto rate = block->Cursor();
+            const bool constantRate = block->IsConstant();
+            const auto constantIncrement = block->InitialRate * block->SourceScale / _captureRecordingRate;
+            const auto count = (std::min)(static_cast<std::uint64_t>(block->Frames), region.End - region.Cursor);
+            for (std::uint64_t frame = 0; frame < count; ++frame)
+            {
+                if (++work > constants::MaxBlockSize + CaptureInterpolationSamples)
+                { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
+                const auto increment = constantRate ? constantIncrement : rate.Next() / _captureRecordingRate;
+                if (!(increment >= MinimumSourceRate) || increment > MaximumSourceRate)
+                { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
+                const auto next = position + increment;
+                auto sourceOffset = residual ? std::optional{ region.SourceOffset } : std::nullopt;
+                const auto firstOffset = sourceOffset ? sourceOffset->Value : 0.0;
+                const auto nextOffset = sourceOffset ? sourceOffset->Next() : 0.0;
+                auto first = (std::max)({static_cast<std::int64_t>(std::ceil(position)), through, _triggerCaptureBegin});
+                const auto end = (std::min)(static_cast<std::int64_t>(std::ceil(next)), captureEnd);
+                // ADC gaps are intentional when punching over an existing source.
+                if (!residual && !_triggerCaptureRequiresAdc && first > through) through = first;
+                for (auto index = first; index < end; ++index)
+                {
+                    if (index != through || index < 0 || index >= _bufferBank.Capacity())
+                    { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
+                    if (residual && _captureQueues[0].Count)
+                    {
+                        const auto& adc = _captureQueues[0].Regions[_captureQueues[0].First];
+                        const auto pending = _captureRateHistory->Query(adc.Cursor);
+                        if (!pending) { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
+                        const auto pendingSource = pending->Coordinate.Difference(_captureSourceOrigin) / _captureRecordingRate + constants::MaxLoopFadeSamps;
+                        if (index >= std::ceil(pendingSource)) { publish(); return; }
+                    }
+                    const auto fraction = (static_cast<double>(index) - position) / increment;
+                    double sample = 0.0;
+                    for (unsigned int neighbor = 0; neighbor < CaptureInterpolationSamples; ++neighbor)
+                    {
+                        const auto weight = neighbor == 0u ? 1.0 - fraction : fraction;
+                        // Exact integer samples need no right-hand lookahead.
+                        if (weight == 0.0) continue;
+                        const auto input = static_cast<std::int64_t>(region.Cursor) + neighbor;
+                        float value = 0.0f;
+                        if (residual)
+                        {
+                            // The residual starts at this capture boundary.
+                            // Original source material is composed separately below.
+                            if (input >= static_cast<std::int64_t>(*_captureResidualStart))
+                            {
+                                if (input >= static_cast<std::int64_t>(_captureResidualEnd)) { publish(); return; }
+                                if (input < 0 || static_cast<std::uint64_t>(input) + _captureResidualSamples.size() < _captureResidualEnd)
+                                { _triggerCaptureCoverageValid.store(false, std::memory_order_release); publish(); return; }
+                                value = _captureResidualSamples[static_cast<std::uint64_t>(input) % _captureResidualSamples.size()];
+                            }
+                        }
+                        else if (input < 0 || !_captureInputHistory.Read(_captureInputChannel, static_cast<std::uint32_t>(input), value))
+                        {
+                            const auto frontier = static_cast<std::int64_t>(_captureInputHistory.IngressHead) - _captureInputHistory.InputLatency;
+                            if (input < frontier) _triggerCaptureCoverageValid.store(false, std::memory_order_release);
+                            publish(); return;
+                        }
+                        sample += weight * value;
+                    }
+                    if (residual) sample += _captureSource->_ReadSourceBodySample(region.SourceBodyOrigin
+                        + static_cast<double>(index) - constants::MaxLoopFadeSamps
+                        - (firstOffset + fraction * (nextOffset - firstOffset)), static_cast<unsigned int>(frame));
+                    auto& destination = _bufferBank[static_cast<unsigned long>(index)];
+                    destination = region.FadeNew * static_cast<float>(sample) + region.FadeCurrent * destination;
+                    ++through;
+                    wrote = true;
+                }
+                position = next;
+                if (sourceOffset) region.SourceOffset = *sourceOffset;
+                // Retry an unavailable right-hand neighbor at this same
+                // physical interval; published source samples are not rewritten.
+                ++region.Cursor;
+            }
+        }
+        capture.First = (capture.First + 1u) % capture.Regions.size();
+        --capture.Count;
+    }
+    publish();
+}
+
+void engine::Loop::_WriteRateMappedCapture(const base::AudioWriteRequest& request, int writeOffset) noexcept
+{
+    if (!request.numSamps || !request.samples) return;
+    if (request.source == AUDIOSOURCE_ADC || request.source == AUDIOSOURCE_BOUNCE)
+    {
+        _QueueMappedCapture(request, writeOffset, request.source == AUDIOSOURCE_BOUNCE);
+        return;
+    }
+    const auto physicalSigned = static_cast<std::int64_t>(_capturePhysicalInputStart) + writeOffset;
+    if (physicalSigned < 0 || !std::isfinite(_captureRecordingRate) || _captureRecordingRate <= 0.0)
+    {
+        _triggerCaptureCoverageValid.store(false, std::memory_order_release);
+        return;
+    }
+    auto physical = static_cast<std::uint64_t>(physicalSigned);
+    const auto origin = _captureRateHistory->Query(physical);
+    if (!origin)
+    {
+        _triggerCaptureCoverageValid.store(false, std::memory_order_release);
+        return;
+    }
+    auto position = origin->Coordinate.Difference(_captureSourceOrigin) / _captureRecordingRate + constants::MaxLoopFadeSamps;
+    const auto slot = request.source == AUDIOSOURCE_ADC ? 0u : request.source == AUDIOSOURCE_MONITOR ? 1u : 2u;
+    auto& previous = _captureInterpolation[slot];
+    auto& bank = request.source == AUDIOSOURCE_MONITOR ? _monitorBufferBank : _bufferBank;
+    const auto captureEnd = _triggerCaptureEnd.load(std::memory_order_acquire);
+    auto publishedThrough = slot == 0u ? _triggerAdcThrough.load(std::memory_order_relaxed)
+        : _triggerBounceThrough.load(std::memory_order_relaxed);
+    if (request.source != AUDIOSOURCE_MONITOR) _InvalidateAudioSource();
+    unsigned int frame = 0u;
+    while (frame < request.numSamps)
+    {
+        const auto block = _captureRateHistory->DescribeAt(physical);
+        if (!block)
+        {
+            _triggerCaptureCoverageValid.store(false, std::memory_order_release);
+            return;
+        }
+        auto cursor = block->Cursor();
+        const auto count = (std::min)(block->Frames, request.numSamps - frame);
+        for (unsigned int offset = 0u; offset < count; ++offset, ++frame, ++physical)
+        {
+            const auto sample = request.samples[frame * request.stride];
+            if (previous.Valid && previous.Frame + 1u != physical) previous.Valid = false;
+            const auto first = previous.Valid ? static_cast<std::int64_t>(std::floor(previous.Position)) + 1
+                : static_cast<std::int64_t>(std::ceil(position));
+            const auto last = static_cast<std::int64_t>(std::floor(position));
+            if (last - first > static_cast<std::int64_t>(MaximumSourceRate))
+            {
+                _triggerCaptureCoverageValid.store(false, std::memory_order_release);
+                return;
+            }
+            for (auto index = first; index <= last; ++index)
+            {
+                if (index < _triggerCaptureBegin || index < 0 || index >= captureEnd) continue;
+                if (index >= bank.Capacity())
+                {
+                    _triggerCaptureCoverageValid.store(false, std::memory_order_release);
+                    return;
+                }
+                const auto fraction = previous.Valid && position != previous.Position
+                    ? (index - previous.Position) / (position - previous.Position) : 1.0;
+                auto value = static_cast<float>(previous.Valid
+                    ? previous.Sample + (sample - previous.Sample) * fraction : sample);
+                if (slot == 2u && _captureSource)
+                    value += _captureSource->_ReadSourceBodySample(_captureSourceBodyOrigin
+                        + static_cast<double>(index) - constants::MaxLoopFadeSamps, frame);
+                auto& destination = bank[static_cast<unsigned long>(index)];
+                destination = request.fadeNew * value + request.fadeCurrent * destination;
+                if (index == publishedThrough) ++publishedThrough;
+                else if (index > publishedThrough && slot != 1u)
+                    _triggerCaptureCoverageValid.store(false, std::memory_order_release);
+            }
+            previous = {true, physical, position, sample};
+            if (slot == 1u) _lastPeak = (std::max)(_lastPeak, std::abs(sample));
+            const auto increment = cursor.Next() / _captureRecordingRate;
+            if (!(increment > 0.0) || increment > MaximumSourceRate)
+            {
+                _triggerCaptureCoverageValid.store(false, std::memory_order_release);
+                return;
+            }
+            position += increment;
+        }
+    }
+    if (slot == 0u)
+    {
+        _triggerAdcThrough.store(publishedThrough, std::memory_order_release);
+        _triggerAdcBlockThrough = publishedThrough;
+    }
+    else if (slot == 2u) _triggerBounceThrough.store(publishedThrough, std::memory_order_release);
 }
 
 void engine::Loop::_DrainVstChain(std::shared_ptr<vst::VstChain> chain)
@@ -69,6 +367,7 @@ Loop::Loop(LoopParams params,
 	_model(nullptr),
 	_bufferBank(BufferBank())
 {
+	_playbackOffsetDamping = 1.0 / -std::expm1(-1.0 / (constants::DefaultSampleRate * 0.010));
 	if (_loopParams.Id.empty()) _loopParams.Id = utils::GetGuid();
 	_mixer = std::make_unique<AudioMixer>(mixerParams);
 	_hanning = std::make_unique<Hanning>(params.FadeSamps);
@@ -144,6 +443,7 @@ std::optional<std::shared_ptr<Loop>> Loop::FromFile(LoopParams loopParams, io::J
 	// fade-free, so restore it only after establishing the logical loop state.
 	loop->Play(constants::MaxLoopFadeSamps, loopStruct.Length, false);
 	loop->SetBodyPlayIndex(bodyPlayIndex);
+	loop->SetPlaybackOffsetSamps(loopStruct.PlaybackOffsetSamps);
 	loop->SetMixerLevel(loopStruct.Level);
 	loop->_pitch = loopStruct.Speed;
 	if (loopStruct.Muted)
@@ -163,13 +463,13 @@ AudioMixerParams Loop::GetMixerParams(utils::Size2d loopSize,
 	return mixerParams;
 }
 
-void Loop::SetAudioSpectralModel(std::shared_ptr<graphics::AudioSpectralModel> model)
+void Loop::SetSpectralModel(std::shared_ptr<graphics::SpectralModel> model)
 {
-	if (_audioSpectralModel == model) return;
-	if (_audioSpectralModel)
-		_children.erase(std::remove(_children.begin(), _children.end(), _audioSpectralModel), _children.end());
-	_audioSpectralModel = std::move(model);
-	if (_audioSpectralModel) _children.push_back(_audioSpectralModel);
+	if (_spectralModel == model) return;
+	if (_spectralModel)
+		_children.erase(std::remove(_children.begin(), _children.end(), _spectralModel), _children.end());
+	_spectralModel = std::move(model);
+	if (_spectralModel) _children.push_back(_spectralModel);
 }
 
 void Loop::SetSize(utils::Size2d size)
@@ -233,6 +533,7 @@ void Loop::Draw3d(DrawContext& ctx,
 	if (!isRecording && index >= constants::MaxLoopFadeSamps)
 		index -= constants::MaxLoopFadeSamps;
 
+	if (!isRecording) index = PlaybackBodyIndex();
 	auto frac = loopLength == 0 ? 0.0 : 1.0 - std::max(0.0, std::min(1.0, ((double)(index % loopLength)) / ((double)loopLength)));
 	_model->SetLoopIndexFrac(frac);
 	_model->SetLoopState(_GetLoopModelState(pass, playState, IsMuted()));
@@ -245,14 +546,14 @@ void Loop::Draw3d(DrawContext& ctx,
 	if (PASS_SCENE == pass)
 		_vu->Draw3d(ctx, 1, pass);
 
-	const auto spectralVisible = _audioSpectralModel && _audioSpectralModel->IsAvailable();
-	_model->SetSpectralReveal(spectralVisible ? _audioSpectralMorph : 0.0f);
+	const auto spectralVisible = _spectralModel && _spectralModel->IsAvailable();
+	_model->SetSpectralReveal(spectralVisible ? _spectralMorph : 0.0f);
 	const auto visualHeightScale = static_cast<float>(_mixer->UnmutedLevel()) * _masterVisualScale;
 	_model->SetWaveformColorScale(visualHeightScale);
-	glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, visualHeightScale, 1.0f)));
+	glCtx.PushMvp(glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, pass == PASS_PICKER ? 1.0f : visualHeightScale, 1.0f)));
 	
 	GLboolean depthWrites = GL_TRUE;
-	const auto fadingWaveform = PASS_SCENE == pass && spectralVisible && _audioSpectralMorph > 0.0f;
+	const auto fadingWaveform = PASS_SCENE == pass && spectralVisible && _spectralMorph > 0.0f;
 	if (fadingWaveform)
 	{
 		glGetBooleanv(GL_DEPTH_WRITEMASK, &depthWrites);
@@ -262,12 +563,12 @@ void Loop::Draw3d(DrawContext& ctx,
 	if (fadingWaveform) glDepthMask(depthWrites);
 	
 	glCtx.PopMvp();
-	if (_audioSpectralModel && _audioSpectralMorph > 0.0f)
+	if (_spectralModel && _spectralMorph > 0.0f)
 	{
-		_audioSpectralModel->SetRadius(static_cast<float>(CalcDrawRadius(loopLength) * _DrawRadiusScale()));
-		_audioSpectralModel->SetPlayFraction(loopLength == 0ul ? 0.0
-			: static_cast<double>(BodyPlayIndex()) / loopLength);
-		_audioSpectralModel->Draw3d(ctx, numInstances, pass);
+		_spectralModel->SetRadius(static_cast<float>(CalcDrawRadius(loopLength) * _DrawRadiusScale()));
+		_spectralModel->SetPlayFraction(loopLength == 0ul ? 0.0
+			: static_cast<double>(PlaybackBodyIndex()) / loopLength);
+		_spectralModel->Draw3d(ctx, numInstances, pass);
 	}
 	glCtx.PopMvp();
 	glCtx.PopMvp();
@@ -304,6 +605,11 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 		return;
 	}
 
+	if (_triggerCapture && _captureRateHistory)
+	{
+		_WriteRateMappedCapture(request, writeOffset);
+		return;
+	}
 	const auto writeIndex = _triggerCapture ? _triggerCaptureCursor :
 		static_cast<std::int64_t>(_writeIndex.load(std::memory_order_relaxed));
 	const auto captureEnd = _triggerCaptureEnd.load(std::memory_order_acquire);
@@ -355,11 +661,22 @@ void Loop::OnBlockWrite(const base::AudioWriteRequest& request, int writeOffset)
 				_triggerAdcBlockThrough = end;
 		}
 	}
+    if (_triggerCapture && request.numSamps)
+    {
+        const auto slot = request.source == AUDIOSOURCE_ADC ? 0u : request.source == AUDIOSOURCE_MONITOR ? 1u : 2u;
+        const auto last = request.numSamps - 1u;
+        const auto physical = static_cast<std::int64_t>(_capturePhysicalInputStart) + writeOffset + last;
+        if (physical >= 0)
+            _captureInterpolation[slot] = {true, static_cast<std::uint64_t>(physical),
+                static_cast<double>(writeIndex + writeOffset + last), request.samples[last * request.stride]};
+    }
+
 }
 
 void Loop::EndWrite(unsigned int numSamps,
 	bool updateIndex)
 {
+	FlushPendingCaptureAtAudioBoundary();
 	// Only update if currently recording
 	auto playState = _playState.load(std::memory_order_acquire);
 	if ((STATE_RECORDING != playState) &&
@@ -373,6 +690,22 @@ void Loop::EndWrite(unsigned int numSamps,
 	if (!updateIndex)
 		return;
 
+	if (_triggerCapture && _captureRateHistory)
+	{
+		// Causal interpolation publishes only covered integer source samples.
+		// The next device frame supplies the right-hand neighbor at the frontier.
+		const auto end = _captureRateHistory->Query(_capturePhysicalInputStart + numSamps);
+		if (!end) { _triggerCaptureCoverageValid.store(false, std::memory_order_release); return; }
+		_triggerCaptureCursor = static_cast<std::int64_t>(std::floor(end->Coordinate.Difference(_captureSourceOrigin) / _captureRecordingRate + constants::MaxLoopFadeSamps));
+		const auto ready = (std::min)(
+			_triggerCaptureRequiresAdc ? _triggerAdcThrough.load(std::memory_order_acquire) : _triggerCaptureCursor,
+			_triggerCaptureRequiresBounce ? _triggerBounceThrough.load(std::memory_order_acquire) : _triggerCaptureCursor);
+		const auto length = static_cast<unsigned long>((std::clamp)(ready, std::int64_t{0}, static_cast<std::int64_t>(_bufferBank.Capacity())));
+		_writeIndex.store(length, std::memory_order_relaxed);
+		_bufferBank.SetLength(length);
+		_monitorBufferBank.SetLength(length);
+		return;
+	}
 	const auto next = _triggerCapture ? _triggerCaptureCursor + numSamps :
 		static_cast<std::int64_t>(_writeIndex.load(std::memory_order_relaxed)) + numSamps;
 	if (_triggerCapture)
@@ -416,6 +749,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	if (!isPlaying || (0 == loopLength))
 		return 0;
 
+	_InitialisePlaybackOffset(); // Cold latch once; repeated consumers share this block head.
 	const auto sourceGeneration = AudioSourceGeneration();
 	auto peak = 0.0f;
 	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
@@ -423,25 +757,14 @@ unsigned int Loop::ReadBlock(float* outBuf,
 	// _playIndex is always within range:
 	// [constants::MaxLoopFadeSamps : _loopLength + constants::MaxLoopFadeSamps - 1)
 	// index should apply the offset and then also stay in the same range
-	auto index = _playIndex.load(std::memory_order_relaxed);
-
-	if (sampOffset >= 0)
-	{
-		index += sampOffset;
-	}
-	else
-	{
-		while (index < (unsigned long)(-sampOffset))
-			index += loopLength;
-
-		index += sampOffset;
-	}
-
-	while (index >= bufSize)
-		index -= loopLength;
-
-	if (index < constants::MaxLoopFadeSamps)
-		index += loopLength;
+	const auto targetOffset = TotalPlaybackOffsetSamps();
+	const bool exactTargetOffset = _playbackOffsetRate == 0.0 && _playbackOffsetStart == targetOffset;
+	const auto playbackOffset = exactTargetOffset ? static_cast<std::int64_t>(targetOffset)
+		: static_cast<std::int64_t>(std::llround(_playbackOffsetStart));
+	// Normalize on the fade-free body ruler. Storage-domain wrapping can land
+	// in the prefix when a signed offset crosses several very short loops.
+	const auto readOffset = playbackOffset - static_cast<std::int64_t>(sampOffset);
+	auto index = constants::MaxLoopFadeSamps + OffsetBodyIndex(BodyPlayIndex(), loopLength, readOffset);
 
     const bool ready = !_triggerCapture || TriggerCaptureReady(index - constants::MaxLoopFadeSamps, numSamps);
     const bool provisional = !ready && dac && CanUseTemporaryPlayback(index - constants::MaxLoopFadeSamps, numSamps)
@@ -454,7 +777,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
     const bool normalized = provisional && _triggerCaptureNormalized.load(std::memory_order_acquire);
     const auto through = provisional ? _triggerAdcThrough.load(std::memory_order_acquire) : 0;
     const auto readSource = [&](unsigned long storage, unsigned int frame) noexcept {
-        if (!provisional) return _ReadAudioSpectralSample(storage, frame, sourceGeneration);
+        if (!provisional) return _ReadSpectralSample(storage, frame, sourceGeneration);
         const auto f = static_cast<std::int64_t>(constants::MaxLoopFadeSamps);
         auto selected = static_cast<std::int64_t>(storage);
         if (selected >= f)
@@ -473,20 +796,83 @@ unsigned int Loop::ReadBlock(float* outBuf,
         return sample;
     };
 
+	const bool fractionalSeek = !_playbackRateBlock.IsConstant()
+        || _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale != _recordingPlaybackRate || _playbackFraction != 0.0
+        || _playbackOffsetRate != 0.0
+        || (!exactTargetOffset && _playbackOffsetStart != std::round(_playbackOffsetStart));
+    if (fractionalSeek)
+    {
+        // A completed/normalized body owns every adjacent and seam-prefix sample.
+        // In-flight captures retain their ordinary integer read path until ready.
+        if (_triggerCapture && !_triggerCaptureNormalized.load(std::memory_order_acquire)) return 0u;
+        const auto sampleAtBody = [&](unsigned long body, unsigned int frame) noexcept
+        {
+            const auto storage = constants::MaxLoopFadeSamps + body;
+            if (storage >= bufBankSize) return 0.0f;
+            const auto sample = readSource(storage, frame);
+            if (_loopParams.FadeSamps && storage >= bufSize - _loopParams.FadeSamps)
+            {
+                const auto fadeIndex = storage - (bufSize - _loopParams.FadeSamps);
+                const auto prefix = constants::MaxLoopFadeSamps + fadeIndex - _loopParams.FadeSamps;
+                return _hanning->Mix(readSource(prefix, frame), sample, fadeIndex);
+            }
+            return sample;
+        };
+        const auto count = (std::min)(numSamps, constants::MaxBlockSize);
+        auto body = std::fmod(static_cast<double>(BodyPlayIndex()) + _playbackFraction + sampOffset - _playbackOffsetStart,
+            static_cast<double>(loopLength));
+        if (body < 0.0) body += loopLength;
+        auto rate = _playbackRateBlock.Cursor();
+        auto appliedOffset = _playbackOffsetStart;
+        const bool constantRate = _playbackRateBlock.IsConstant();
+        const bool movingOffset = _playbackOffsetStart != _playbackOffsetEnd;
+        const auto constantIncrement = _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale / _recordingPlaybackRate;
+        for (auto frame = 0u; frame < count; ++frame)
+        {
+            auto increment = constantRate ? constantIncrement : rate.Next() / _recordingPlaybackRate;
+            if (movingOffset)
+            {
+                const auto baseIncrement = constantRate ? constantIncrement : rate.BaseIncrement() / _recordingPlaybackRate;
+                const auto correction = constantRate ? 0.0 : rate.Correction() / _recordingPlaybackRate;
+                const auto nextOffset = _NextPlaybackOffset(appliedOffset, baseIncrement, correction);
+                increment -= nextOffset - appliedOffset;
+                appliedOffset = nextOffset;
+            }
+            if (!(increment > 0.0) || increment > MaximumSourceRate) return 0u;
+            const auto first = static_cast<unsigned long>(body);
+            const auto fraction = body - first;
+            const auto next = first + 1ul == loopLength ? 0ul : first + 1ul;
+            const auto linear = static_cast<double>(sampleAtBody(first, frame)) * (1.0 - fraction)
+                + static_cast<double>(sampleAtBody(next, frame)) * fraction;
+            outBuf[frame] = static_cast<float>(linear);
+            peak = (std::max)(peak, std::abs(outBuf[frame]));
+            body += increment;
+            if (body >= loopLength)
+            {
+                body -= loopLength;
+                // One subtraction covers ordinary loops. Tiny children can
+                // wrap several times at the admitted source rate (at most 5).
+                if (body >= loopLength) body = std::fmod(body, static_cast<double>(loopLength));
+            }
+        }
+        _lastPeak = peak;
+        return count;
+    }
+
 	// Check if we are inside crossfading region at any point
-	auto isXfadeRegion = (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
+	auto isXfadeRegion = _loopParams.FadeSamps != 0u
+		&& (index + numSamps) >= (bufSize - _loopParams.FadeSamps);
 
 	auto sampsToWrite = (numSamps <= constants::MaxBlockSize) ? numSamps : constants::MaxBlockSize;
 
 	if (isXfadeRegion)
 	{
-		// Fill temp buffer with crossfade-mixed samples
-		auto startIndex = index;
+		// Re-evaluate the seam on the wrapped index, including short loops
+		// that cross several seams within one device block.
 
 		for (auto i = 0u; i < sampsToWrite; i++)
 		{
-			auto isXfade = (startIndex + i) >= (bufSize - _loopParams.FadeSamps);
-			isXfade &= index < bufSize;
+			const auto isXfade = index >= (bufSize - _loopParams.FadeSamps) && index < bufSize;
 
 			if (provisional || index < bufBankSize)
 			{
@@ -494,7 +880,7 @@ unsigned int Loop::ReadBlock(float* outBuf,
 
 				if (isXfade)
 				{
-					auto xfadeIndex = (startIndex + i) - (bufSize - _loopParams.FadeSamps);
+					auto xfadeIndex = index - (bufSize - _loopParams.FadeSamps);
 					auto xfadeBufIndex = constants::MaxLoopFadeSamps + xfadeIndex - _loopParams.FadeSamps;
 					auto xfadeSamp = readSource(xfadeBufIndex, i);
 
@@ -567,59 +953,71 @@ void Loop::ClearRecordedPlaybackDelay() noexcept
 
 void Loop::WriteBlock(const std::shared_ptr<MultiAudioSink> dest,
 	const std::shared_ptr<base::BounceWriter> bounceWriter,
-	int sampOffset,
-	unsigned int numSamps, const audio::DacRenderContext* dac,
-    std::uint32_t trigger, std::int64_t delay, unsigned int channel)
+	int sampOffset, unsigned int numSamps, const audio::DacRenderContext* dac,
+	std::uint32_t trigger, std::int64_t delay, unsigned int channel,
+	vst::VstChain* preparedChain, bool usePreparedChain,
+	const SourceReadTrajectory* sourceTrajectory)
 {
-	// Mixer will stereo spread the mono wav
-	// and adjust level
-	auto loopLength = _loopLength.load(std::memory_order_relaxed);
-	auto playState = _playState.load(std::memory_order_relaxed);
-	if (0 == loopLength)
-	{
-		_mixer->UpdateVu(0.0f, numSamps);
-		ClearRecordedPlaybackDelay();
-		return;
-	}
-
-	if (STATE_RECORDING == playState)
-		_mixer->Offset(numSamps);
-
-	// Read source data from BufferBank into stack-allocated temp buffer
+	base::PublishedAudioSnapshot<vst::VstChain>::Lease chainLease;
+	if (!usePreparedChain) chainLease = _vstChain.borrow();
+	auto* chain = usePreparedChain ? preparedChain : chainLease.get();
+	const auto count = std::min(numSamps, constants::MaxBlockSize);
+	if (!count) return;
+	const auto loopLength = _loopLength.load(std::memory_order_relaxed);
+	if (_playState.load(std::memory_order_relaxed) == STATE_RECORDING) _mixer->Offset(count);
 	float tempBuf[constants::MaxBlockSize];
-	auto sampsToWrite = ReadBlock(tempBuf, sampOffset, numSamps, bounceWriter ? nullptr : dac, trigger, delay, channel);
-	if (sampsToWrite == 0u && bounceWriter == nullptr)
-		ClearRecordedPlaybackDelay();
-
-	if (sampsToWrite > 0)
+	auto rendered = 0u;
+	const bool sourceResidual = sourceTrajectory && bounceWriter;
+	if (sourceResidual && loopLength)
 	{
-		auto chain = _vstChain.borrow();
-		if (chain && chain->IsActive())
-			chain->ProcessBlock(tempBuf, static_cast<int>(sampsToWrite));
-
-		// Only rendered playback is delayed; bounce and source capture keep
-		// their original sample coordinates.
-		if (bounceWriter == nullptr && _playbackDelay)
+		const auto state = _playState.load(std::memory_order_acquire);
+		if (state != STATE_PLAYING && state != STATE_PLAYINGRECORDING
+			&& state != STATE_OVERDUBBINGRECORDING && state != STATE_PUNCHEDIN) return;
+		rendered = (std::min)(count, static_cast<unsigned int>(sourceTrajectory->Positions.size()));
+		auto offset = PlaybackOffsetCursor(*this);
+		for (unsigned int frame = 0u; frame < rendered; ++frame)
 		{
-			if (IsMuted()) _playbackDelay->Clear();
-			else _playbackDelay->Process(tempBuf, sampsToWrite);
+			tempBuf[frame] = _ReadSourceBodySample(sourceTrajectory->BodyOrigin + sourceTrajectory->Positions[frame] - offset.Value, frame);
+			offset.Next();
 		}
-
-		// Route to destination via mixer or trigger
-		// (both ultimately call dest->OnBlockWriteChannel)
-		if (nullptr == bounceWriter)
-			_mixer->WriteBlock(dest, tempBuf, sampsToWrite);
-		else
-			bounceWriter->WriteBlock(dest, tempBuf, sampsToWrite, LoopChannel());
 	}
-	else
-		_mixer->UpdateVu(0.0f, numSamps);
+	else if (loopLength) rendered = ReadBlock(tempBuf, sampOffset, count,
+		bounceWriter ? nullptr : dac, trigger, delay, channel);
+	if (!rendered)
+	{
+		if (bounceWriter || !chain || !chain->IsActive())
+		{
+			_mixer->UpdateVu(0.0f, count);
+			ClearRecordedPlaybackDelay();
+			return;
+		}
+		std::fill_n(tempBuf, count, 0.0f);
+		rendered = count; // A generator/release/tail is independent of audio material.
+	}
+	// Compensate the material before instrument injection. Generated audio uses
+	// only its destination MIDI delay, so it is never delayed twice.
+	if (!bounceWriter && _playbackDelay)
+	{
+		if (IsMuted()) _playbackDelay->Clear();
+		else _playbackDelay->Process(tempBuf, rendered);
+	}
+	float drySource[constants::MaxBlockSize];
+	if (sourceResidual && bounceWriter) std::copy_n(tempBuf, rendered, drySource);
+	if (chain && chain->IsActive())
+	{
+		float instrumentScratch[constants::MaxBlockSize];
+		chain->ProcessRackMono(tempBuf, instrumentScratch, static_cast<int>(rendered), !bounceWriter);
+	}
+	if (sourceResidual && bounceWriter)
+		for (unsigned int frame = 0; frame < rendered; ++frame) tempBuf[frame] -= drySource[frame];
+	if (!bounceWriter) _mixer->WriteBlock(dest, tempBuf, rendered);
+	else bounceWriter->WriteBlock(dest, tempBuf, rendered, LoopChannel());
 }
 
 void Loop::EndMultiPlay(unsigned int numSamps)
 {
-	_CopyAudioSpectralSourceAtAudioBoundary();
-	_AdvanceAudioSpectralPlayback(numSamps);
+	_CopySpectralSourceAtAudioBoundary();
+	_AdvanceSpectralPlayback(numSamps);
 	auto playState = _playState.load(std::memory_order_relaxed);
 	auto loopLength = _loopLength.load(std::memory_order_relaxed);
 	auto isPlaying = (STATE_PLAYING == playState) ||
@@ -634,12 +1032,24 @@ void Loop::EndMultiPlay(unsigned int numSamps)
 	if (0 == loopLength)
 		return;
 		
-	auto playIndex = _playIndex.load(std::memory_order_relaxed) + numSamps;
+	_AdvancePlaybackOffset(numSamps);
 
-	auto bufSize = loopLength + constants::MaxLoopFadeSamps;
-	while (playIndex >= bufSize)
-		playIndex -= loopLength;
-	_playIndex.store(playIndex, std::memory_order_relaxed);
+    if (_playbackFraction == 0.0 && _playbackRateBlock.IsConstant()
+        && _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale == _recordingPlaybackRate)
+    {
+        auto index = static_cast<std::uint64_t>(_playIndex.load(std::memory_order_relaxed)) + numSamps;
+        const auto size = static_cast<std::uint64_t>(loopLength) + constants::MaxLoopFadeSamps;
+        if (index >= size) index = constants::MaxLoopFadeSamps + (index - constants::MaxLoopFadeSamps) % loopLength;
+        _playIndex.store(static_cast<unsigned long>(index), std::memory_order_relaxed);
+    }
+    else
+    {
+        const auto progress = _playbackFraction + _playbackRateBlock.Advance(numSamps, _recordingPlaybackRate);
+        const auto whole = std::floor(progress);
+        _playbackFraction = progress - whole;
+        const auto body = (static_cast<std::uint64_t>(BodyPlayIndex()) + static_cast<std::uint64_t>(whole)) % loopLength;
+        _playIndex.store(constants::MaxLoopFadeSamps + static_cast<unsigned long>(body), std::memory_order_relaxed);
+    }
 
 	for (unsigned int chan = 0; chan < NumOutputChannels(Audible::AUDIOSOURCE_LOOPS); chan++)
 	{
@@ -732,19 +1142,31 @@ io::JamFile::Loop Loop::ToJamFile(const std::string& wavFilename) const
 
 	io::JamFile::Loop loop;
 	loop.Name = wavFilename;
+	loop.AllowedMidiChannels = _allowedMidiChannels;
+	loop.MidiChannelRoutes = _midiChannelRoutes;
 	loop.Id = _loopParams.Id;
 	loop.Channel = _loopParams.Channel;
 	loop.Length = loopLength;
 	loop.Index = (playIndex >= constants::MaxLoopFadeSamps) ?
 		(playIndex - constants::MaxLoopFadeSamps) :
 		0ul;
-	loop.BodyPlayIndex = BodyPlayIndex();
+	// Files store the requested SHFT. Compensate the saved base for the
+	// correction still in flight so cold loading preserves the audible phase.
+	if (loopLength)
+	{
+		auto body = std::fmod(FractionalBodyPlayIndex() + TotalPlaybackOffsetSamps()
+			- AppliedPlaybackOffsetSamps(), static_cast<double>(loopLength));
+		if (body < 0.0) body += loopLength;
+		loop.BodyPlayIndex = static_cast<unsigned long>(std::floor(body));
+	}
+	else loop.BodyPlayIndex = BodyPlayIndex();
+	loop.PlaybackOffsetSamps = PlaybackOffsetSamps();
 	loop.MasterLoopCount = 0;
 	loop.Level = _mixer->UnmutedLevel();
 	loop.Speed = _pitch;
 	loop.MuteGroups = 0;
 	loop.SelectGroups = 0;
-	loop.Muted = IsMuted();
+	loop.Muted = IsUserOrSourceMuted(); // Parent intent is saved once on Station.
 
 	auto params = _mixer->GetBehaviourParams();
 	if (auto* wire = std::get_if<audio::WireMixBehaviourParams>(&params))
@@ -878,6 +1300,22 @@ void Loop::Record()
 	_playState.store(STATE_RECORDING, std::memory_order_release);
 }
 
+bool Loop::CanSetLogicalLengthAtAudioBoundary(unsigned long length) const noexcept
+{
+	return length > 0ul && length <= PhysicalLoopLength()
+		&& _playState.load(std::memory_order_acquire) == STATE_PLAYING
+		&& !_isPunchInActive.load(std::memory_order_acquire);
+}
+
+void Loop::SetLogicalLengthAtAudioBoundary(unsigned long length) noexcept
+{
+	const auto phase = BodyPlayIndex();
+	if (_loopLength.load(std::memory_order_relaxed) != length) _InvalidateAudioSource();
+	_loopLength.store(length, std::memory_order_relaxed);
+	SetBodyPlayIndex(phase % length);
+	InvalidateSceneAnchor();
+}
+
 void Loop::Play(unsigned long index,
 	unsigned long loopLength,
 	bool continueRecording)
@@ -901,6 +1339,7 @@ void Loop::Play(unsigned long index,
 	auto effectiveBufSize = std::min(logicalBufSize, physBufSize);
 	_playIndex.store(_triggerCapture ? index :
 		((effectiveBufSize > 0 && index >= effectiveBufSize) ? (effectiveBufSize - 1) : index), std::memory_order_relaxed);
+	_playbackFraction = 0.0;
 	if (_loopLength.load(std::memory_order_relaxed) != loopLength)
 		_InvalidateAudioSource();
 	_loopLength.store(loopLength, std::memory_order_relaxed);
@@ -932,9 +1371,21 @@ void Loop::Reset()
 	_isPunchInActive.store(false, std::memory_order_relaxed);
 
 	_triggerCapture = false;
+	_captureRateHistory = nullptr;
+	_captureSource = nullptr;
+	_captureInputHistory = {};
+	for (auto& queue : _captureQueues) queue.First = queue.Count = 0u;
+	_captureResidualStart.reset();
+	_captureResidualEnd = 0;
+	_captureInterpolation = {};
 	_writeIndex.store(0ul, std::memory_order_relaxed);
 	_playIndex.store(0ul, std::memory_order_relaxed);
 	_loopLength.store(0ul, std::memory_order_relaxed);
+	_playbackFraction = 0.0;
+	_playbackOffsetInitialised = false;
+	_playbackOffsetPublished.store(false, std::memory_order_release);
+	_playbackRateBlock = {};
+	_recordingPlaybackRate = 1.0;
 	_playState.store(STATE_INACTIVE, std::memory_order_release);
 	_mixer->UnMute();
 	_mixer->SetUnmutedLevel(AudioMixer::DefaultLevel);
@@ -960,9 +1411,15 @@ void Loop::RefreshVisualModel()
 	_UpdateLoopModel();
 }
 
+bool Loop::CanUseAsTimingReference() const noexcept
+{
+    return _playState.load(std::memory_order_acquire)==STATE_PLAYING && !_isPunchInActive.load(std::memory_order_acquire) &&
+        LoopLength()>0ul && LoopLength()<=PhysicalLoopLength();
+}
+
 bool Loop::CanEditAudioSource() const noexcept
 {
-	if (!SupportsAudioSpectralEditing()
+	if (!SupportsSpectralEditing()
 		|| _playState.load(std::memory_order_acquire) != STATE_PLAYING
 		|| _isPunchInActive.load(std::memory_order_acquire))
 		return false;
@@ -971,7 +1428,7 @@ bool Loop::CanEditAudioSource() const noexcept
 	return length > 0ul && length <= PhysicalLoopLength();
 }
 
-spectral::AudioSpectralSourceLayout Loop::_AudioSpectralSourceLayout() const noexcept
+spectral::SpectralSourceLayout Loop::_SpectralSourceLayout() const noexcept
 {
 	return { _loopLength.load(std::memory_order_relaxed), PhysicalLoopLength(),
 		_hanning->Size(), _sampleRate.load(std::memory_order_relaxed) };
@@ -989,32 +1446,34 @@ void Loop::SetSampleRate(float sampleRate)
 	if (_sampleRate.load(std::memory_order_relaxed) != sampleRate)
 		_InvalidateAudioSource();
 	_sampleRate.store(sampleRate, std::memory_order_relaxed);
+	if (std::isfinite(sampleRate) && sampleRate > 0.0f)
+		_playbackOffsetDamping = 1.0 / -std::expm1(-1.0 / (sampleRate * 0.010));
 }
 
-std::shared_ptr<spectral::AudioSpectralSourceCapture> Loop::RequestAudioSpectralSource(std::string& reason,
-    const std::shared_ptr<spectral::AudioSpectralResourceBudget>& budget, const spectral::AudioSpectralSourceLayout* retainedLayout)
+std::shared_ptr<spectral::SpectralSourceCapture> Loop::RequestSpectralSource(std::string& reason,
+    const std::shared_ptr<spectral::SpectralResourceBudget>& budget, const spectral::SpectralSourceLayout* retainedLayout)
 {
 	reason.clear();
-	CancelAudioSpectralSourceCapture();
+	CancelSpectralSourceCapture();
 	if (!CanEditAudioSource())
 	{
 		reason = "Finish recording or punch before editing";
 		return nullptr;
 	}
 	const auto generation = _audioSourceGeneration.load(std::memory_order_acquire);
-	const auto layout = _AudioSpectralSourceLayout();
+	const auto layout = _SpectralSourceLayout();
 	if (!layout.IsValid())
 	{
 		reason = "Audio source layout is unavailable";
 		return nullptr;
 	}
 	if (static_cast<std::uint64_t>(layout.StoredSampleCount()) * sizeof(float)
-		> spectral::AudioSpectralSourceCapture::MaxSourceBytes)
+		> spectral::SpectralSourceCapture::MaxSourceBytes)
 	{
 		reason = "Audio source exceeds the editor memory budget";
 		return nullptr;
 	}
-	std::shared_ptr<const spectral::AudioSpectralResourceBudget::Reservation> resources;
+	std::shared_ptr<const spectral::SpectralResourceBudget::Reservation> resources;
     auto admissionLayout = layout;
     if (retainedLayout)
     {
@@ -1022,13 +1481,13 @@ std::shared_ptr<spectral::AudioSpectralSourceCapture> Loop::RequestAudioSpectral
         admissionLayout.PhysicalLength = (std::max)(admissionLayout.PhysicalLength, retainedLayout->PhysicalLength);
         admissionLayout.FadeSamps = (std::max)(admissionLayout.FadeSamps, retainedLayout->FadeSamps);
     }
-    spectral::AudioSpectralTransformConfig transform;
-    if (!spectral::AudioSpectralDsp::SelectTransform(admissionLayout, budget, transform, resources, reason))
+    spectral::SpectralTransformConfig transform;
+    if (!spectral::SpectralDsp::SelectTransform(admissionLayout, budget, transform, resources, reason))
         return nullptr;
-    std::shared_ptr<spectral::AudioSpectralSourceCapture> request;
+    std::shared_ptr<spectral::SpectralSourceCapture> request;
 	try
 	{
-		request = std::make_shared<spectral::AudioSpectralSourceCapture>(layout,
+		request = std::make_shared<spectral::SpectralSourceCapture>(layout,
 			generation, _audioSourceIdentity, std::move(resources), transform);
 	}
 	catch (const std::bad_alloc&)
@@ -1043,7 +1502,7 @@ std::shared_ptr<spectral::AudioSpectralSourceCapture> Loop::RequestAudioSpectral
 	return request;
 }
 
-void Loop::CancelAudioSpectralSourceCapture()
+void Loop::CancelSpectralSourceCapture()
 {
 	std::scoped_lock lock(_audioSourcePublicationMutex);
 	if (const auto request = _audioSourceCapture.load())
@@ -1055,26 +1514,26 @@ void Loop::CancelAudioSpectralSourceCapture()
 std::size_t Loop::_CollectAudioSourceCaptures()
 {
 	std::scoped_lock lock(_audioSourcePublicationMutex);
-	const auto edit = _audioSpectralEdit.load(std::memory_order_acquire);
+	const auto edit = _spectralEdit.load(std::memory_order_acquire);
 	if (edit && edit->Source->Generation != AudioSourceGeneration())
-		_audioSpectralEdit.store(nullptr, std::memory_order_release);
-	const auto playback = _audioSpectralPlayback.load();
+		_spectralEdit.store(nullptr, std::memory_order_release);
+	const auto playback = _spectralPlayback.load();
 	if (playback && playback->Source().Generation != AudioSourceGeneration())
-		_audioSpectralPlayback.store(nullptr);
-	return _audioSourceCapture.collect() + _audioSpectralPlayback.collect();
+		_spectralPlayback.store(nullptr);
+	return _audioSourceCapture.collect() + _spectralPlayback.collect();
 }
 
-bool Loop::PublishAudioSpectralEdit(
-	std::shared_ptr<const spectral::AudioSpectralEditState> state, std::string& reason)
+bool Loop::PublishSpectralEdit(
+	std::shared_ptr<const spectral::SpectralEditState> state, std::string& reason)
 {
 	reason.clear();
-	if (!state || !IsCurrentAudioSpectralSource(*state->Source))
+	if (!state || !IsCurrentSpectralSource(*state->Source))
 	{
 		reason = "Audio edit belongs to an obsolete or unavailable source";
 		return false;
 	}
 	std::scoped_lock lock(_audioSourcePublicationMutex);
-	const auto current = _audioSpectralEdit.load(std::memory_order_acquire);
+	const auto current = _spectralEdit.load(std::memory_order_acquire);
 	if (current && current->Source->Generation == state->Source->Generation)
 	{
 		if (state->Revision <= current->Revision || state->Transform != current->Transform
@@ -1087,39 +1546,39 @@ bool Loop::PublishAudioSpectralEdit(
 			return false;
 		}
 	}
-	if (!IsCurrentAudioSpectralSource(*state->Source))
+	if (!IsCurrentSpectralSource(*state->Source))
 	{
 		reason = "Audio source changed before edit publication";
 		return false;
 	}
-	_audioSpectralEdit.store(std::move(state), std::memory_order_release);
+	_spectralEdit.store(std::move(state), std::memory_order_release);
 	_changesMade = true;
 	return true;
 }
 
-std::shared_ptr<const spectral::AudioSpectralEditState> Loop::AudioSpectralEdit() const
+std::shared_ptr<const spectral::SpectralEditState> Loop::SpectralEdit() const
 {
-	const auto state = _audioSpectralEdit.load(std::memory_order_acquire);
-	return state && IsCurrentAudioSpectralSource(*state->Source) ? state : nullptr;
+	const auto state = _spectralEdit.load(std::memory_order_acquire);
+	return state && IsCurrentSpectralSource(*state->Source) ? state : nullptr;
 }
 
-bool Loop::PublishAudioSpectralPlayback(
-	std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot> snapshot, std::string& reason)
+bool Loop::PublishSpectralPlayback(
+	std::shared_ptr<const spectral::SpectralPlaybackSnapshot> snapshot, std::string& reason)
 {
 	reason.clear();
-	if (!snapshot || !IsCurrentAudioSpectralSource(snapshot->Source()))
+	if (!snapshot || !IsCurrentSpectralSource(snapshot->Source()))
 	{
 		reason = "Edited playback belongs to an obsolete or unavailable source";
 		return false;
 	}
 	std::scoped_lock lock(_audioSourcePublicationMutex);
-	if (snapshot->Source().Generation == _minimumAudioSpectralGeneration.load(std::memory_order_acquire)
-        && snapshot->SpectralRevision < _minimumAudioSpectralRevision.load(std::memory_order_acquire))
+	if (snapshot->Source().Generation == _minimumSpectralGeneration.load(std::memory_order_acquire)
+        && snapshot->SpectralRevision < _minimumSpectralRevision.load(std::memory_order_acquire))
 	{
 		reason = "Edited playback was superseded by Undo or stroke cancellation";
 		return false;
 	}
-	const auto committed = _audioSpectralEdit.load(std::memory_order_acquire);
+	const auto committed = _spectralEdit.load(std::memory_order_acquire);
 	if (committed && committed->Source->Generation == snapshot->Source().Generation
 		&& (snapshot->EnvelopeRevision != committed->EnvelopeRevision
 			|| (snapshot->Pcm->EnvelopeComposed
@@ -1132,7 +1591,7 @@ bool Loop::PublishAudioSpectralPlayback(
 		reason = "Edited playback must be composed with the newest broadband envelope";
 		return false;
 	}
-	const auto current = _audioSpectralPlayback.load();
+	const auto current = _spectralPlayback.load();
 	if (current && current->Source().Generation == snapshot->Source().Generation)
 	{
 		if (snapshot->Revision <= current->Revision
@@ -1150,38 +1609,38 @@ bool Loop::PublishAudioSpectralPlayback(
 	}
 	// A writer can invalidate after this check. The callback independently checks
 	// generation before using/adopting a snapshot; punch never takes this mutex.
-	if (!IsCurrentAudioSpectralSource(snapshot->Source()))
+	if (!IsCurrentSpectralSource(snapshot->Source()))
 	{
 		reason = "Audio source changed before edited playback publication";
 		return false;
 	}
-	_audioSpectralPlayback.store(std::move(snapshot));
+	_spectralPlayback.store(std::move(snapshot));
 	_changesMade = true;
 	return true;
 }
 
-void Loop::InvalidateAudioSpectralResultsBefore(std::uint64_t spectralRevision,
+void Loop::InvalidateSpectralResultsBefore(std::uint64_t spectralRevision,
     std::uint64_t expectedGeneration)
 {
 	// Serialize against the final publication check, without involving the audio
 	// callback. Callback adoption only reads the scalar floor.
 	std::scoped_lock lock(_audioSourcePublicationMutex);
 	if (expectedGeneration != AudioSourceGeneration()) return;
-    const auto floor = expectedGeneration == _minimumAudioSpectralGeneration.load(std::memory_order_relaxed)
-        ? _minimumAudioSpectralRevision.load(std::memory_order_relaxed) : 0u;
-	_minimumAudioSpectralRevision.store((std::max)(floor, spectralRevision), std::memory_order_release);
+    const auto floor = expectedGeneration == _minimumSpectralGeneration.load(std::memory_order_relaxed)
+        ? _minimumSpectralRevision.load(std::memory_order_relaxed) : 0u;
+	_minimumSpectralRevision.store((std::max)(floor, spectralRevision), std::memory_order_release);
     // Tag protects a new source if punch invalidates during this method.
-    _minimumAudioSpectralGeneration.store(expectedGeneration, std::memory_order_release);
+    _minimumSpectralGeneration.store(expectedGeneration, std::memory_order_release);
 }
 
-std::shared_ptr<const spectral::AudioSpectralPlaybackSnapshot> Loop::AudioSpectralPlayback() const
+std::shared_ptr<const spectral::SpectralPlaybackSnapshot> Loop::SpectralPlayback() const
 {
-	const auto snapshot = _audioSpectralPlayback.load();
-	return snapshot && IsCurrentAudioSpectralSource(snapshot->Source()) ? snapshot : nullptr;
+	const auto snapshot = _spectralPlayback.load();
+	return snapshot && IsCurrentSpectralSource(snapshot->Source()) ? snapshot : nullptr;
 }
 
-std::vector<float> Loop::ExportAudioSpectralSamples(
-	const spectral::AudioSpectralPlaybackSnapshot& snapshot, bool retainPhysicalTail)
+std::vector<float> Loop::ExportSpectralSamples(
+	const spectral::SpectralPlaybackSnapshot& snapshot, bool retainPhysicalTail)
 {
 	const auto& layout = snapshot.Source().Layout;
 	const auto length = retainPhysicalTail ? layout.PhysicalLength : layout.LogicalLength;
@@ -1191,76 +1650,76 @@ std::vector<float> Loop::ExportAudioSpectralSamples(
 	return output;
 }
 
-void Loop::_AdvanceAudioSpectralPlayback(unsigned int numSamps) noexcept
+void Loop::_AdvanceSpectralPlayback(unsigned int numSamps) noexcept
 {
 	const auto generation = _audioSourceGeneration.load(std::memory_order_acquire);
-	if (_activeAudioSpectral && _activeAudioSpectral->Source().Generation != generation)
+	if (_activeSpectral && _activeSpectral->Source().Generation != generation)
 	{
-		_previousAudioSpectral.reset();
-		_activeAudioSpectral.reset();
-		_audioSpectralTransitionSamps = 0u;
-		_audioSpectralTransitionProgress = 0u;
-		_appliedAudioSpectralRevision.store(0u, std::memory_order_release);
+		_previousSpectral.reset();
+		_activeSpectral.reset();
+		_spectralTransitionSamps = 0u;
+		_spectralTransitionProgress = 0u;
+		_appliedSpectralRevision.store(0u, std::memory_order_release);
 	}
-	if (_audioSpectralTransitionSamps != 0u)
+	if (_spectralTransitionSamps != 0u)
 	{
-		const auto remaining = _audioSpectralTransitionSamps - _audioSpectralTransitionProgress;
-		_audioSpectralTransitionProgress += (std::min)(remaining, numSamps);
-		if (_audioSpectralTransitionProgress < _audioSpectralTransitionSamps) return;
-		_previousAudioSpectral.reset();
-		_audioSpectralTransitionSamps = 0u;
+		const auto remaining = _spectralTransitionSamps - _spectralTransitionProgress;
+		_spectralTransitionProgress += (std::min)(remaining, numSamps);
+		if (_spectralTransitionProgress < _spectralTransitionSamps) return;
+		_previousSpectral.reset();
+		_spectralTransitionSamps = 0u;
 	}
-	auto pending = _audioSpectralPlayback.borrow();
+	auto pending = _spectralPlayback.borrow();
 	if (!pending || pending->Source().Generation != generation || !CanEditAudioSource()
-		|| (pending->Source().Generation == _minimumAudioSpectralGeneration.load(std::memory_order_acquire)
-            && pending->SpectralRevision < _minimumAudioSpectralRevision.load(std::memory_order_acquire))
-		|| (_activeAudioSpectral && pending->Revision <= _activeAudioSpectral->Revision))
+		|| (pending->Source().Generation == _minimumSpectralGeneration.load(std::memory_order_acquire)
+            && pending->SpectralRevision < _minimumSpectralRevision.load(std::memory_order_acquire))
+		|| (_activeSpectral && pending->Revision <= _activeSpectral->Revision))
 		return;
-	_previousAudioSpectral = std::move(_activeAudioSpectral);
-	_activeAudioSpectral = std::move(pending);
-	_audioSpectralTransitionProgress = 0u;
-	_audioSpectralTransitionSamps = static_cast<unsigned int>(std::clamp(
-		static_cast<double>(_activeAudioSpectral->Source().Layout.SampleRate)
-			* spectral::AudioSpectralConfig::PlaybackTransitionSeconds,
-		1.0, static_cast<double>(spectral::AudioSpectralConfig::MaxPlaybackTransitionSamps)));
-	_appliedAudioSpectralRevision.store(_activeAudioSpectral->Revision, std::memory_order_release);
+	_previousSpectral = std::move(_activeSpectral);
+	_activeSpectral = std::move(pending);
+	_spectralTransitionProgress = 0u;
+	_spectralTransitionSamps = static_cast<unsigned int>(std::clamp(
+		static_cast<double>(_activeSpectral->Source().Layout.SampleRate)
+			* spectral::SpectralConfig::PlaybackTransitionSeconds,
+		1.0, static_cast<double>(spectral::SpectralConfig::MaxPlaybackTransitionSamps)));
+	_appliedSpectralRevision.store(_activeSpectral->Revision, std::memory_order_release);
 	// Releasing a Lease only clears its scalar hazard. Publisher retains ownership
 	// and CommitChanges collects off audio after the transition/read has ended.
 }
 
-float Loop::_ReadAudioSpectralSample(unsigned long storageIndex,
+float Loop::_ReadSpectralSample(unsigned long storageIndex,
 	unsigned int blockOffset, std::uint64_t generation) const noexcept
 {
 	const auto original = [this, storageIndex]() noexcept
 	{
 		return _bufferBank[storageIndex]; // ReadBlock already bounds the body index.
 	};
-	if (!_activeAudioSpectral || _activeAudioSpectral->Source().Generation != generation)
+	if (!_activeSpectral || _activeSpectral->Source().Generation != generation)
 		return original();
-	const auto current = _activeAudioSpectral->SampleAt(storageIndex);
-	if (_audioSpectralTransitionSamps == 0u
-		|| (_activeAudioSpectral->UsesOriginal()
-			&& (!_previousAudioSpectral || _previousAudioSpectral->UsesOriginal()))) return current;
-	const auto position = static_cast<std::uint64_t>(_audioSpectralTransitionProgress) + blockOffset;
-	if (position >= _audioSpectralTransitionSamps) return current;
-	const auto previous = _previousAudioSpectral ? _previousAudioSpectral->SampleAt(storageIndex) : original();
-	const auto weight = static_cast<double>(position) / _audioSpectralTransitionSamps;
+	const auto current = _activeSpectral->SampleAt(storageIndex);
+	if (_spectralTransitionSamps == 0u
+		|| (_activeSpectral->UsesOriginal()
+			&& (!_previousSpectral || _previousSpectral->UsesOriginal()))) return current;
+	const auto position = static_cast<std::uint64_t>(_spectralTransitionProgress) + blockOffset;
+	if (position >= _spectralTransitionSamps) return current;
+	const auto previous = _previousSpectral ? _previousSpectral->SampleAt(storageIndex) : original();
+	const auto weight = static_cast<double>(position) / _spectralTransitionSamps;
 	// Double convex sum avoids float subtraction overflow for opposite large peaks.
 	return static_cast<float>(static_cast<double>(previous) * (1.0 - weight) + current * weight);
 }
 
-bool Loop::IsCurrentAudioSpectralSource(const spectral::AudioSpectralSource& source) const noexcept
+bool Loop::IsCurrentSpectralSource(const spectral::SpectralSource& source) const noexcept
 {
 	return source.Identity.get() == _audioSourceIdentity.get()
 		&& source.Generation == _audioSourceGeneration.load(std::memory_order_acquire)
-		&& CanEditAudioSource() && source.Layout == _AudioSpectralSourceLayout();
+		&& CanEditAudioSource() && source.Layout == _SpectralSourceLayout();
 }
 
-void Loop::_CopyAudioSpectralSourceAtAudioBoundary() noexcept
+void Loop::_CopySpectralSourceAtAudioBoundary() noexcept
 {
 	auto request = _audioSourceCapture.borrow();
 	if (!request) return; // A bounded borrow failure simply retries on the next block.
-	request->CopyAtAudioBoundary(_bufferBank, _AudioSpectralSourceLayout(),
+	request->CopyAtAudioBoundary(_bufferBank, _SpectralSourceLayout(),
 		_audioSourceGeneration.load(std::memory_order_acquire), CanEditAudioSource());
 }
 
@@ -1281,9 +1740,12 @@ bool Loop::CanRefreshVisualModel() const noexcept
 	}
 }
 
-
 void Loop::ConfigureTriggerCapture(std::int64_t begin, bool requireAdc, bool requireBounce, bool requirePunchAdc) noexcept
 {
+	_captureInterpolation = {};
+	for (auto& queue : _captureQueues) queue.First = queue.Count = 0u;
+	_captureResidualStart.reset();
+	_captureResidualEnd = 0;
 	_triggerCaptureBegin = begin;
 	_triggerCaptureCoverageValid.store(true, std::memory_order_relaxed);
 	_triggerCaptureRequiresAdc = requireAdc;
@@ -1317,7 +1779,7 @@ bool Loop::CanUseTemporaryPlayback(unsigned long bodyPhase, unsigned int count) 
     const auto state = _playState.load(std::memory_order_acquire);
     if (!_triggerCapture || !_triggerCaptureRequiresAdc || _triggerCaptureRequiresBounce
         || !TriggerCaptureCoverageValid() || (state != STATE_PLAYINGRECORDING && state != STATE_PLAYING)
-        || _isPunchInActive.load(std::memory_order_acquire) || _activeAudioSpectral || _previousAudioSpectral)
+        || _isPunchInActive.load(std::memory_order_acquire) || _activeSpectral || _previousSpectral)
         return false;
 
     const auto length = _loopLength.load(std::memory_order_relaxed);
@@ -1407,9 +1869,14 @@ bool Loop::Mute()
 	return isNewState;
 }
 
-bool Loop::IsMuted() const
+bool Loop::IsUserOrSourceMuted() const noexcept
 {
 	return Tweakable::IsMuted() || _mixer->IsCaptureSourceMuted();
+}
+
+bool Loop::IsMuted() const
+{
+	return IsUserOrSourceMuted() || (_stationMuteControl && _stationMuteControl->load(std::memory_order_acquire));
 }
 
 void Loop::SetGroupMutedAudio(bool muted) noexcept
@@ -1423,6 +1890,11 @@ void Loop::SetCaptureSourceMuteControl(
 	const std::shared_ptr<const audio::CaptureSourceMuteControl>& control) noexcept
 {
 	_mixer->SetCaptureSourceMuteControl(control);
+}
+
+bool Loop::AllowReplacementPlayback() noexcept
+{
+	return _mixer && _mixer->AllowReplacementPlayback();
 }
 
 bool Loop::UnMute()
@@ -1560,7 +2032,7 @@ void Loop::_ForceUpdateLoopModel()
 
 	auto radius = (float)(CalcDrawRadius(displayLength) * _DrawRadiusScale());
 	if (!isRecording)
-		if (const auto edited = AudioSpectralPlayback())
+		if (const auto edited = SpectralPlayback())
 		{
 			_model->UpdateEditedModel(edited, radius);
 			_vu->UpdateModel(radius);
@@ -1581,9 +2053,13 @@ void Loop::_ApplyLoopVisualModel(const BufferBank& buffer,
 	_vu->UpdateModel(radius);
 }
 
-void Loop::LoadVstPlugin(std::wstring path,
+std::string Loop::LoadVstPlugin(std::wstring path,
 	std::vector<std::uint8_t> initialState)
 {
+	{
+		std::lock_guard<std::mutex> lock(_vstPathsMutex);
+		if (_vstSavedEntries.size() + _vstJobsPending.load(std::memory_order_acquire) >= 32u) return {};
+	}
 	JobAction job;
 	job.JobActionType = JobAction::JOB_LOADVST;
 	job.VstPath = std::move(path);
@@ -1591,7 +2067,9 @@ void Loop::LoadVstPlugin(std::wstring path,
 	job.VstIdentity = utils::GetGuid();
 	_pendingVstLoads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
+	++_rackRevision;
 	_changesMade = true;
+	return _pendingVstLoads.back().VstIdentity;
 }
 
 vst::VstRackSlot Loop::GetVstRackSlot() const
@@ -1610,12 +2088,15 @@ vst::VstRackSlot Loop::GetVstRackSlot() const
 	return slot;
 }
 
-bool Loop::LoadManagedVstPlugin(std::wstring path)
+bool Loop::LoadManagedVstPlugin(std::wstring path, const std::string& identity)
 {
-	const auto slot = GetVstRackSlot();
-	if (slot.Pending || slot.Plugin || path.empty()) return false;
-	LoadVstPlugin(std::move(path));
-	_pendingVstLoads.back().VstManaged = true;
+	auto slots = GetVstRackSlots();
+	const auto found = identity.empty() ? slots.begin() : std::find_if(slots.begin(), slots.end(), [&](const auto& slot) { return slot.Identity == identity; });
+	if (path.empty() || (!identity.empty() && found == slots.end())) return false;
+	if (found != slots.end() && (found->Pending || found->Plugin)) return false;
+	if (LoadVstPlugin(std::move(path)).empty()) return false;
+	_pendingVstLoads.back().VstManaged = found != slots.end();
+	if (found != slots.end() && !identity.empty()) _pendingVstLoads.back().VstIdentity = found->Identity;
 	return true;
 }
 
@@ -1662,6 +2143,7 @@ bool Loop::LoadVstPluginSynchronously(const std::wstring& path,
 	saved.Bypass = bypass;
 	saved.State = io::JamFile::VstEntry::EncodeState(initialState);
 	_vstSavedEntries.push_back(std::move(saved));
+	++_rackRevision;
 	return loaded;
 }
 
@@ -1677,6 +2159,7 @@ void Loop::UnloadVstPlugin(size_t index)
 	}
 	_pendingVstUnloads.push_back(std::move(job));
 	_vstJobsPending.fetch_add(1u, std::memory_order_release);
+	++_rackRevision;
 	_changesMade = true;
 }
 
@@ -1706,7 +2189,7 @@ std::vector<JobAction> Loop::_CommitChanges()
 	// Keep the acquired immutable value through overview upload preparation; a
 	// source invalidation here must never make this path fall back to bank reads.
 	if (_visualUpdatesEnabled)
-		if (const auto playback = AudioSpectralPlayback())
+		if (const auto playback = SpectralPlayback())
 		{
 			const auto radius = static_cast<float>(CalcDrawRadius(playback->Source().Layout.LogicalLength) * _DrawRadiusScale());
 			_model->UpdateEditedModel(playback, radius);
@@ -1716,13 +2199,19 @@ std::vector<JobAction> Loop::_CommitChanges()
 		_changesMade = true;
 	_vstChain.collect();
 
+	bool vstTopologyChanged = false;
 	// Swap in a new VST chain when the job thread has delivered one.
 	if (_flipVstChain.load(std::memory_order_acquire))
 	{
 		std::lock_guard<std::mutex> lock(_vstPathsMutex);
 		_flipVstChain.store(false, std::memory_order_release);
+		for (auto& route : _midiChannelRoutes)
+			for (const auto& identity : _pendingDeletedVstRouteIds) std::erase(route.PluginIds, identity);
+		_pendingDeletedVstRouteIds.clear();
 		_vstChain.store(_backVstChain, std::memory_order_release);
+		vstTopologyChanged = true;
 	}
+	if (vstTopologyChanged && _automationTopologyChanged) _automationTopologyChanged();
 
 	std::vector<JobAction> jobs;
 
@@ -1771,11 +2260,15 @@ ActionResult Loop::OnAction(JobAction action)
 			saved.Id = action.VstIdentity;
 			saved.Path = utils::EncodeUtf8(action.VstPath);
 			saved.State = io::JamFile::VstEntry::EncodeState(action.VstInitialState);
-			if (action.VstManaged && !_vstSavedEntries.empty() && !replacement->GetPlugin(0u))
+			auto retry = std::find_if(_vstSavedEntries.begin(), _vstSavedEntries.end(), [&](const auto& entry) { return entry.Id == action.VstIdentity; });
+			// Legacy single-slot requests choose a replacement identity; row requests retain their exact ID.
+			if (action.VstManaged && retry == _vstSavedEntries.end() && !_vstSavedEntries.empty() && !replacement->GetPlugin(0u)) retry = _vstSavedEntries.begin();
+			if (action.VstManaged && retry != _vstSavedEntries.end())
 			{
-				replacement->ReplaceSlot(0u, std::move(plugin));
-				_vstPluginPaths.front() = action.VstPath;
-				_vstSavedEntries.front() = std::move(saved);
+				const auto index = static_cast<std::size_t>(retry - _vstSavedEntries.begin());
+				replacement->ReplaceSlot(index, std::move(plugin));
+				_vstPluginPaths[index] = action.VstPath;
+				*retry = std::move(saved);
 			}
 			else
 			{
@@ -1784,6 +2277,7 @@ ActionResult Loop::OnAction(JobAction action)
 				_vstSavedEntries.push_back(std::move(saved));
 			}
 			_backVstChain = std::move(replacement);
+			++_rackRevision;
 			_flipVstChain.store(true, std::memory_order_release);
 		}
 		if (_vstJobsPending.load(std::memory_order_acquire) != 0u) _vstJobsPending.fetch_sub(1u, std::memory_order_release);
@@ -1812,8 +2306,10 @@ ActionResult Loop::OnAction(JobAction action)
 					else replacement->AddSlot(std::move(existing));
 				}
 				_vstPluginPaths.erase(_vstPluginPaths.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+				_pendingDeletedVstRouteIds.push_back(_vstSavedEntries[removeIndex].Id);
 				_vstSavedEntries.erase(_vstSavedEntries.begin() + static_cast<std::ptrdiff_t>(removeIndex));
 				_backVstChain = std::move(replacement);
+			++_rackRevision;
 				_flipVstChain.store(true, std::memory_order_release);
 			}
 		}
@@ -1829,4 +2325,208 @@ ActionResult Loop::OnAction(JobAction action)
 	}
 
 	return ActionResult::NoAction();
+}
+
+void Loop::SetPickerLayoutHeight(float availableHeight) noexcept
+{
+	if (_model)
+		_model->SetPickerHalfHeight(LoopModel::PickerLocalHalfHeight(availableHeight,
+			static_cast<float>(ModelScale())));
+}
+
+std::vector<vst::VstRackSlot> Loop::GetVstRackSlots(std::size_t offset) const
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+	std::vector<vst::VstRackSlot> result;
+	for (auto i = std::min(offset, _vstSavedEntries.size()); i < _vstSavedEntries.size() && result.size() < 32u; ++i)
+	{
+		vst::VstRackSlot slot;
+		slot.Identity = _vstSavedEntries[i].Id;
+		slot.Path = utils::DecodeUtf8(_vstSavedEntries[i].Path);
+		slot.Plugin = chain ? chain->GetPlugin(i) : nullptr;
+		slot.Pending = _vstJobsPending.load(std::memory_order_acquire) != 0u || _flipVstChain.load(std::memory_order_acquire);
+		slot.Failed = !slot.Plugin && !slot.Pending;
+		result.push_back(std::move(slot));
+	}
+	return result;
+}
+
+bool Loop::MoveVstSlot(const vst::RackMove& move)
+{
+	std::lock_guard<std::mutex> lock(_vstPathsMutex);
+	if (_vstJobsPending.load(std::memory_order_acquire) != 0u
+		|| !move.Valid(vst::RackMove::Scope::Loop, Id(), RackRevision(), _vstSavedEntries)) return false;
+	const auto chain = _flipVstChain.load(std::memory_order_acquire) ? _backVstChain : _vstChain.load(std::memory_order_acquire);
+	auto replacement = move.Stage(chain, _vstSavedEntries, _vstPluginPaths);
+	if (!replacement) return false;
+	_backVstChain = std::move(replacement);
+	++_rackRevision;
+	_flipVstChain.store(true, std::memory_order_release);
+	_changesMade = true;
+	return true;
+}
+
+unsigned long engine::Loop::OffsetBodyIndex(unsigned long phase, unsigned long length, std::int64_t offset) noexcept
+{
+	if (!length) return 0ul;
+	auto shifted = (static_cast<long long>(phase % length) - static_cast<long long>(offset)) % static_cast<long long>(length);
+	if (shifted < 0) shifted += length;
+	return static_cast<unsigned long>(shifted);
+}
+unsigned long engine::Loop::PlaybackBodyIndex() const noexcept
+{
+	return OffsetBodyIndex(BodyPlayIndex(), LoopLength(),
+		static_cast<std::int64_t>(std::llround(AppliedPlaybackOffsetSamps())));
+}
+
+// The trajectory is prepared/consumed once at the existing audio advancement boundary.
+void engine::Loop::AdoptInheritedPlaybackOffsetAtAudioBoundary() noexcept
+{
+    if (!LoopLength()) { SetInheritedPlaybackOffsetSamps(0); return; }
+    _InitialisePlaybackOffset();
+    _PreparePlaybackOffsetTarget();
+    const auto inherited = _inheritedOffsetTarget;
+    ShiftPlayIndex(-static_cast<std::int64_t>(inherited));
+    _playbackOffsetStart -= inherited;
+    _playbackOffsetEnd -= inherited;
+    _inheritedOffsetTarget = 0;
+    _inheritedPlaybackOffsetSamps.store(0, std::memory_order_relaxed);
+    _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
+}
+
+double engine::Loop::_NextPlaybackOffset(double value, double baseIncrement, double sharedCorrection) const noexcept
+{
+    return PlaybackOffsetCursor::NextValue(value, _playbackOffsetEnd, _playbackOffsetDamping, baseIncrement, sharedCorrection);
+}
+
+engine::Loop::PlaybackOffsetCursor::PlaybackOffsetCursor(const Loop& loop) noexcept :
+    Value(loop._playbackOffsetStart), Target(loop._playbackOffsetEnd), Damping(loop._playbackOffsetDamping),
+    RecordingRate(loop._recordingPlaybackRate),
+    ConstantIncrement(loop._playbackRateBlock.InitialRate * loop._playbackRateBlock.SourceScale / loop._recordingPlaybackRate),
+    ConstantRate(loop._playbackRateBlock.IsConstant()), Rate(loop._playbackRateBlock.Cursor())
+{
+}
+
+double engine::Loop::PlaybackOffsetCursor::Next() noexcept
+{
+    if (Value == Target) return Value;
+    if (!ConstantRate) Rate.Next();
+    Value = NextValue(Value, Target, Damping,
+        ConstantRate ? ConstantIncrement : Rate.BaseIncrement() / RecordingRate,
+        ConstantRate ? 0.0 : Rate.Correction() / RecordingRate);
+    return Value;
+}
+
+double engine::Loop::PlaybackOffsetCursor::NextValue(double value, double target, double damping,
+    double baseIncrement, double sharedCorrection) noexcept
+{
+    const auto error = target - value;
+    const auto limit = (std::max)(0.0, 0.25 * baseIncrement - std::abs(sharedCorrection));
+    if (std::abs(error) <= 1e-6 && std::abs(error) <= limit) return target;
+    const auto next = value + std::clamp(error / damping, -limit, limit);
+    // Large persisted signed SHFT values can exhaust double precision before
+    // the absolute tolerance. Finish only if the remainder fits this frame's budget.
+    return next == value && std::abs(error) <= limit ? target : next;
+}
+void engine::Loop::_AdvancePlaybackOffset(unsigned int numSamps) noexcept
+{
+    static_assert(std::atomic<double>::is_always_lock_free);
+    _InitialisePlaybackOffset();
+    if (_playbackOffsetStart != _playbackOffsetEnd)
+    {
+        auto rate = _playbackRateBlock.Cursor();
+        const bool constantRate = _playbackRateBlock.IsConstant();
+        const auto constantIncrement = _playbackRateBlock.InitialRate * _playbackRateBlock.SourceScale / _recordingPlaybackRate;
+        for (unsigned int frame = 0; frame < numSamps && _playbackOffsetStart != _playbackOffsetEnd; ++frame)
+        {
+            if (!constantRate) rate.Next();
+            _playbackOffsetStart = _NextPlaybackOffset(_playbackOffsetStart,
+                constantRate ? constantIncrement : rate.BaseIncrement() / _recordingPlaybackRate,
+                constantRate ? 0.0 : rate.Correction() / _recordingPlaybackRate);
+        }
+    }
+    _PreparePlaybackOffsetTarget();
+    _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
+}
+
+void engine::Loop::_PreparePlaybackOffsetTarget() noexcept
+{
+    const auto local = PlaybackOffsetSamps();
+    const auto inherited = _inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed);
+    const auto length = static_cast<double>(LoopLength());
+    auto localChange = std::fmod(static_cast<double>(local) - _localOffsetTarget, length);
+    if (localChange > length * 0.5) localChange -= length;
+    if (localChange <= -length * 0.5) localChange += length;
+    // Only a child-local SHFT chooses a shortest circular route. Parent-scope
+    // motion has one signed route even when child lengths differ.
+    _playbackOffsetEnd += localChange + static_cast<double>(inherited) - _inheritedOffsetTarget;
+    _localOffsetTarget = local;
+    _inheritedOffsetTarget = inherited;
+    if (_playbackOffsetStart == _playbackOffsetEnd)
+        _playbackOffsetStart = _playbackOffsetEnd = static_cast<double>(TotalPlaybackOffsetSamps());
+    _playbackOffsetRate = _playbackOffsetStart == _playbackOffsetEnd ? 0.0 : 1.0;
+}
+
+void engine::Loop::_InitialisePlaybackOffset() noexcept
+{
+    const auto length = LoopLength();
+    if (_playbackOffsetInitialised)
+    {
+        if (_playbackOffsetLength == length) return;
+        // A new child length changes only modulo wrapping. Keep the pending
+        // signed correction so geometry replacement cannot discard its debt.
+        _playbackOffsetLength = length;
+        return;
+    }
+    _playbackOffsetStart = _playbackOffsetEnd = static_cast<double>(TotalPlaybackOffsetSamps());
+    _localOffsetTarget = PlaybackOffsetSamps();
+    _inheritedOffsetTarget = _inheritedPlaybackOffsetSamps.load(std::memory_order_relaxed);
+    _playbackOffsetRate = 0.0;
+    _playbackOffsetInitialised = true;
+    _playbackOffsetLength = length;
+    _appliedPlaybackOffsetSamps.store(_playbackOffsetStart, std::memory_order_relaxed);
+    _playbackOffsetPublished.store(true, std::memory_order_release);
+}
+
+void Loop::SetAllowedMidiChannels(const std::vector<int>& channels)
+{
+	std::vector<int> filtered;
+	std::uint16_t mask = 0u;
+	for (auto channel : channels)
+		if (channel >= 1 && channel <= 16 && !(mask & (1u << (channel - 1))))
+		{
+			mask |= static_cast<std::uint16_t>(1u << (channel - 1));
+			filtered.push_back(channel);
+		}
+	const auto removed = static_cast<std::uint16_t>(_allowedMidiChannelMask & ~mask);
+	for (auto channel = 0u; channel < 16u; ++channel)
+		if (removed & (1u << channel)) _midiChannelRoutes[channel] = {};
+	_allowedMidiChannels = std::move(filtered);
+	_allowedMidiChannelMask = mask;
+	++_rackRevision;
+	_changesMade = true;
+	if (_automationTopologyChanged) _automationTopologyChanged();
+}
+
+bool Loop::SetMidiChannelRoutes(std::array<midi::MidiChannelRoute,16> routes, std::uint64_t revision)
+{
+	if (revision != RackRevision()) return false;
+	std::string diagnostic;
+	auto allowed = vst::RackState::ValidateChannelRoutes(routes, _midiChannelRoutes,
+		GetVstRackSlots(), _allowedMidiChannels, diagnostic);
+	if (!allowed) return false;
+	SetAllowedMidiChannels(*allowed);
+	_midiChannelRoutes = std::move(routes);
+	if (_automationTopologyChanged) _automationTopologyChanged();
+	return true;
+}
+
+bool Loop::RestoreMidiRouting(const std::vector<int>& channels, std::array<midi::MidiChannelRoute,16> routes)
+{
+	if (!io::JamFile::ValidSavedRouting(_vstSavedEntries, routes)) return false;
+	SetAllowedMidiChannels(channels);
+	_midiChannelRoutes = std::move(routes);
+	if (_automationTopologyChanged) _automationTopologyChanged();
+	return true;
 }

@@ -58,6 +58,9 @@ namespace gui
 					{
 						auto p = station->TopCapModelPosition(); p.Y += 65.0f;
 						add(p, {false, station, {}, {}}, true, locals > 1u);
+						if (!next.empty() && next.back().Action.Remove == station)
+							if (auto label = station->GetGuiRack()->StationLabel())
+								next.back().Button->SetPosition(label->BinPosition(next.back().Button->Position()));
 					}
 					if (ctrl && takeDitchVisible)
 					{
@@ -153,8 +156,9 @@ namespace gui
 			auto p = GuiButtonParams::PanelButton(bin ? 48u : 64u);
 			p.Size.Height = p.Size.Width; p.MinSize = p.Size;
 			p.TextureShader = "texture";
-			p.Texture = bin ? "station_bin" : "station_add";
+			p.Texture = bin ? "station_bin" : "plus";
 			p.OverTexture = p.Texture + "_over"; p.DownTexture = p.Texture + "_down";
+			if (!bin) p.OutTexture = "plus_down_out";
 			return std::make_shared<GuiButton>(p);
 		}
 		struct Control { std::shared_ptr<GuiButton> Button; Intent Action; bool Bin; };

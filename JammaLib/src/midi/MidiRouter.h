@@ -22,6 +22,8 @@
 #include "../midi/MidiEvent.h"
 #include "../midi/MidiQueue.h"
 #include "../midi/MidiTimestampMapper.h"
+#include "../io/TriggerBindingLearn.h"
+#include <map>
 
 namespace io
 {
@@ -49,6 +51,25 @@ namespace midi
 
 	class MidiRouter
 	{
+	public:
+		// UI/job callers serialize these with Scene's existing mutex. No audio reader.
+		void RequestTriggerLearn(io::TriggerBindingLearn::Request request);
+		void EndTriggerLearn();
+		std::shared_ptr<const io::TriggerBindingLearn::Observation> TriggerLearnObservation() const;
+		void ObserveTriggerLearnKey(unsigned int key);
+		bool VstCcLearnActive() const { return _learnMidiCCMode.load(std::memory_order_acquire); }
+	private:
+		void _ArmTriggerLearn();
+		void _ObserveTriggerLearn(io::RigFile::Binding binding, std::optional<unsigned int> physical = {});
+		bool _TriggerLearnArmed() const;
+		std::optional<io::TriggerBindingLearn::Request> _triggerLearnRequest;
+		mutable std::shared_ptr<const io::TriggerBindingLearn::Observation> _triggerLearnObservation;
+		std::int64_t _triggerLearnStartMicros = 0;
+		std::uint64_t _serialEnqueueSequence = 0u, _triggerLearnSerialWatermark = 0u;
+		std::map<std::pair<std::string, unsigned int>, bool> _serialLearnStates;
+		std::atomic<std::uint64_t> _triggerLearnLifecycle{0u}; // Lifecycle writer; UI/job compare only.
+		std::uint64_t _triggerLearnGeneration = 0u;
+		std::uint64_t _serialLearnStateGeneration = 0u;
 	public:
 		struct LiveMidiIngressEvent
 		{
@@ -237,6 +258,7 @@ namespace midi
 		{
 			io::SerialTriggerEvent Event;
 			std::uint64_t RigRevision = 0u;
+			std::uint64_t Sequence = 0u;
 		};
 
 		TriggerDispatchSummary _DispatchMidiTriggerEvent(std::uint8_t deviceSlot,

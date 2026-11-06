@@ -4,14 +4,17 @@
 // grid are distinct inputs, and remote follow/mapping authority lives elsewhere.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <vector>
 #include "QuantisationTiming.h"
+#include "../midi/MidiQuantisation.h"
 #include "../utils/Timer.h"
 #include "../actions/ActionResult.h"
 #include "../actions/TouchAction.h"
@@ -34,6 +37,7 @@ namespace engine
 }
 
 namespace midi { class MidiLoop; }
+namespace audio { class PlaybackRateHistory; }
 
 namespace io
 {
@@ -56,7 +60,7 @@ namespace engine
 		std::optional<QuantisationTiming> TapAtSample(std::uint64_t samplePosition,
 			unsigned int sampleRate,
 			unsigned long masterLoopSamps,
-			const QuantisationPolicy& policy);
+			const QuantisationPolicy& policy, std::optional<double> sourceGap = std::nullopt);
 
 		// Returns the current timing estimate without advancing the tracker. With a
 		// master loop, the estimate snaps to a clean master divisor; without one,
@@ -68,6 +72,7 @@ namespace engine
 		// Returns true once at least two taps have been received and a gap estimate exists.
 		bool HasEstimate() const noexcept;
 		double EstimatedGapSamps() const noexcept { return _estimatedGapSamps.value_or(0.0); }
+		std::optional<std::uint64_t> LastTapSample() const noexcept { return _lastTapSample; }
 
 	private:
 		std::optional<std::uint64_t> _lastTapSample;
@@ -79,6 +84,15 @@ namespace engine
 	public:
 		Quantiser() = default;
 
+		std::string MasterAudioLoopId() const;
+		void RestoreMasterAudioLoopId(const std::string& id, const std::vector<std::shared_ptr<Station>>& stations);
+        std::optional<ChosenMasterReference> ExportChosenMasterReference(const std::vector<std::shared_ptr<Station>>& stations) const;
+        void RestoreChosenMasterReference(const std::optional<ChosenMasterReference>& reference,
+            const std::string& legacyAudioId,const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate);
+        void AdoptRecordedMaster(const std::vector<std::shared_ptr<Station>>& stations);
+		void SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction fraction,
+			const std::vector<std::shared_ptr<Station>>& stations, bool updateExisting = true);
+		midi::MidiQuantisationFraction DefaultMidiQuantisationFraction() const noexcept { return _defaultMidiQuantisationFraction; }
 		void SetClock(std::shared_ptr<utils::Timer> clock);
 		using LocalMasterTimingPublisher = std::function<std::uint64_t(const QuantisationTiming&,
 			utils::Timer::QuantisationType, const LoopTake*, const Loop*)>;
@@ -91,11 +105,13 @@ namespace engine
 		// Compatibility entry point for callers without a scene snapshot.
 		void ArmReclock();
 		void ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations);
+		bool ResetReclockIfEmpty(const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void ApplyTiming(const QuantisationTiming& timing, const char* source);
+		bool PendingMasterTapEdit() const noexcept { return _pendingMasterTapEdit; }
 		bool LocalMasterTimingPending() const noexcept { return _localMasterTimingPending; }
 		std::uint64_t PendingLocalMasterTimingVersion() const noexcept
 			{ return _pendingLocalMasterTimingVersion; }
-		void CompleteLocalMasterTiming() noexcept { _localMasterTimingPending = false; _pendingMasterTake.reset(); _previousMasterLoop.reset(); }
+		void CompleteLocalMasterTiming();
 		const engine::LoopTake* PendingLocalMasterTake() const noexcept
 			{ return _pendingMasterTake.get(); }
 		void CancelLocalMasterTiming(std::uint64_t version) noexcept;
@@ -105,7 +121,7 @@ namespace engine
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 		void SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 			std::int64_t originSamps,
-			const std::vector<std::shared_ptr<engine::Station>>& stations);
+			const std::vector<std::shared_ptr<engine::Station>>& stations, bool preserveRecordedMaster = false, unsigned long legacySourceLength = 0ul);
 		// Scene-serialized setup for a newly added local station.
 		void InitialiseStationMidiGrid(const std::shared_ptr<engine::Station>& station) const;
 		void SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
@@ -115,9 +131,26 @@ namespace engine
 		bool HandleTapTempo(std::uint64_t estimatedSampleAt,
 			unsigned int sampleRate,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
-			const io::UserConfig& cfg);
+			const io::UserConfig& cfg, bool editRemoteMaster = false,
+			const audio::PlaybackRateHistory* rateHistory = nullptr);
+		bool CanEditMasterTempo(const std::vector<std::shared_ptr<Station>>& stations) const;
+		bool HasActivatedLocalMaster(const std::vector<std::shared_ptr<Station>>& stations) const;
 
 		void DetachStationMaster(const std::shared_ptr<engine::Station>& station);
+        void DetachTakeMaster(const std::shared_ptr<LoopTake>& take);
+        void ReconcileMasterMembership(const std::vector<std::shared_ptr<Station>>& stations);
+        enum class MasterOutcome { Unchanged, Applying, Rejected, Accepted };
+        struct MasterResult { MasterOutcome Outcome=MasterOutcome::Rejected; std::string Message; };
+        MasterResult SetMasterFromTarget(const std::shared_ptr<base::GuiElement>& target,unsigned int depth,
+            const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate,const io::UserConfig& cfg,bool confirm,
+            std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now(),bool sessionAllowed=true);
+        bool CanUseMasterTarget(const std::shared_ptr<base::GuiElement>& target,unsigned int depth,const std::vector<std::shared_ptr<Station>>& stations) const;
+        std::string DescribeMasterTarget(const std::shared_ptr<base::GuiElement>& target,unsigned int depth,const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate,const io::UserConfig& cfg) const;
+        const std::string& MasterStatus() const noexcept { return _masterStatus; }
+        std::string CurrentMasterDescription() const { return _acceptedMasterIdentity ? _acceptedMasterIdentity->Name : std::string{}; }
+        bool PendingMasterTargetValid(const std::vector<std::shared_ptr<Station>>& stations) const;
+        std::chrono::steady_clock::time_point PendingMasterStartedAt() const noexcept { return _pendingMasterStartedAt; }
+        void SetMasterFailure(std::string text) { _masterStatus=std::move(text); }
 		bool TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& hovering,
 			unsigned int depth,
 			const std::vector<std::shared_ptr<engine::Station>>& stations,
@@ -130,6 +163,7 @@ namespace engine
 			bool confirmCandidate,
 			const std::vector<std::shared_ptr<engine::Station>>& stations);
 
+		void RefreshMasterAudioReference(const std::shared_ptr<Station>& station) const;
 		void ClearStationHints(const std::vector<std::shared_ptr<engine::Station>>& stations);
 
 		void PulseOverlay();
@@ -146,6 +180,7 @@ namespace engine
 		QuantisationGrid ActiveGrid() const noexcept;
 		std::int32_t GlobalPhaseOffsetSamps() const noexcept;
 		bool IsArmedForReclock() const noexcept;
+		void CancelReclock() noexcept { _armReclock.store(false, std::memory_order_release); }
 		std::shared_ptr<utils::Timer> Clock() const noexcept;
 		std::optional<QuantisationTiming> CurrentTempoTiming(unsigned int sampleRate) const;
 		struct TempoStatus
@@ -187,7 +222,7 @@ namespace engine
 		static QuantisationPolicy Policy(const io::UserConfig& cfg);
 
 	private:
-		static constexpr double OverlayFadeSeconds = 2.0;
+		static constexpr double OverlayFadeSeconds = 1.5;
 		static constexpr int PhaseOffsetDragPixelsPerMillisecond = 1;
 		static constexpr std::int64_t StateInactive = 0LL;
 		static std::int32_t _ClampPhaseOffset(std::int64_t offsetSamps) noexcept;
@@ -214,8 +249,30 @@ namespace engine
 			unsigned int depth,
 			const std::vector<std::shared_ptr<engine::Station>>& stations) const;
 
+        struct MasterGeometry
+        {
+            unsigned long Length=0ul, Physical=0ul, Baseline=0ul;
+            unsigned int Seed=0u,Bpi=0u,Rate=0u; bool Powers=false;
+            unsigned int SourceRate=0u,SourceBpi=0u; unsigned long SourceLength=0ul;
+            bool operator==(const MasterGeometry&) const = default;
+        };
+        struct MasterIdentity
+        {
+            std::weak_ptr<LoopTake> Take; std::weak_ptr<Loop> ExplicitLoop;
+            bool HasExplicitLoop=false; MasterGeometry Geometry; std::string Name;
+        };
+        std::string _MasterTargetLabel(const std::shared_ptr<LoopTake>& take,const std::shared_ptr<Loop>& explicitLoop,
+            const std::vector<std::shared_ptr<Station>>& stations) const;
+        void _RememberRecordedMaster(const std::shared_ptr<LoopTake>& take,const std::shared_ptr<Loop>& explicitLoop,
+            const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate=0u);
+        std::optional<MasterIdentity> _acceptedMasterIdentity,_pendingMasterIdentity;
+        std::chrono::steady_clock::time_point _pendingMasterStartedAt{};
+        std::string _masterStatus;
+        // Loaded material cannot become a newly recorded master on an ordinary job tick.
+        std::vector<std::weak_ptr<LoopTake>> _restoredMasterCandidates;
 		std::shared_ptr<utils::Timer> _clock;
 		LocalMasterTimingPublisher _localMasterTimingPublisher;
+		bool _pendingMasterTapEdit = false;
 		bool _localMasterTimingPending = false; // Serialized Scene owner.
 		std::uint64_t _pendingLocalMasterTimingVersion = 0u;
 		std::shared_ptr<engine::LoopTake> _pendingMasterTake;
@@ -228,6 +285,10 @@ namespace engine
 		bool _previousSeedUsesPowers = true;
 		std::shared_ptr<engine::Loop> _masterLoop;
 		RemoteTransportGeometry _acceptedRemoteGrid{};
+		unsigned long _acceptedRemoteSourceLength = 0ul;
+		RemoteTransportGeometry _recordingRemoteGrid{}; // Last accepted baseline survives Stay local.
+		std::int32_t _MasterAudioReferenceOffsetSamps() const noexcept;
+		midi::MidiQuantisationFraction _defaultMidiQuantisationFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int64_t _acceptedRemoteGridOriginSamps = 0; // Scene-serialized job/UI owner.
 		std::atomic<QuantisationGridSource> _gridSource{ QuantisationGridSource::Default };
 		std::atomic_ulong _masterLoopLengthSamps{ 0ul };
@@ -299,6 +360,8 @@ namespace engine
 		std::vector<unsigned char> HoverPath3d;
 		std::vector<std::shared_ptr<midi::MidiLoop>> SelectedMidiLoops;
 		std::shared_ptr<midi::MidiLoop> HoveredMidiLoop;
+		std::vector<std::shared_ptr<Loop>> SelectedAudioLoops;
+		std::shared_ptr<Loop> HoveredAudioLoop;
 		bool LoopDepthHasAudioTarget = false;
 		unsigned int SampleRate = 0u;
 	};
@@ -312,6 +375,9 @@ namespace engine
 			Quantiser& quantisation,
 			std::vector<std::shared_ptr<engine::Station>>& stations);
 
+		// Caller retains the Scene lock through target traversal. No view escapes.
+		QuantisationInteractionContext InteractionContextLocked(utils::Position2d cursor, utils::Size2d viewport,
+			base::SelectDepth depth, std::vector<unsigned char> hover, std::vector<unsigned char> hover3d, unsigned int sampleRate) const;
 		void OnCtrlModifierChanged(bool held,
 			Time now,
 			const QuantisationInteractionContext& context,
@@ -341,7 +407,8 @@ namespace engine
 			Global,
 			Station,
 			LoopTake,
-			MidiLoop
+			MidiLoop,
+			AudioLoop
 		};
 
 		struct MidiPhaseDragTarget
@@ -352,6 +419,7 @@ namespace engine
 			std::vector<std::shared_ptr<engine::Station>> StationTargets;
 			std::vector<std::shared_ptr<engine::LoopTake>> TakeTargets;
 			std::vector<std::shared_ptr<midi::MidiLoop>> MidiTargets;
+			std::vector<std::shared_ptr<Loop>> AudioTargets;
 		};
 
 		struct CtrlOverlayContext
@@ -429,6 +497,9 @@ namespace engine
 		void _ShowPhaseFeedback(unsigned int sampleRate);
 		void _ShowFractionFeedback();
 		std::optional<CtrlOverlayContext> _ctrlOverlayContext;
+		bool _hasShiftClick = false;
+		Time _lastShiftClick{};
+		utils::Position2d _lastShiftClickPosition{};
 		bool _isMidiPhaseDragging = false;
 		utils::Position2d _midiPhaseDragStartPosition;
 		std::int32_t _midiPhaseDragStartOffsetSamps = 0;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 #include "../utils/CommonTypes.h"
 #include "../actions/GuiAction.h"
@@ -127,7 +128,10 @@ namespace gui
 		utils::Size2d DragControlSize;
 		utils::Size2d DragGap;
 		bool ScaleMarksEnabled;
-		bool ResetToUnityOnDoubleClick = false;
+		// Semantic default is independent of the restored initial value.
+		// Missing, non-finite or out-of-range defaults disable double-click reset.
+		// Reset uses the exact value; Steps quantises pointer travel only.
+		std::optional<double> DefaultValue;
 	};
 
 	class GuiSlider :
@@ -164,6 +168,8 @@ namespace gui
 		double Value() const;
 		void SetValue(double value);
 		void SetValue(double value, bool bypassUpdate);
+		// Accept an owner result without notification, retaining the drag/undo baseline.
+		void SynchronizeValueFromOwner(double value);
 		void SetDragParams(utils::Position2d dragOffset,
 			utils::Size2d dragSize,
 			utils::Size2d dragGap);
@@ -219,6 +225,8 @@ namespace gui
 		bool _clickMoved = false;
 		bool _hasLastClick = false;
 		bool _mouseClick = false;
+		actions::TouchAction::TouchType _dragTouch = actions::TouchAction::TOUCH_MOUSE;
+		int _dragIndex = 0;
 		Time _clickStartTime{};
 		Time _lastClickTime{};
 		utils::Position2d _lastClickPos{};

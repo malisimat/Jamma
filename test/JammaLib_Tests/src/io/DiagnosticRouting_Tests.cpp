@@ -1,6 +1,7 @@
 #include "../../../../JammaLib/src/engine/Scene.h"
 #include "../../../../Jamma/src/StartupLog.h"
 #include "../../../../Jamma/src/ConsoleCapture.h"
+#include "../../../../Jamma/src/CrtCapture.h"
 #include "../../../../Jamma/src/JobFailureNotice.h"
 #include "../../../../Jamma/src/ConsoleWindow.h"
 #include "../../../../console/CommandMailbox.h"
@@ -10,8 +11,11 @@
 #include <thread>
 #include <chrono>
 #include <sstream>
+#include <set>
 #include "../../../../JammaLib/src/io/TextReadWriter.h"
 #include "../../../../JammaLib/src/io/WavReadWriter.h"
+#include "../../../../JammaLib/src/io/SerialDevice.h"
+#include "../../../../JammaLib/src/vst/Vst3Plugin.h"
 namespace console
 {
 	struct StartupLogTestAccess
@@ -35,47 +39,122 @@ protected:
 	void TearDown() override { std::error_code error; std::filesystem::remove_all(Directory, error); }
 	std::string ReadLog()
 	{
-		std::ifstream file(Directory / "startup.log", std::ios::binary);
+		std::ifstream file(Directory / "run.log", std::ios::binary);
 		return std::string(std::istreambuf_iterator<char>(file), {});
 	}
 };
-TEST_F(DiagnosticFiles, StartupLogCapturesEarlyWorkerPartialAndRotatesWithoutRuntimeDuplication)
+TEST_F(DiagnosticFiles, MissingSerialEndpointReportsDisconnectedStatus)
 {
 	console::LineRing ring;
+	console::ConsoleCapture capture(ring);
+	capture.CompleteStartup();
+	io::SerialDevice device;
+	const auto port = (Directory / "missing-port").string();
+	EXPECT_FALSE(device.Open("pedal-a", port, 115200u, {}));
+	EXPECT_FALSE(device.IsOpen());
+	const auto line = ring.Take();
+	ASSERT_TRUE(line);
+	EXPECT_NE(line->find("Device \"pedal-a\" disconnected"), std::string::npos);
+	EXPECT_NE(line->find("not present"), std::string::npos);
+	EXPECT_EQ(line->find("error"), std::string::npos);
+	EXPECT_FALSE(ring.Take());
+}
+
+TEST_F(DiagnosticFiles, BusySerialEndpointStillReportsOpenFailure)
+{
+	const auto port = Directory / "busy-port";
+	const auto handle = CreateFileW(port.c_str(), GENERIC_READ | GENERIC_WRITE,
+		0, nullptr, CREATE_NEW, 0, nullptr);
+	ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+	console::LineRing ring;
+	console::ConsoleCapture capture(ring);
+	capture.CompleteStartup();
+	io::SerialDevice device;
+	EXPECT_FALSE(device.Open("pedal-a", port.string(), 115200u, {}));
+	CloseHandle(handle);
+	const auto line = ring.Take();
+	ASSERT_TRUE(line);
+	EXPECT_NE(line->find("Failed to open device \"pedal-a\""), std::string::npos);
+	EXPECT_NE(line->find("error 32"), std::string::npos);
+	EXPECT_FALSE(ring.Take());
+}
+
+TEST_F(DiagnosticFiles, RunLogCapturesEarlyWorkerPartialAndRuntimeOnceAndRotates)
+{
+	console::LineRing ring;
+	const auto header = console::StartupLog::RunStart("test-version");
+	EXPECT_NE(header.find(" Jamma vtest-version"), std::string::npos);
 	{
 		console::StartupLog log((Directory / "defaults.json").wstring());
 		ASSERT_TRUE(log.Available());
-		console::ConsoleCapture capture(ring, [&](std::string_view line) { log.Append(line); });
+		console::ConsoleCapture capture(ring, {}, [&](std::string_view line) { log.Append(line); });
+		std::cout << header << '\n';
 		std::cout << "early\n";
 		std::thread worker([] { std::cerr << "worker failure" << std::flush; }); worker.join();
 		capture.CompleteStartup();
 		std::cout << "runtime\n";
 	}
-	EXPECT_EQ(ReadLog(), "early\r\nworker failure\r\n");
+	EXPECT_EQ(ReadLog(), header + "\r\nearly\r\nworker failure\r\nruntime\r\n");
 	{
 		console::StartupLog log((Directory / "defaults.json").wstring());
-		EXPECT_TRUE(std::filesystem::exists(Directory / "startup.log.1"));
+		EXPECT_TRUE(std::filesystem::exists(Directory / "run.log.1"));
 		log.Append("next launch");
 	}
 	EXPECT_EQ(ReadLog(), "next launch\r\n");
 }
-TEST_F(DiagnosticFiles, StartupLogReportsUnavailableAndSaturatedSinks)
+TEST_F(DiagnosticFiles, RunLogReportsUnavailableSinkOnce)
 {
-	{
-		std::ofstream block(Directory / "blocked"); block << "file";
-	}
+	{ std::ofstream block(Directory / "blocked"); block << "file"; }
 	console::StartupLog unavailable((Directory / "blocked" / "defaults.json").wstring());
 	EXPECT_FALSE(unavailable.Available());
 	EXPECT_NE(unavailable.TakeFailure().find("create-directory"), std::string::npos);
 	EXPECT_TRUE(unavailable.TakeFailure().empty());
-	console::StartupLog bounded((Directory / "defaults.json").wstring(), 8);
-	bounded.Append("fits"); bounded.Append("too large");
-	EXPECT_NE(bounded.TakeFailure().find("size-limit"), std::string::npos);
-	bounded.Append("ignored");
-	EXPECT_TRUE(bounded.TakeFailure().empty());
-	EXPECT_EQ(ReadLog(), "fits\r\n");
 }
-
+TEST_F(DiagnosticFiles, RunLogRotatesDuringRunAndBoundsEachGeneration)
+{
+	console::StartupLog log((Directory / "defaults.json").wstring(), 8);
+	for (unsigned i = 0; i < 5; ++i) log.Append("line-" + std::to_string(i));
+	EXPECT_TRUE(log.Available());
+	EXPECT_TRUE(log.TakeFailure().empty());
+	EXPECT_EQ(ReadLog(), "line-4\r\n");
+	for (unsigned i = 1; i <= 3; ++i)
+	{
+		const auto path = Directory / ("run.log." + std::to_string(i));
+		EXPECT_LE(std::filesystem::file_size(path), 8u);
+		std::ifstream file(path, std::ios::binary);
+		EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "line-" + std::to_string(4 - i) + "\r\n");
+	}
+	EXPECT_FALSE(std::filesystem::exists(Directory / "run.log.4"));
+}
+TEST_F(DiagnosticFiles, RunLogBoundsOversizedDirectEntriesAndRetainsUtf8Tail)
+{
+	console::StartupLog log((Directory / "defaults.json").wstring(), 8);
+	log.Append("abc\xF0\x9F\x8E\xB5" "def");
+	EXPECT_TRUE(log.TakeFailure().empty());
+	EXPECT_LE(std::filesystem::file_size(Directory / "run.log"), 8u);
+	std::string joined;
+	for (int i = 2; i >= 0; --i)
+	{
+		std::ifstream file(Directory / (i ? "run.log." + std::to_string(i) : "run.log"), std::ios::binary);
+		auto part = std::string(std::istreambuf_iterator<char>(file), {});
+		ASSERT_GE(part.size(), 2u);
+		joined += part.substr(0, part.size() - 2);
+	}
+	EXPECT_EQ(joined, "abc\xF0\x9F\x8E\xB5" "def");
+}
+TEST_F(DiagnosticFiles, RunLogReportsRotationDenialWithoutDestroyingOldLog)
+{
+	const auto path = Directory / L"run.log";
+	{ std::ofstream file(path); file << "prior run"; }
+	const auto locked = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+	ASSERT_NE(locked, INVALID_HANDLE_VALUE);
+	console::StartupLog log((Directory / "defaults.json").wstring());
+	EXPECT_FALSE(log.Available());
+	EXPECT_NE(log.TakeFailure().find("rotation-move"), std::string::npos);
+	EXPECT_TRUE(log.TakeFailure().empty());
+	CloseHandle(locked);
+	EXPECT_EQ(ReadLog(), "prior run");
+}
 
 TEST_F(DiagnosticFiles, StartupLogWriteFailureIsReportedOnceWithoutRecursion)
 {
@@ -90,8 +169,10 @@ TEST_F(DiagnosticFiles, StartupLogWriteFailureIsReportedOnceWithoutRecursion)
 TEST_F(DiagnosticFiles, MissingJamAndMaterialReportPathsWithVerboseLoggingDisabled)
 {
 	console::LineRing ring;
+	console::StartupLog log((Directory / L"defaults.json").wstring());
 	{
-		console::ConsoleCapture capture(ring);
+		console::ConsoleCapture capture(ring, {}, [&](std::string_view line) { log.Append(line); });
+		capture.CompleteStartup();
 		io::TextReadWriter text;
 		EXPECT_FALSE(text.Read((Directory / "missing.jam").wstring(), 4096));
 		io::WavReadWriter wav;
@@ -104,6 +185,9 @@ TEST_F(DiagnosticFiles, MissingJamAndMaterialReportPathsWithVerboseLoggingDisabl
 		wav |= line->find("[ERROR][WAV] read-open path=") != std::string::npos && line->find("missing.wav") != std::string::npos;
 	}
 	EXPECT_TRUE(jam); EXPECT_TRUE(wav);
+	const auto retained = ReadLog();
+	EXPECT_NE(retained.find("missing.jam"), std::string::npos);
+	EXPECT_NE(retained.find("missing.wav"), std::string::npos);
 }
 TEST(ConsoleSession, BackendFaultMailboxIsBoundedAndReportsSaturationAndStatus)
 {
@@ -135,7 +219,7 @@ TEST_F(DiagnosticFiles, StartupLogFlushesEarlyReturnAndWorkerExit)
 	console::LineRing ring;
 	const auto failEarly = [&] {
 		console::StartupLog log((Directory / "defaults.json").wstring());
-		console::ConsoleCapture capture(ring, [&](std::string_view line) { log.Append(line); });
+		console::ConsoleCapture capture(ring, {}, [&](std::string_view line) { log.Append(line); });
 		std::thread worker([] { std::cerr << "worker startup failure"; }); worker.join();
 		std::cout << "early exit tail";
 		return -1;
@@ -233,6 +317,21 @@ TEST_P(StartupJobOrigins, InterleavedJobsRespectExplicitOrigin)
 	EXPECT_EQ(std::find(startup.begin(), startup.end(), "runtime UI failure"), startup.end());
 }
 INSTANTIATE_TEST_SUITE_P(ConsoleSession, StartupJobOrigins, testing::Bool());
+TEST(ConsoleSession, VstLifecycleAndFailuresRemainInFileAfterStartup)
+{
+	console::LineRing ring;
+	std::vector<std::string> saved;
+	console::ConsoleCapture capture(ring, {}, [&](std::string_view line) { saved.emplace_back(line); });
+	capture.CompleteStartup();
+	{
+		console::DiagnosticThread::StartupScope runtime(false);
+		std::clog << "[VST][load] stage=begin" << std::endl;
+		std::cerr << "[ERROR][VST2] windows-error=126" << std::endl;
+		std::cout << "ordinary runtime output" << std::endl;
+	}
+	EXPECT_EQ(saved, (std::vector<std::string>{"[VST][load] stage=begin", "[ERROR][VST2] windows-error=126", "ordinary runtime output"}));
+}
+
 TEST(ConsoleSession, BackendEventsKeepStartupOriginUntilDrainedAfterWindowEnds)
 {
 	while (console::DiagnosticThread::TakeBackendError()) {}
@@ -453,4 +552,100 @@ TEST_F(DiagnosticFiles, OwnerFailureNoticeUsesDirectDebugFallbackIfModalAndFileF
 		[&](auto text) { delivered = text; });
 	EXPECT_EQ(delivered, "retained worker detail");
 	EXPECT_FALSE(ring.Take());
+}
+TEST_F(DiagnosticFiles, RunLogRetainsConcurrentBurstDespiteConsoleSaturation)
+{
+	console::LineRing ring;
+	{
+		console::StartupLog log((Directory / "defaults.json").wstring());
+		console::ConsoleCapture capture(ring, {}, [&](std::string_view line) { log.Append(line); });
+		capture.CompleteStartup();
+		std::vector<std::thread> producers;
+		for (unsigned thread = 0; thread < 4; ++thread) producers.emplace_back([thread] {
+			for (unsigned line = 0; line < 100; ++line)
+			{
+				const auto text = std::to_string(thread) + ":" + std::to_string(line) + "\n";
+				(thread % 2 ? std::cerr : std::cout).write(text.data(), text.size());
+			}
+			std::clog << "worker tail " << thread; // Flushed at worker exit.
+		});
+		for (auto& producer : producers) producer.join();
+	}
+	std::set<std::string> lines;
+	std::istringstream file(ReadLog());
+	std::string line;
+	while (std::getline(file, line)) { if (line.ends_with('\r')) line.pop_back(); EXPECT_TRUE(lines.insert(line).second); }
+	EXPECT_EQ(lines.size(), 404u);
+	for (unsigned thread = 0; thread < 4; ++thread)
+	{
+		EXPECT_TRUE(lines.contains("worker tail " + std::to_string(thread)));
+		for (unsigned entry = 0; entry < 100; ++entry) EXPECT_TRUE(lines.contains(std::to_string(thread) + ":" + std::to_string(entry)));
+	}
+	EXPECT_GT(ring.ConsumeDropped(), 0u);
+}
+TEST_F(DiagnosticFiles, CrtAndWin32StreamsJoinContinuousSinkAndRestoreDescriptors)
+{
+	console::LineRing ring;
+	{
+		console::StartupLog log((Directory / "defaults.json").wstring());
+		console::ConsoleCapture capture(ring, {}, [&](std::string_view line) { log.Append(line); });
+		{
+			console::CrtCapture crt(capture);
+			ASSERT_TRUE(crt.Available());
+			std::fputs("early CRT stdout\n", stdout);
+			std::fflush(stdout);
+			capture.CompleteStartup();
+			std::thread worker([] {
+				std::fputs("runtime CRT stderr\n", stderr);
+				std::fflush(stderr);
+			}); worker.join();
+			std::cout << "C++ runtime\n";
+			DWORD written = 0;
+			ASSERT_TRUE(WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), "native stdout\n", 14, &written, nullptr));
+			std::fputs("CRT shutdown tail", stdout); // Stop flushes the FILE and capture tail.
+			crt.Stop();
+			EXPECT_FALSE(crt.Available());
+			crt.Stop();
+		}
+		std::clog << "after CRT stop\n";
+	}
+	const auto text = ReadLog();
+	for (const auto* expected : {"early CRT stdout", "runtime CRT stderr", "C++ runtime", "native stdout", "CRT shutdown tail", "after CRT stop"})
+	{
+		const auto first = text.find(expected);
+		ASSERT_NE(first, std::string::npos) << expected;
+		EXPECT_EQ(text.find(expected, first + 1), std::string::npos) << expected;
+	}
+	EXPECT_EQ(_get_osfhandle(_fileno(stdout)) == -1, false);
+	EXPECT_EQ(_get_osfhandle(_fileno(stderr)) == -1, false);
+}
+TEST_F(DiagnosticFiles, CrtShutdownDoesNotWaitForDuplicatedNativeWriterToClose)
+{
+	console::LineRing ring;
+	console::ConsoleCapture capture(ring);
+	console::CrtCapture crt(capture);
+	ASSERT_TRUE(crt.Available());
+	HANDLE duplicate = nullptr;
+	ASSERT_TRUE(DuplicateHandle(GetCurrentProcess(), GetStdHandle(STD_OUTPUT_HANDLE), GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS));
+	std::fputs("before stop\n", stdout);
+	std::fflush(stdout);
+	crt.Stop(); // The duplicate remains alive; EOF-based readers would deadlock.
+	CloseHandle(duplicate);
+	EXPECT_EQ(ring.Take(), "before stop");
+	EXPECT_FALSE(ring.Take());
+}
+TEST_F(DiagnosticFiles, MissingVst3RuntimeFailureRetainsContextInRunLog)
+{
+	console::LineRing ring;
+	{
+		console::StartupLog log((Directory / L"defaults.json").wstring());
+		console::ConsoleCapture capture(ring, {}, [&](std::string_view line) { log.Append(line); });
+		capture.CompleteStartup();
+		vst::Vst3Plugin plugin;
+		EXPECT_FALSE(plugin.PreInit((Directory / L"missing-runtime.vst3").wstring()));
+	}
+	const auto retained = ReadLog();
+	EXPECT_NE(retained.find("[ERROR][VST3]"), std::string::npos);
+	EXPECT_NE(retained.find("missing-runtime.vst3"), std::string::npos);
+	EXPECT_NE(retained.find("windows-error="), std::string::npos);
 }

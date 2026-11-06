@@ -41,6 +41,8 @@ namespace base
 		Fill    // Stretch to fill cell height.
 	};
 
+	enum class PointerCursor { Arrow, Move, Horizontal, Vertical };
+
 	class GuiElement;
 
 	class GuiElementParams :
@@ -99,6 +101,7 @@ namespace base
 		std::string OutTexture;
 		std::string TextureShader = "texture";
 		float TextureOpacity = 1.0f;
+		float CornerRadius = 0.0f;
 		glm::vec3 TintColor;
 		LayoutSizing HorizSizing = LayoutSizing::Fixed;
 		LayoutSizing VertSizing  = LayoutSizing::Fixed;
@@ -163,6 +166,8 @@ namespace base
 		unsigned int Index() const;
 		virtual std::vector<unsigned int> GlobalId();
 		virtual void AddChild(std::shared_ptr<GuiElement> child);
+		// Detach a reusable subtree without retiring its bindings or resources.
+		void RemoveChild(const std::shared_ptr<GuiElement>& child);
 		virtual std::shared_ptr<GuiElement> TryGetChild(unsigned char index);
 
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
@@ -223,9 +228,14 @@ namespace base
 		}
 
 	protected:
+		virtual graphics::Image& _CurrentTexture();
+		static graphics::Image& _ResolveStateTexture(GuiElementState state, graphics::Image& normal,
+			graphics::Image& over, graphics::Image& down, graphics::Image& out);
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		virtual std::vector<actions::JobAction> _CommitChanges();
+		// Owners that publish child render state finish after every child commit.
+		virtual void _AfterChildrenCommit() {}
 		virtual bool _HitTest(utils::Position2d localPos);
 		bool _ChildRectHitTest(utils::Position2d localPos) const;
 		void _BeginGesture(GestureKind kind, utils::Position2d startPosition, int startValue = 0) noexcept;

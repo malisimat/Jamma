@@ -2,9 +2,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <utility>
 #include "glm/ext.hpp"
 #include "../graphics/LoopGridProjection.h"
-#include "../spectral/AudioSpectralPicking.h"
+#include "../spectral/SpectralPicking.h"
 #include "MidiNote.h"
 #include "MidiQuantisation.h"
 
@@ -14,24 +15,15 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 	_host(std::move(host)),
 	_size(size)
 {
-	const auto buttonPos = _ButtonPosition(size);
-
-	auto buttonParams = gui::GuiButtonParams::PanelButton(190u);
-	buttonParams.Text = "Edit loop (E)";
-	buttonParams.Position = buttonPos;
-	_button = std::make_shared<gui::GuiButton>(buttonParams);
-	_button->Init();
-	_button->SetVisible(false);
-
 	auto feedbackParams = gui::GuiLabelParams::PanelHeader("", 330u);
 	feedbackParams.Ellipsize = true;
-	feedbackParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y + 6 };
+	feedbackParams.Position = {};
 	_feedback = std::make_shared<gui::GuiLabel>(feedbackParams);
 	_feedback->Init();
 
 	auto modeParams = gui::GuiLabelParams::PanelHeader("", 260u);
 	modeParams.Ellipsize = true;
-	modeParams.Position = { std::max(0, buttonPos.X - 340), buttonPos.Y - 20 };
+	modeParams.Position = {};
 	_modeLabel = std::make_shared<gui::GuiLabel>(modeParams);
 	_modeLabel->Init();
 
@@ -55,7 +47,6 @@ LoopGridEditor::LoopGridEditor(Host host, utils::Size2d size) :
 void LoopGridEditor::InitResources(resources::ResourceLib& resourceLib, bool forceInit)
 {
 	_audioEditor.InitMeshResources(forceInit);
-	_button->InitResources(resourceLib, forceInit);
 	_feedback->InitResources(resourceLib, forceInit);
 	_modeLabel->InitResources(resourceLib, forceInit);
 	_channelInput->InitResources(resourceLib, forceInit);
@@ -66,7 +57,6 @@ void LoopGridEditor::ReleaseResources()
 {
 	CancelInput();
 	_audioEditor.ReleaseMeshResources();
-	_button->ReleaseResources();
 	_feedback->ReleaseResources();
 	_modeLabel->ReleaseResources();
 	_channelInput->ReleaseResources();
@@ -99,12 +89,6 @@ actions::ActionResult LoopGridEditor::_Eaten()
 	return eaten;
 }
 
-utils::Position2d LoopGridEditor::_ButtonPosition(utils::Size2d size)
-{
-	return { std::max(0, static_cast<int>(size.Width) - 202),
-		std::max(0, static_cast<int>(size.Height) - 42) };
-}
-
 float LoopGridEditor::_MidiRadius(std::uint32_t lengthSamps) noexcept
 {
 	return static_cast<float>(std::clamp(
@@ -113,8 +97,6 @@ float LoopGridEditor::_MidiRadius(std::uint32_t lengthSamps) noexcept
 
 void LoopGridEditor::_Layout()
 {
-	const auto pos = _ButtonPosition(_size);
-	_button->SetPosition(pos);
 	const int statusWidth = gui::GuiStyle::StatusBarWidth(static_cast<int>(_size.Width));
 	const int statusX = static_cast<int>(_size.Width) - statusWidth;
 	const int statusHeight = std::min(gui::GuiStyle::StatusBarHeight, static_cast<int>(_size.Height));
@@ -139,8 +121,8 @@ void LoopGridEditor::_ResetTarget()
 {
 	if (const auto loop = _audioLoop.lock())
 	{
-		loop->SetAudioSpectralMorph(0.0f);
-		loop->SetAudioSpectralModel(nullptr);
+		loop->SetSpectralMorph(0.0f);
+		loop->SetSpectralModel(nullptr);
 	}
 	_audioSurfaceBlend = 0.0f;
 	_audioEditor.Close();
@@ -151,16 +133,44 @@ void LoopGridEditor::_ResetTarget()
 	_midiLoop.reset();
 }
 
-std::shared_ptr<MidiLoop> LoopGridEditor::_InitialMidiLoop(const engine::LoopTake& take)
+std::shared_ptr<MidiLoop> LoopGridEditor::_InitialMidiLoop(const engine::LoopTake& take, bool selectedOnly)
 {
 	std::shared_ptr<MidiLoop> first;
 	for (const auto& loop : take.GetMidiLoops())
 	{
-		if (!loop || !loop->Model()) continue;
+		if (!loop || !loop->Model() || (selectedOnly && !loop->Model()->IsSelected()) || loop->CompletedLengthForEditor() == 0u) continue;
 		if (!first) first = loop;
 		if (loop->EventCount() > 0u) return loop;
 	}
 	return first;
+}
+
+bool LoopGridEditor::_IsSelectedMemberLocked(const std::shared_ptr<base::GuiElement>& target) const
+{
+	if (!target || !target->IsSelected()) return false;
+	for (const auto& station : _host.Stations)
+	{
+		if (!station || station->MembershipRemoving()) continue;
+		for (const auto& take : station->GetLoopTakes())
+		{
+			if (!take || take->IsCaptureCancelled()) continue;
+			if (target == take) return true;
+			for (const auto& loop : take->GetLoops()) if (target == loop) return true;
+			for (const auto& loop : take->GetMidiLoops()) if (loop && target == loop->Model()) return true;
+		}
+	}
+	return false;
+}
+
+void LoopGridEditor::SelectionCommittedLocked(std::span<const std::shared_ptr<base::GuiElement>> selected)
+{
+	std::erase_if(_selectionHistory, [this](const auto& weak) { return !_IsSelectedMemberLocked(weak.lock()); });
+	for (const auto& target : selected)
+	{
+		if (!_IsSelectedMemberLocked(target)) continue;
+		std::erase_if(_selectionHistory, [&target](const auto& weak) { return weak.lock() == target; });
+		_selectionHistory.push_back(target);
+	}
 }
 
 bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
@@ -170,80 +180,102 @@ bool LoopGridEditor::FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 	const auto hovered = _host.Hovered ? _host.Hovered() : nullptr;
 	std::scoped_lock lock(_host.SceneMutex);
 	const bool selectStreams = !_host.SelectionDepth || _host.SelectionDepth() == base::DEPTH_LOOP;
+	struct Candidate
+	{
+		std::shared_ptr<engine::LoopTake> Take;
+		std::shared_ptr<engine::Loop> Audio;
+		std::shared_ptr<MidiLoop> Midi;
+	};
+	Candidate fallback, recent, hover, unselectedHover;
+	bool hasSelection = false;
 	unsigned int fallbackCount = 0u;
+	std::size_t recentRank = 0u;
+	const auto consider = [&](Candidate candidate, bool isHovered) {
+		if (!_UnavailableReason(candidate.Take, candidate.Audio, candidate.Midi).empty()) return;
+		++fallbackCount; fallback = candidate;
+		if (isHovered) hover = candidate;
+		const std::shared_ptr<base::GuiElement> leaf = candidate.Audio
+			? std::static_pointer_cast<base::GuiElement>(candidate.Audio) : candidate.Midi->Model();
+		for (std::size_t index = 0u; index < _selectionHistory.size(); ++index)
+			if (const auto target = _selectionHistory[index].lock(); target &&
+				(target == leaf || target == candidate.Take ||
+					(!selectStreams && target->IsSelected() && target->Parent() == candidate.Take)) && index + 1u > recentRank)
+			{
+				recentRank = index + 1u; recent = candidate;
+			}
+	};
 	for (const auto& station : _host.Stations)
 	{
+		if (!station || station->MembershipRemoving()) continue;
+		hasSelection |= station->IsSelected();
 		for (const auto& candidateTake : station->GetLoopTakes())
 		{
-			if (!candidateTake || !candidateTake->IsSelected())
+			if (!candidateTake || candidateTake->IsCaptureCancelled()) continue;
+			hasSelection |= candidateTake->IsSelected();
+			if (!candidateTake->IsSelected())
+			{
+				// Hover is a fallback only when the session has no committed selection.
+				const auto initial = selectStreams ? nullptr : _InitialMidiLoop(*candidateTake, false);
+				for (const auto& candidate : candidateTake->GetLoops())
+					if (candidate && hovered && (hovered == candidate || hovered->Parent() == candidate)
+						&& _UnavailableReason(candidateTake, candidate, {}).empty())
+						unselectedHover = {candidateTake, candidate, {}};
+				for (const auto& candidate : candidateTake->GetMidiLoops())
+					if (candidate && candidate->Model() && hovered &&
+						(hovered == candidate->Model() || hovered->Parent() == candidate->Model()))
+					{
+						const auto stream = selectStreams ? candidate : initial;
+						if (stream && _UnavailableReason(candidateTake, {}, stream).empty())
+							unselectedHover = {candidateTake, {}, stream};
+					}
 				continue;
+			}
+			const auto initial = selectStreams ? nullptr : _InitialMidiLoop(*candidateTake);
 			for (const auto& candidate : candidateTake->GetLoops())
+				if (candidate && candidate->IsSelected())
+				{
+					const bool isHovered = hovered && (hovered == candidate || hovered->Parent() == candidate);
+					// Take selection chooses its MIDI stream first; an explicit audio hover still wins.
+					if (selectStreams || !initial || isHovered) consider({candidateTake, candidate, {}}, isHovered);
+				}
+			if (!selectStreams)
 			{
-				if (!candidate)
-					continue;
-				if (candidate->IsSelected() && hovered
-					&& (hovered == candidate || hovered->Parent() == candidate))
-				{
-					take = candidateTake;
-					audioLoop = candidate;
-					midiLoop.reset();
-					return true;
-				}
-				if (candidate->IsSelected())
-				{
-					++fallbackCount;
-					take = candidateTake;
-					audioLoop = candidate;
-					midiLoop.reset();
-				}
+				bool hoveredTake = false;
+				for (const auto& candidate : candidateTake->GetMidiLoops())
+					if (candidate && candidate->Model() && candidate->Model()->IsSelected() && hovered &&
+						(hovered == candidate->Model() || hovered->Parent() == candidate->Model())) hoveredTake = true;
+				if (initial) consider({candidateTake, {}, initial}, hoveredTake);
 			}
-			bool countedMidiForTake = false;
-			for (const auto& candidate : candidateTake->GetMidiLoops())
-			{
-				if (!candidate)
-					continue;
-				if (candidate->Model() && candidate->Model()->IsSelected() && hovered
-					&& (hovered == candidate->Model() || hovered->Parent() == candidate->Model()))
-				{
-					take = candidateTake;
-					audioLoop.reset();
-					midiLoop = candidate;
-					return true;
-				}
-				if (candidate->Model() && candidate->Model()->IsSelected()
-					&& (selectStreams || !countedMidiForTake))
-				{
-					countedMidiForTake = true;
-					++fallbackCount;
-					take = candidateTake;
-					audioLoop.reset();
-					// Whole-take selection has a default channel; loop-depth selection
-					// counts each stream independently and requires disambiguation.
-					const auto initial = selectStreams ? nullptr : _InitialMidiLoop(*candidateTake);
-					midiLoop = initial && initial->Model()->IsSelected() ? initial : candidate;
-				}
-			}
+			else
+				for (const auto& candidate : candidateTake->GetMidiLoops())
+					if (candidate && candidate->Model() && candidate->Model()->IsSelected())
+						consider({candidateTake, {}, candidate}, hovered &&
+							(hovered == candidate->Model() || hovered->Parent() == candidate->Model()));
 		}
 	}
-	return fallbackCount == 1u;
+	const auto& chosen = !hasSelection ? unselectedHover : hover.Take ? hover : recent.Take ? recent : fallback;
+	if (!chosen.Take || (hasSelection && !hover.Take && !recent.Take && fallbackCount != 1u))
+	{
+		take.reset(); audioLoop.reset(); midiLoop.reset();
+		return false;
+	}
+	take = chosen.Take; audioLoop = chosen.Audio; midiLoop = chosen.Midi;
+	return true;
 }
 
 std::string LoopGridEditor::_UnavailableReason(const std::shared_ptr<engine::LoopTake>& take,
 	const std::shared_ptr<engine::Loop>& audioLoop,
 	const std::shared_ptr<MidiLoop>& midiLoop) const
 {
-	if (!take || !take->IsSelected()
-		|| (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
+	if (!take || (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
 		return "Select one loop to edit";
 	const auto state = take->TakeState();
 	if (state != engine::LoopTake::STATE_PLAYING && state != engine::LoopTake::STATE_INACTIVE)
 		return "Finish recording before editing";
 	if (audioLoop)
 	{
-		if (!audioLoop->SupportsAudioSpectralEditing())
+		if (!audioLoop->SupportsSpectralEditing())
 			return "Live remote audio cannot be edited";
-		if (!audioLoop->IsSelected())
-			return "Select the audio loop to edit";
 		if (audioLoop->LoopLength() == 0ul)
 			return "Loop has no completed audio";
 		if (!audioLoop->CanEditAudioSource())
@@ -251,7 +283,7 @@ std::string LoopGridEditor::_UnavailableReason(const std::shared_ptr<engine::Loo
 	}
 	else
 	{
-		if (!midiLoop->Model() || !midiLoop->Model()->IsSelected())
+		if (!midiLoop->Model())
 			return "Select the MIDI loop to edit";
 		if (midiLoop->CompletedLengthForEditor() == 0u)
 			return "Finish recording or set a loop length to edit";
@@ -282,7 +314,7 @@ bool LoopGridEditor::_Validate() const
 	{
 		const auto& loops = take->GetLoops();
 		return audioLoop->LoopLength() > 0ul
-			&& audioLoop->SupportsAudioSpectralEditing()
+			&& audioLoop->SupportsSpectralEditing()
 			&& std::find(loops.begin(), loops.end(), audioLoop) != loops.end();
 	}
 	const auto& loops = take->GetMidiLoops();
@@ -295,7 +327,7 @@ bool LoopGridEditor::Open(const std::shared_ptr<engine::LoopTake>& take,
 	const std::shared_ptr<engine::Loop>& audioLoop,
 	const std::shared_ptr<MidiLoop>& midiLoop)
 {
-	if (State::Closed != _state || !take || !take->IsSelected()
+	if (State::Closed != _state || !take
 		|| (static_cast<bool>(audioLoop) == static_cast<bool>(midiLoop)))
 		return false;
 	const auto unavailableReason = _UnavailableReason(take, audioLoop, midiLoop);
@@ -377,11 +409,9 @@ void LoopGridEditor::_FitPitchRange(const std::shared_ptr<MidiLoop>& midiLoop)
 	if (!model || !midiLoop->SnapshotForEdit(source))
 		return;
 	std::vector<MidiEvent> displayed(source.EventCount);
-	if (source.Quantisation.Enabled)
-		MidiQuantisation::BuildQuantisedPlaybackEvents(source.Events.data(),
-			source.EventCount, source.LoopLengthSamps, source.Quantisation,
-			source.QuantisationTransportStartSamps, displayed.data());
-	else std::copy_n(source.Events.begin(), source.EventCount, displayed.begin());
+	MidiQuantisation::BuildPlaybackEvents(source.Events.data(),
+		source.EventCount, source.LoopLengthSamps, source.Quantisation,
+		source.QuantisationTransportStartSamps, displayed.data());
 	const auto notes = MidiNote::ExtractSpans(displayed.data(),
 		displayed.size(), source.LoopLengthSamps);
 	int low = 127, high = 0;
@@ -449,6 +479,21 @@ bool LoopGridEditor::SelectMidiChannel(unsigned int channel)
 	return true;
 }
 
+void LoopGridEditor::ResetSession()
+{
+    CancelInput();
+    Close();
+    if(const auto loop=_audioLoop.lock()) if(const auto model=loop->Model()) { model->SetEditorMorph(0.0f); model->SetEditorActive(false); }
+    if(const auto loop=_midiLoop.lock()) if(const auto model=loop->Model()) { model->SetEditorMorph(0.0f); model->SetEditorActive(false); model->SetEditorHover(-1.0f,-1); }
+    _host.Camera.SetEditorPerspective(false);
+    _ResetTarget();
+    _pendingAudioUndo.clear(); _audioStrokePoint.reset();
+    _audioStroke=false; _audioNavigation=false; _audioPan=false; _audioBandPreview=false;
+    _revisionCursor.reset(); _revisionCursors.clear(); _selectionHistory.clear();
+    _gesture.reset(); _state=State::Closed; _blend=0.0f;
+    _SetFeedback("");
+}
+
 void LoopGridEditor::Close()
 {
 	if (!IsOpen())
@@ -460,7 +505,6 @@ void LoopGridEditor::Close()
 	_ClearIdleHover(true);
 	_EndOrbit();
 	_revisionCursor.reset();
-	_buttonPressed = false;
 	_audioEditor.Close();
 	_state = State::Closing;
 	_host.Camera.RestoreEditorReturnState(_returnCamera);
@@ -582,12 +626,27 @@ std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
 	const auto width = static_cast<int>(_size.Width);
 	const auto height = static_cast<int>(_size.Height);
 	if (!length || width <= 0 || height <= 0) return std::nullopt;
+	// Capture and hover use visible note faces; held drags retain the backing plane.
+	if (!clampToGrid)
+	{
+		MidiLoop::EditState source;
+		if (loop->SnapshotForEdit(source) && !LoopGridGeometry::Resolve(length,
+			source.Quantisation, source.QuantisationTransportStartSamps))
+			if (const auto ray = graphics::LoopGridProjection::UnprojectToLocalRay(
+				_ViewProjection(), _ModelMatrix(), pixel, width, height))
+				if (const auto hit = loop->Model()->PickEditorNote(ray->Origin, ray->Direction))
+					return MidiGridGesture::Point{hit->Sample, hit->Pitch,
+						static_cast<double>(hit->Sample) / length,
+						(hit->Pitch - loop->Model()->EditorBottomPitch() + 0.5) / loop->Model()->EditorVisibleRows()};
+	}
 	const auto local = graphics::LoopGridProjection::UnprojectToLocalPlane(_ViewProjection(),
 		_ModelMatrix(), pixel, width, height, 2.0f);
 	if (!local) return std::nullopt;
 	const auto radius = _MidiRadius(length);
-	const auto u = static_cast<double>(local->x / (2.0f * radius) + 0.5f);
-	const auto v = static_cast<double>(0.5f - local->z / (1.56f * radius));
+	const auto u = static_cast<double>(local->x / (2.0f * radius) + 0.5f)
+		+ (clampToGrid && _pointerOwned ? _freeDragOffsetU : 0.0);
+	const auto v = static_cast<double>(0.5f - local->z / (1.56f * radius))
+		+ (clampToGrid && _pointerOwned ? _freeDragOffsetV : 0.0);
 	if (!clampToGrid && (u < 0.0 || u >= 1.0 || v < 0.0 || v >= 1.0))
 		return std::nullopt;
 	const auto boundedU = std::clamp(u, 0.0, std::nextafter(1.0, 0.0));
@@ -596,7 +655,7 @@ std::optional<MidiGridGesture::Point> LoopGridEditor::_PointAt(
 	const auto pitch = std::clamp(model->EditorBottomPitch()
 		+ static_cast<int>(boundedV * model->EditorVisibleRows()), 0, 127);
 	const auto sample = LoopGridGeometry::SampleAtU(boundedU, length);
-	return MidiGridGesture::Point{ sample, static_cast<std::uint8_t>(pitch), boundedU, boundedV };
+	return MidiGridGesture::Point{ sample, static_cast<std::uint8_t>(pitch), boundedU, boundedV, boundedU * length };
 }
 
 std::uint8_t LoopGridEditor::_ChannelOf(const std::shared_ptr<MidiLoop>& loop) const
@@ -632,9 +691,9 @@ bool LoopGridEditor::_AudioSurfaceReady(bool requireCurrentViewport) const
 {
 	const auto loop = _audioLoop.lock();
 	const auto source = _audioEditor.Source();
-	const auto model = loop ? loop->AudioSpectralModel() : nullptr;
+	const auto model = loop ? loop->SpectralModel() : nullptr;
 	if (!IsReady() || !_Validate() || !loop || !loop->CanEditAudioSource() || !source || !model
-		|| _audioEditor.Status() != spectral::AudioSpectralEditor::State::Ready || !model->IsAvailable()
+		|| _audioEditor.Status() != spectral::SpectralEditor::State::Ready || !model->IsAvailable()
 		|| source->Generation != loop->AudioSourceGeneration()) return false;
 	const auto surface = model->DisplayedSurface();
 	return surface.Morph >= 1.0f && surface.Display && surface.HasDrawTransform
@@ -654,7 +713,7 @@ bool LoopGridEditor::_AudioGeometryChanged(bool includeViewport) const
 			if (std::abs(view[column][row] - _audioCapturedView[column][row]) > 0.0001f)
 				return true;
 	const auto loop = _audioLoop.lock();
-	const auto model = loop ? loop->AudioSpectralModel() : nullptr;
+	const auto model = loop ? loop->SpectralModel() : nullptr;
 	if (!model) return true;
 	const auto surface = model->DisplayedSurface();
 	// Parent layout tweens do not invalidate the frozen bar projection.
@@ -667,11 +726,11 @@ std::optional<std::pair<double, double>> LoopGridEditor::_AudioPointAt(utils::Po
 {
 	if (!_AudioSurfaceReady(requireCurrentViewport)) return std::nullopt;
 	const auto source = _audioEditor.Source();
-	const auto surface = _audioLoop.lock()->AudioSpectralModel()->DisplayedSurface();
+	const auto surface = _audioLoop.lock()->SpectralModel()->DisplayedSurface();
 	const auto ray = graphics::LoopGridProjection::UnprojectToLocalRay(surface.ClipFromLocal, glm::mat4(1.0f),
 		pixel, static_cast<int>(_size.Width), static_cast<int>(_size.Height));
 	if (!ray) return std::nullopt;
-	const auto hit = spectral::AudioSpectralPicking::Intersect(surface, ray->Origin, ray->Direction);
+	const auto hit = spectral::SpectralPicking::Intersect(surface, ray->Origin, ray->Direction);
 	if (!hit || hit->Distance > glm::length(ray->Direction)) return std::nullopt;
 	const auto frequency = surface.Display->FrequencyAt(hit->FrequencyV);
 	return std::pair<double, double>{hit->TimeU * source->Layout.LogicalLength / source->Layout.SampleRate, frequency};
@@ -688,7 +747,7 @@ void LoopGridEditor::_MoveAudioStroke(utils::Position2d pixel)
 		{
 			point = _audioStrokePoint;
             const auto source = _audioEditor.Source();
-            const auto seconds = spectral::AudioSpectralPicking::BandTime(_audioBarViewProjection,
+            const auto seconds = spectral::SpectralPicking::BandTime(_audioBarViewProjection,
                 _audioBarPlaneY, _audioBarRadius, _audioViewPointerAnchor, pixel,
                 static_cast<int>(_size.Width), static_cast<int>(_size.Height), _audioBandAnchorSeconds,
                 source->Layout.LogicalLength / source->Layout.SampleRate,
@@ -710,9 +769,10 @@ void LoopGridEditor::_EndAudioStroke(bool cancel)
 	_audioStroke = false;
 	_audioStrokePoint.reset();
 	_pointerOwned = false;
+	_freeDragOffsetU = _freeDragOffsetV = 0.0;
 	_pointerButton = -1;
 	if (const auto loop = _audioLoop.lock())
-		if (const auto model = loop->AudioSpectralModel()) model->SetBrush({-1.0f,-1.0f}, {}, 0);
+		if (const auto model = loop->SpectralModel()) model->SetBrush({-1.0f,-1.0f}, {}, 0);
 }
 
 void LoopGridEditor::_DrainAudioUndo()
@@ -729,7 +789,7 @@ void LoopGridEditor::_DrainAudioUndo()
 void LoopGridEditor::_UpdateAudioFootprint(utils::Position2d pixel)
 {
 	const auto loop = _audioLoop.lock();
-	const auto model = loop ? loop->AudioSpectralModel() : nullptr;
+	const auto model = loop ? loop->SpectralModel() : nullptr;
 	if (!model) return;
 	auto point = _audioStroke && !_audioBroadband && _AudioSurfaceReady()
 		? _audioStrokePoint : _AudioPointAt(pixel);
@@ -745,8 +805,8 @@ void LoopGridEditor::_UpdateAudioFootprint(utils::Position2d pixel)
 	const auto logRange = std::log2(display->MaximumFrequencyHz / display->MinimumFrequencyHz);
 	const auto v = display->FrequencyV(point->second);
 	model->SetBrush({static_cast<float>(point->first / duration), static_cast<float>(v)},
-		{static_cast<float>((broadband ? _audioControls.BandRadius : spectral::AudioSpectralGainField::EffectiveTimeRadius(*_audioEditor.Analysis(), _audioControls.TimeRadius)) / duration),
-			static_cast<float>(spectral::AudioSpectralGainField::EffectiveFrequencyRadius(*_audioEditor.Analysis(), point->second, _audioControls.FrequencyRadius) / logRange)},
+		{static_cast<float>((broadband ? _audioControls.BandRadius : spectral::SpectralGainField::EffectiveTimeRadius(*_audioEditor.Analysis(), _audioControls.TimeRadius)) / duration),
+			static_cast<float>(spectral::SpectralGainField::EffectiveFrequencyRadius(*_audioEditor.Analysis(), point->second, _audioControls.FrequencyRadius) / logRange)},
 		broadband ? 3 : (_audioStroke && _audioAttenuate ? 2 : 1));
 }
 void LoopGridEditor::_HandleWheel(const actions::TouchAction& action)
@@ -754,20 +814,20 @@ void LoopGridEditor::_HandleWheel(const actions::TouchAction& action)
 	if (!_audioLoop.expired())
 	{
 		if (_audioEditor.HasStroke() || !_AudioSurfaceReady(false)) return;
-		const auto mode = spectral::AudioSpectralControls::WheelBinding(
+		const auto mode = spectral::SpectralControls::WheelBinding(
 			(action.Modifiers & base::Action::MODIFIER_ALT) != 0,
 			(action.Modifiers & base::Action::MODIFIER_SHIFT) != 0,
 			(action.Modifiers & base::Action::MODIFIER_CTRL) != 0);
-		if (mode == spectral::AudioSpectralControls::WheelMode::Reserved) return;
-		_audioBandPreview = mode == spectral::AudioSpectralControls::WheelMode::Band;
+		if (mode == spectral::SpectralControls::WheelMode::Reserved) return;
+		_audioBandPreview = mode == spectral::SpectralControls::WheelMode::Band;
 		double anchorFraction = 0.5;
         const auto sourcePoint = _AudioPointAt(action.Position, false);
         if (sourcePoint)
         {
-            const auto surface = _audioLoop.lock()->AudioSpectralModel()->DisplayedSurface();
+            const auto surface = _audioLoop.lock()->SpectralModel()->DisplayedSurface();
             const auto source = _audioEditor.Source();
             const auto duration = source->Layout.LogicalLength / source->Layout.SampleRate;
-            anchorFraction = mode == spectral::AudioSpectralControls::WheelMode::TimeZoom
+            anchorFraction = mode == spectral::SpectralControls::WheelMode::TimeZoom
                 ? (sourcePoint->first / duration - surface.TimeViewport.Lower) / (surface.TimeViewport.Upper - surface.TimeViewport.Lower)
                 : (surface.Display->FrequencyV(sourcePoint->second) - surface.FrequencyViewport.Lower) / (surface.FrequencyViewport.Upper - surface.FrequencyViewport.Lower);
         }
@@ -803,10 +863,19 @@ void LoopGridEditor::_BeginGesture(const actions::TouchAction& action)
 	_gesture = std::make_unique<MidiGridGesture>();
 	if (_gesture->Begin(source, *point, _ChannelOf(loop), _PixelsPerSample(source.LoopLengthSamps), _creationVelocity))
 	{
+		// Keep a captured face anchored while drag samples use the backing plane.
+		_freeDragOffsetU = _freeDragOffsetV = 0.0;
+		if (!_gesture->Grid())
+			if (const auto plane = _PointAt(action.Position, true))
+			{
+				_freeDragOffsetU = point->U - plane->U;
+				_freeDragOffsetV = point->V - plane->V;
+			}
+		_gestureModelGeneration = loop->Model()->EditorModelGeneration();
 		_pointerOwned = true;
 		_pointerButton = 0;
 		_previewDirty = true;
-		_UpdateHover(*point);
+		_UpdateHeldTarget();
 	}
 	else
 	{
@@ -830,20 +899,24 @@ bool LoopGridEditor::_BeginSpecialGesture(const actions::TouchAction& action)
 		const auto& note = targets.Notes[i];
 		const auto& on = source.Events[note.On];
 		displayMatches = model->EditorNoteMatches(i, MidiNote{note.Start, note.End - note.Start,
-			on.Channel(), note.Pitch, on.data2, on.flags}, source.LoopLengthSamps);
+			on.Channel(), note.Pitch, on.data2, note.Flags}, source.LoopLengthSamps);
 	}
 	if (!displayMatches)
 	{
 		_SetFeedback("Note display is refreshing; try again");
 		return true; // Never capture a source identity behind a stale displayed instance.
 	}
-	const auto target = targets.Resolve(point->Sample, point->Pitch, nullptr);
+	const bool edge = action.Index == 0 && (action.Modifiers & base::Action::MODIFIER_ALT)
+		&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
+	const auto target = edge ? targets.ResolveEdge(point->EdgePosition(), point->Pitch, _PixelsPerSample(source.LoopLengthSamps), source.LoopLengthSamps)
+		: targets.Resolve(point->Sample, point->Pitch, nullptr);
 	const bool velocity = action.Index == 2;
 	if (!velocity && !target.NoteIndex) return true; // Ctrl is reserved for moving notes.
 	if (target.NoteIndex)
 	{
 		_gesture = std::make_unique<MidiGridGesture>();
 		const auto accepted = velocity ? _gesture->BeginVelocity(source, *point)
+			: edge ? _gesture->BeginEdge(source, *point, _PixelsPerSample(source.LoopLengthSamps))
 			: _gesture->BeginSnappedMove(source, *point);
 		if (!accepted)
 		{
@@ -892,6 +965,7 @@ void LoopGridEditor::_UpdateHeldTarget()
 	}
 	_hoverRevision = _gesture->Before().Revision;
 	model->SetEditorHover(-1.0f, -1);
+	model->SetEditorHandle(EditHandle());
 	model->SetEditorHeld(static_cast<int>(*_gesture->CapturedNoteIndex()),
 		_gesture->Mode() == MidiGridGesture::Kind::Velocity ? _gesture->ProposedVelocity() : -1);
 	if (_gesture->Mode() == MidiGridGesture::Kind::Velocity)
@@ -910,10 +984,11 @@ void LoopGridEditor::_EndGesture(const actions::TouchAction& action)
 	bool validDrop = true;
 	if (_gesture && !wasRelative)
 	{
+		if (_gesture->IsEdge()) _gesture->SetEdgeFree(_altEdgeAvailable);
 		const auto snappedMove = _gesture->Mode() == MidiGridGesture::Kind::SnappedMove;
 		const auto point = _PointAt(action.Position, !snappedMove);
 		validDrop = !snappedMove || point.has_value();
-		if (point) _gesture->Update(*point);
+		if (point) _gesture->Finish(*point);
 	}
 	if (validDrop && _gesture && _gesture->Dirty() && !_gesture->Rejected()) _PublishGesture();
 	else if (_gesture && _gesture->Rejected()) _SetFeedback("Edit rejected; source unchanged");
@@ -934,7 +1009,8 @@ void LoopGridEditor::_PublishGesture()
 	if (!loop || !take)
 		return;
 	std::uint64_t acceptedRevision = 0u;
-	if (!take->PublishMidiEdit(loop, _gesture->Working(), &acceptedRevision))
+	auto accepted = _gesture->Working();
+	if (!take->PublishMidiEdit(loop, _gesture->Working(), &acceptedRevision, &accepted))
 	{
 		_SetFeedback("Edit changed or cannot be represented");
 		return;
@@ -942,7 +1018,7 @@ void LoopGridEditor::_PublishGesture()
 	if (!_revisionCursor)
 		_revisionCursor = std::make_shared<actions::MidiEditRevisionCursor>();
 	_host.Undo.Add(std::make_shared<actions::MidiLoopEditUndo>(take, loop,
-		_gesture->Before(), _gesture->Working(), acceptedRevision, _revisionCursor));
+		_gesture->Before(), std::move(accepted), acceptedRevision, _revisionCursor));
 	if (_gesture->Mode() == MidiGridGesture::Kind::Velocity)
 		_creationVelocity = static_cast<std::uint8_t>(_gesture->ProposedVelocity());
 	_SetFeedback("MIDI edit applied (Ctrl+Z to undo)");
@@ -954,6 +1030,7 @@ void LoopGridEditor::_CancelGesture()
 	const auto relative = _relativePointer;
 	const auto button = _pointerButton;
 	_pointerOwned = false;
+	_freeDragOffsetU = _freeDragOffsetV = 0.0;
 	_pointerButton = -1;
 	_relativePointer = false;
 	_pitchView = false;
@@ -974,6 +1051,7 @@ void LoopGridEditor::_CancelGesture()
 
 void LoopGridEditor::_ClearIdleHover(bool clearCache)
 {
+	_editHandle = LoopGridGeometry::EditHandle::None;
 	_idleHoverPointer.reset();
 	if (clearCache)
 	{
@@ -994,6 +1072,7 @@ void LoopGridEditor::_UpdateIdleHover()
 	const auto point = _PointAt(*_idleHoverPointer, false);
 	if (!point)
 	{
+		_editHandle = LoopGridGeometry::EditHandle::None;
 		if (auto loop = _midiLoop.lock())
 			if (auto model = loop->Model()) model->SetEditorHover(-1.0f, -1);
 		return;
@@ -1003,6 +1082,7 @@ void LoopGridEditor::_UpdateIdleHover()
 
 void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 {
+	_editHandle = LoopGridGeometry::EditHandle::None;
 	const auto loop = _midiLoop.lock();
 	const auto model = loop ? loop->Model() : nullptr;
 	if (!model) return;
@@ -1048,13 +1128,17 @@ void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 			_idleHoverCacheTransportStart = source.QuantisationTransportStartSamps;
 			_idleHoverCacheValid = true;
 		}
-		target = _idleHoverTargets.Resolve(point.Sample, point.Pitch,
-			_idleHoverGrid ? &*_idleHoverGrid : nullptr);
+		target = _altEdgeAvailable ? _idleHoverTargets.ResolveEdge(point.EdgePosition(), point.Pitch, _PixelsPerSample(source.LoopLengthSamps), source.LoopLengthSamps)
+			: _idleHoverTargets.Resolve(point.Sample, point.Pitch, _idleHoverGrid ? &*_idleHoverGrid : nullptr);
 		length = source.LoopLengthSamps;
 		gridResolved = _idleHoverGrid.has_value();
 		_hoverRevision = source.Revision;
 	}
 	if (!length) return;
+	if ((!gridResolved || _altEdgeAvailable) && target.NoteIndex)
+		_editHandle = LoopGridGeometry::NoteEditHandle(point.EdgePosition()
+			+ static_cast<double>(target.PointerOffset), target.Start, target.End, _PixelsPerSample(length));
+	if (_altEdgeAvailable && !target.NoteIndex) { model->SetEditorHover(-1.0f, -1); return; }
 	// Free timing has no cell to highlight, so empty space keeps the pointer glow.
 	if (!target.NoteIndex && !gridResolved)
 	{
@@ -1064,6 +1148,7 @@ void LoopGridEditor::_UpdateHover(MidiGridGesture::Point point)
 	model->SetEditorTarget(static_cast<float>(target.Start) / length,
 		static_cast<float>(target.End) / length, target.Pitch,
 		target.NoteIndex ? static_cast<int>(*target.NoteIndex) : -1);
+	model->SetEditorHandle(_editHandle);
 }
 
 void LoopGridEditor::_UpdatePreview()
@@ -1108,10 +1193,10 @@ void LoopGridEditor::_CheckGesture()
 
 void LoopGridEditor::CancelInput()
 {
+	_altEdgeAvailable = false;
 	_CancelGesture();
 	_EndOrbit();
 	_ClearIdleHover(true);
-	_buttonPressed = false;
 	_channelDragging = false;
 	_channelInput->ClearFocus();
 }
@@ -1181,7 +1266,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 		std::string mode = "L/R: boost/cut; Alt: sweep band; Wheel: size; Shift-R: zoom; Shift-L: pan";
 		if (_audioStroke && _audioBroadband)
 		{
-			const auto target = spectral::AudioSpectralEnvelope::TargetFromDragPixels(
+			const auto target = spectral::SpectralEnvelope::TargetFromDragPixels(
 				static_cast<double>(_audioPointer.Y - _audioAnchorY) / _audioPixelScale);
 			mode = target == 0.0f ? "Broadband: silence" : "Broadband: "
 				+ std::to_string(static_cast<int>(std::lround(20.0 * std::log10(target)))) + " dB";
@@ -1213,7 +1298,7 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 			if (loop->SnapshotForEdit(state))
 				mode = LoopGridGeometry::Resolve(state.LoopLengthSamps,
 					state.Quantisation, state.QuantisationTransportStartSamps)
-					? "Paint: click notes to remove; drag empty cells to add" : "Free timing: drag notes or edges";
+					? "Paint: click notes to remove; drag empty cells to add" : "Free timing: click notes to remove; drag to create, move or trim";
 		}
 		_modeLabel->SetString(mode);
 		_modeLabel->SetVisible(!_audioLoop.expired());
@@ -1253,27 +1338,13 @@ void LoopGridEditor::UpdateUi(const glm::mat4& viewProjection)
 
 		}
 	}
-	const auto showsClose = IsOpen();
-	if (!showsClose && State::Closed == _state)
+	if (State::Closed == _state)
 	{
 		std::shared_ptr<engine::LoopTake> take;
 		std::shared_ptr<engine::Loop> audioLoop;
 		std::shared_ptr<MidiLoop> midiLoop;
-		const auto hasCandidate = FindCandidate(take, audioLoop, midiLoop);
-		const auto reason = hasCandidate
-			? _UnavailableReason(take, audioLoop, midiLoop)
-			: std::string("Select and hover one loop to edit");
-		_button->SetEnabled(hasCandidate && reason.empty());
-		_SetFeedback(reason);
+		_SetFeedback(FindCandidate(take, audioLoop, midiLoop) ? "" : "Select or hover a completed loop to edit");
 	}
-	else
-		_button->SetEnabled(true);
-	if (showsClose != _buttonShowsClose)
-	{
-		_button->SetText(showsClose ? "Close editor (Esc)" : "Edit loop (E)");
-		_buttonShowsClose = showsClose;
-	}
-	_button->SetVisible(false);
 }
 
 void LoopGridEditor::ApplyToModels()
@@ -1281,8 +1352,8 @@ void LoopGridEditor::ApplyToModels()
 	if (auto audioLoop = _audioLoop.lock())
 	{
 		const auto morph = _blend * _audioSurfaceBlend;
-		audioLoop->SetAudioSpectralMorph(morph);
-		if (const auto spectral = audioLoop->AudioSpectralModel()) spectral->SetEditorMorph(morph);
+		audioLoop->SetSpectralMorph(morph);
+		if (const auto spectral = audioLoop->SpectralModel()) spectral->SetEditorMorph(morph);
 		if (auto model = audioLoop->Model())
 		{
 			model->SetEditorMorph(morph);
@@ -1325,43 +1396,10 @@ void LoopGridEditor::Draw(base::DrawContext& ctx)
 
 }
 
-bool LoopGridEditor::_HandleButton(actions::TouchAction action)
-{
-	if (!_button->IsVisible() || State::Closing == _state)
-		return false;
-	const auto inside = _button->HitTest(_button->GlobalToLocal(action.Position));
-	if (actions::TouchAction::TOUCH_DOWN == action.State && 0 == action.Index
-		&& action.Touch == actions::TouchAction::TOUCH_MOUSE && inside)
-	{
-		_buttonPressed = true;
-		_button->OnAction(_button->GlobalToLocal(action));
-		return true;
-	}
-	if (actions::TouchAction::TOUCH_UP == action.State && _buttonPressed
-		&& action.Touch == actions::TouchAction::TOUCH_MOUSE && action.Index == 0)
-	{
-		_buttonPressed = false;
-		_button->OnAction(_button->GlobalToLocal(action));
-		if (inside)
-		{
-			if (IsOpen())
-				Close();
-			else
-			{
-				std::shared_ptr<engine::LoopTake> take;
-				std::shared_ptr<engine::Loop> audioLoop;
-				std::shared_ptr<MidiLoop> midiLoop;
-				if (_button->IsEnabled() && FindCandidate(take, audioLoop, midiLoop))
-					Open(take, audioLoop, midiLoop);
-			}
-		}
-		return true;
-	}
-	return false;
-}
-
 std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchAction action)
 {
+	_altEdgeAvailable = (action.Modifiers & base::Action::MODIFIER_ALT)
+		&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
 	_CheckGesture();
 	const auto isMouse = action.Touch == actions::TouchAction::TOUCH_MOUSE;
 	if (_pointerOwned)
@@ -1415,7 +1453,6 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 			return _Eaten();
 		}
 	}
-	if (_HandleButton(action)) return _Eaten();
 	if (!IsEngaged()) return std::nullopt;
 	if (_orbitDragging)
 	{
@@ -1435,10 +1472,10 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 		if (!_audioLoop.expired())
 		{
 			if (_audioEditor.HasStroke() || (_AudioSurfaceReady(false) && !_AudioSurfaceReady())) return _Eaten();
-			const auto navigation = spectral::AudioSpectralControls::DragBinding(action.Index == 2,
+			const auto navigation = spectral::SpectralControls::DragBinding(action.Index == 2,
                 (action.Modifiers & base::Action::MODIFIER_SHIFT) != 0,
                 (action.Modifiers & base::Action::MODIFIER_CTRL) != 0);
-            if (navigation == spectral::AudioSpectralControls::DragMode::Reserved) return _Eaten(); // Future quantisation.
+            if (navigation == spectral::SpectralControls::DragMode::Reserved) return _Eaten(); // Future quantisation.
 			_DrainAudioUndo();
 			const auto point = _AudioPointAt(action.Position);
 			if (point)
@@ -1451,7 +1488,7 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 				_audioViewPointerAnchor = action.Position;
 				_audioBandAnchorSeconds = point->first;
 				_audioCapturedView = _host.Camera.ViewMatrix();
-				const auto surface = _audioLoop.lock()->AudioSpectralModel()->DisplayedSurface();
+				const auto surface = _audioLoop.lock()->SpectralModel()->DisplayedSurface();
 				_audioCapturedViewport = surface.FrequencyViewport;
                 _audioCapturedTimeViewport = surface.TimeViewport;
 				_audioBarViewProjection = surface.ClipFromLocal;
@@ -1459,14 +1496,14 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 				_audioBarRadius = surface.Radius;
 				const auto ray = graphics::LoopGridProjection::UnprojectToLocalRay(_audioBarViewProjection,
 					_audioBarModel, action.Position, static_cast<int>(_size.Width), static_cast<int>(_size.Height));
-				const auto hit = ray ? spectral::AudioSpectralPicking::Intersect(surface, ray->Origin, ray->Direction) : std::nullopt;
+				const auto hit = ray ? spectral::SpectralPicking::Intersect(surface, ray->Origin, ray->Direction) : std::nullopt;
 				if (!hit || !ray) return _Eaten();
 				_audioBarPlaneY = (ray->Origin + glm::normalize(ray->Direction) * static_cast<float>(hit->Distance)).y;
-				if (navigation != spectral::AudioSpectralControls::DragMode::Paint)
+				if (navigation != spectral::SpectralControls::DragMode::Paint)
 				{
 					_audioControls.Viewport = surface.FrequencyViewport;
                     _audioControls.TimeViewport = surface.TimeViewport;
-                    _audioPan = navigation == spectral::AudioSpectralControls::DragMode::Pan;
+                    _audioPan = navigation == spectral::SpectralControls::DragMode::Pan;
                     const auto timeFraction = (hit->TimeU - surface.TimeViewport.Lower) / (surface.TimeViewport.Upper - surface.TimeViewport.Lower);
                     const auto frequencyFraction = (hit->FrequencyV - surface.FrequencyViewport.Lower) / (surface.FrequencyViewport.Upper - surface.FrequencyViewport.Lower);
                     _audioControls.BeginZoom(timeFraction, frequencyFraction);
@@ -1493,7 +1530,9 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 			return _Eaten();
 		}
 		const auto control = (base::Action::MODIFIER_CTRL & action.Modifiers) != 0;
-		if ((action.Index == 2 || control) && _BeginSpecialGesture(action)) return _Eaten();
+		const bool edge = action.Index == 0 && (action.Modifiers & base::Action::MODIFIER_ALT)
+			&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
+		if ((action.Index == 2 || control || edge) && _BeginSpecialGesture(action)) return _Eaten();
 		_ClearIdleHover(false);
 		if (action.Index == 0 && !control) _BeginGesture(action);
 		if (!_pointerOwned)
@@ -1509,6 +1548,8 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchActi
 
 std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMoveAction action)
 {
+	_altEdgeAvailable = (action.Modifiers & base::Action::MODIFIER_ALT)
+		&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
 	if (!_pointerOwned) _audioBandPreview = (action.Modifiers & base::Action::MODIFIER_ALT) != 0;
 	if (!IsEngaged()) return std::nullopt;
 	_CheckGesture();
@@ -1519,7 +1560,6 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 		SelectMidiChannel(static_cast<unsigned int>(std::lround(_channelInput->Value())));
 		return _Eaten();
 	}
-	if (0u == (action.MouseButtonsDown & 1u)) _buttonPressed = false;
 	if (_pointerOwned && (action.Touch != actions::TouchAction::TOUCH_MOUSE
 		|| 0u == (action.MouseButtonsDown & (1u << _pointerButton))))
 	{
@@ -1537,7 +1577,7 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
                     _audioBarModel, action.Position, static_cast<int>(_size.Width), static_cast<int>(_size.Height), _audioBarPlaneY);
                 if (!local) return _Eaten();
                 _audioControls.MovePan(0.5 + local->x / (2.0 * _audioBarRadius),
-                    0.5 - local->z / (2.0 * graphics::AudioSpectralModel::DepthRadiusScale * _audioBarRadius));
+                    0.5 - local->z / (2.0 * graphics::SpectralModel::DepthRadiusScale * _audioBarRadius));
             }
             else _audioControls.MoveZoom((action.Position.X - _audioViewPointerAnchor.X) / _audioPixelScale,
                 (action.Position.Y - _audioViewPointerAnchor.Y) / _audioPixelScale);
@@ -1567,7 +1607,11 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(actions::TouchMove
 		else if (_gesture)
 		{
 			if (_relativePointer) _gesture->UpdateRelative(action.RelativeDelta.Y);
-			else if (auto point = _PointAt(action.Position, true)) _gesture->Update(*point);
+			else if (auto point = _PointAt(action.Position, true))
+			{
+				if (_gesture->IsEdge()) _gesture->SetEdgeFree(_altEdgeAvailable);
+				_gesture->Update(*point);
+			}
 			_previewDirty = true;
 			if (_gesture->CapturedNoteIndex()) _UpdateHeldTarget();
 			else if (auto point = _PointAt(action.Position, true)) _UpdateHover(*point);
@@ -1593,6 +1637,18 @@ std::optional<actions::ActionResult> LoopGridEditor::OnAction(const actions::Key
 {
 	if (!IsEngaged())
 		return std::nullopt;
+	if (action.KeyChar == 16u || action.KeyChar == 17u || action.KeyChar == 18u)
+	{
+		_altEdgeAvailable = (action.Modifiers & base::Action::MODIFIER_ALT)
+			&& !(action.Modifiers & (base::Action::MODIFIER_CTRL | base::Action::MODIFIER_SHIFT));
+		_CheckGesture();
+		if (_gesture && _gesture->IsEdge())
+		{
+			_gesture->SetEdgeFree(_altEdgeAvailable);
+			_previewDirty = true; _UpdateHeldTarget();
+		}
+		else _UpdateIdleHover();
+	}
 	if (_channelInput->HasFocus() && action.KeyChar != 27u)
 	{
 		_channelInput->OnAction(action);
@@ -1638,6 +1694,6 @@ std::optional<actions::ActionResult> LoopGridEditor::TryOpenFromKey(const action
 	if (FindCandidate(take, audioLoop, midiLoop))
 		Open(take, audioLoop, midiLoop);
 	else
-		_SetFeedback("Select and hover one loop to edit");
+		_SetFeedback("Select or hover a completed loop to edit");
 	return _Eaten();
 }

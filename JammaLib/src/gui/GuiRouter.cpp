@@ -1,4 +1,6 @@
 #include "GuiRouter.h"
+#include "GuiPanel.h"
+#include "GuiButton.h"
 #include "../graphics/GlDeleteQueue.h"
 
 using namespace base;
@@ -7,66 +9,123 @@ using namespace utils;
 using namespace actions;
 using namespace resources;
 
+class GuiRouter::GuiRouterChannel::Socket : public GuiElement
+{
+public:
+	Socket(GuiElementParams params) : GuiElement(params) {}
+	void Draw(DrawContext& ctx) override
+	{
+		auto& gl = dynamic_cast<graphics::GlDrawContext&>(ctx);
+		const auto p = Position();
+		const float scale = _highlighted ? 1.5f : 1.0f;
+		gl.PushMvp(glm::translate(glm::mat4(1.0f), glm::vec3(p.X + 4.0f, p.Y + 4.0f, 0.0f)) *
+			glm::scale(glm::mat4(1.0f), glm::vec3(scale, scale, 1.0f)) *
+			glm::translate(glm::mat4(1.0f), glm::vec3(-p.X - 4.0f, -p.Y - 4.0f, 0.0f)));
+		GuiElement::Draw(ctx);
+		gl.PopMvp();
+	}
+	void ApplyHoverState(bool inside) override
+	{
+		_highlighted = inside;
+		_guiParams.TintColor = inside ? glm::vec3{1.0f, 0.90f, 0.35f} : glm::vec3{0.4f, 0.85f, 1.0f};
+	}
+private:
+	bool _highlighted = false;
+};
+
+void GuiRouter::GuiRouterChannel::ApplyHoverState(bool inside)
+{
+	GuiElement::ApplyHoverState(inside);
+	_socket->ApplyHoverState(inside);
+}
+
+void GuiRouter::GuiRouterChannel::ClearPointerState()
+{
+	GuiElement::ClearPointerState();
+	_socket->ApplyHoverState(false);
+}
+
+Position2d GuiRouter::GuiRouterChannel::SocketPosition() const
+{
+	return Position() + _socket->Position() + Position2d{4, 4};
+}
+
+std::shared_ptr<GuiRouter::GuiRouterChannel> GuiRouter::_NearbyChannel(Position2d point, bool inputsOnly, bool outputsOnly) const
+{
+	std::shared_ptr<GuiRouterChannel> nearest;
+	float distance = 18.0f * 18.0f;
+	const auto visit = [&](const auto& channels) {
+		for (const auto& channel : channels)
+		{
+			const auto delta = channel->SocketPosition() - point;
+			const float squared = static_cast<float>(delta.X) * delta.X + static_cast<float>(delta.Y) * delta.Y;
+			if (channel->HitTest(point - channel->Position())) { nearest = channel; distance = 0.0f; return nearest; }
+			if (squared <= distance) { distance = squared; nearest = channel; }
+		}
+		return nearest;
+	};
+	if (!outputsOnly) visit(_inputs);
+	if (!inputsOnly) visit(_outputs);
+	return nearest;
+}
+
+void GuiRouter::_UpdateSocketHover(Position2d point)
+{
+	const auto nearby = _NearbyChannel(point, _isDragging && !_isDraggingInput, _isDragging && _isDraggingInput);
+	for (const auto& channel : _inputs) channel->ApplyHoverState(channel == nearby);
+	for (const auto& channel : _outputs) channel->ApplyHoverState(channel == nearby);
+	_currentDragPos = nearby && _isDragging ? nearby->SocketPosition() : point;
+}
+
 const unsigned int GuiRouter::_MaxRoutes = 128;
 const int GuiRouter::_WireYOffset = 6;
 
 GuiRouter::GuiRouterChannel::GuiRouterChannel(GuiRouterChannelParams params) :
 	GuiElement(params),
 	_isActive(false),
-	_activeTexture(graphics::ImageParams(DrawableParams{ params.ActiveTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
-	_highlightTexture(graphics::ImageParams(DrawableParams{ params.HighlightTexture }, SizeableParams{ params.Size,params.MinSize }, "texture", params.Rot90, params.FlipH, params.FlipV)),
+	_activeTexture(graphics::ImageParams(DrawableParams{ params.ActiveTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_highlightTexture(graphics::ImageParams(DrawableParams{ params.HighlightTexture }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
+	_activeDownTexture(graphics::ImageParams(DrawableParams{ "rounded_but_on_down" }, SizeableParams{ params.Size,params.MinSize }, params.TextureShader, params.Rot90, params.FlipH, params.FlipV)),
 	_label(nullptr),
 	_params(params)
 {
-	unsigned int width = params.Size.Width > 4 ? params.Size.Width - 4 : params.Size.Width;
-	unsigned int height = params.Size.Height > 4 ? params.Size.Height - 4 : params.Size.Height;
-	const GuiTextFrame frame = GuiLabelParams::ResolveTextFrame(
-		width,
-		height,
-		10u,
-		10u,
-		true);
-	int labelX = 2 + (int)frame.PaddingX;
-	int labelY = 2 + frame.OffsetY;
-	GuiLabelParams labelParams(GuiElementParams(0,
-		DrawableParams{ "" },
-		MoveableParams(Position2d{ labelX, labelY }, Position3d{ (float)labelX, (float)labelY, 0 }, 1.0),
-		SizeableParams{ frame.ContentWidth, frame.TextHeight},
-		"",
-		"",
-		"",
-		{}), std::to_string(params.Channel+1));
-
+	const auto textStyle = GuiButtonParams::PanelButton();
+	const auto frame = GuiLabelParams::ResolveTextFrame(params.Size.Width,
+		params.Size.Height, textStyle.TextPadding, textStyle.TextPadding, true);
+	GuiLabelParams labelParams;
+	labelParams.String = std::to_string(params.Channel + 1u);
+	labelParams.Position = {static_cast<int>(frame.PaddingX), frame.OffsetY};
+	labelParams.Size = {frame.ContentWidth, frame.TextHeight};
+	labelParams.MinSize = {1u, frame.TextHeight};
+	labelParams.FontSize = textStyle.TextFontSize;
+	labelParams.TextColor = textStyle.TextColor;
+	labelParams.CenterHorizontally = true;
 	labelParams.VerticalAlign = GuiTextVerticalAlign::Center;
 	labelParams.ClipText = true;
 	_label = std::make_shared<GuiLabel>(labelParams);
 	_children.push_back(_label);
+	GuiElementParams socket;
+	socket.Size = {8u, 8u}; socket.MinSize = socket.Size;
+	socket.Position = {static_cast<int>(params.Size.Width / 2u) - 4,
+		params.IsInput ? 2 : static_cast<int>(params.Size.Height) - 10};
+	socket.GuiPassThrough = true;
+	socket.Texture = "hud_socket_cable";
+	socket.TextureShader = "texture_tinted";
+	socket.TintColor = {0.4f, 0.85f, 1.0f};
+	_socket = std::make_shared<Socket>(socket);
+	AddChild(_socket);
 }
 
 void GuiRouter::GuiRouterChannel::Draw(base::DrawContext& ctx)
 {
-	auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
+	GuiElement::Draw(ctx);
+}
 
-	auto pos = Position();
-	glCtx.PushMvp(glm::translate(glm::mat4(1.0), glm::vec3(pos.X, pos.Y, 0.f)));
-
-	if (STATE_DOWN == _state)
-		_downTexture.Draw(ctx);
-	else
-	{
-		if (STATE_OVER == _state)
-			_overTexture.Draw(ctx);
-
-		if (_isActive)
-			_overTexture.Draw(ctx);
-		else
-			_texture.Draw(ctx);
-	}
-
-	for (auto& child : _children)
-		child->Draw(ctx);
-
-	glCtx.PopMvp();
+graphics::Image& GuiRouter::GuiRouterChannel::_CurrentTexture()
+{
+	if (_isActive)
+		return _state == STATE_DOWN ? _activeDownTexture : (_state == STATE_OVER ? _highlightTexture : _activeTexture);
+	return GuiElement::_CurrentTexture();
 }
 
 ActionResult GuiRouter::GuiRouterChannel::OnAction(TouchAction action)
@@ -93,6 +152,7 @@ void GuiRouter::GuiRouterChannel::_InitResources(ResourceLib& resourceLib, bool 
 
 	_activeTexture.InitResources(resourceLib, forceInit);
 	_highlightTexture.InitResources(resourceLib, forceInit);
+	_activeDownTexture.InitResources(resourceLib, forceInit);
 
 	GlUtils::CheckError("GuiRouterChannel::_InitResources()");
 }
@@ -186,7 +246,8 @@ void GuiRouter::SetNumInputs(unsigned int num)
 					_routerParams.InputType));
 
 			_inputs.push_back(input);
-			_children.push_back(input);
+			// Initialize parent links for channels added after construction too.
+			AddChild(input);
 		}
 	}
 }
@@ -226,7 +287,7 @@ void GuiRouter::SetNumOutputs(unsigned int num)
 					_routerParams.OutputType));
 
 			_outputs.push_back(output);
-			_children.push_back(output);
+			AddChild(output);
 		}
 	}
 }
@@ -285,6 +346,13 @@ void GuiRouter::SetReceiver(std::weak_ptr<ActionReceiver> receiver)
 
 void GuiRouter::Draw(DrawContext& ctx)
 {
+	// Scene hover picking can clear child hover after motion routing. Restore
+	// proximity feedback for both rows immediately before painting.
+	if (_hoverPoint) _UpdateSocketHover(*_hoverPoint);
+	for (auto& input : _inputs)
+		input->SetActive(std::any_of(_routes.begin(), _routes.end(), [&](const auto& r) { return r.first == input->Channel(); }));
+	for (auto& output : _outputs)
+		output->SetActive(std::any_of(_routes.begin(), _routes.end(), [&](const auto& r) { return r.second == output->Channel(); }));
 	if (_isVisible)
 	{
 		auto& glCtx = dynamic_cast<graphics::GlDrawContext&>(ctx);
@@ -307,11 +375,21 @@ ActionResult GuiRouter::OnAction(TouchAction action)
 	if (!_isEnabled || !_isVisible)
 		return res;
 
+	const auto nearby = _NearbyChannel(action.Position, _isDragging && !_isDraggingInput, _isDragging && _isDraggingInput);
+	if (nearby)
+	{
+		if (action.State == TouchAction::TOUCH_DOWN)
+			nearby->OnAction(nearby->ParentToLocal(action));
+		res.IsEaten = true;
+		res.SourceId = ChanToString(nearby->Channel());
+		res.ResultType = std::find(_inputs.begin(), _inputs.end(), nearby) != _inputs.end() ? ACTIONRESULT_ROUTERINPUT : ACTIONRESULT_ROUTEROUTPUT;
+	}
 	if (_isDragging)
 	{
 		if (TouchAction::TOUCH_UP == action.State)
 		{
 			_isDragging = false;
+			ClearPointerState();
 			unsigned int endDragChannel = StringToChan(res.SourceId);
 
 			bool isValid = false;
@@ -325,19 +403,29 @@ ActionResult GuiRouter::OnAction(TouchAction action)
 				inputChan = _initDragChannel;
 				outputChan = endDragChannel;
 			}
-			else if (!_isDraggingInput && !isEndOutput)
+			else if (!_isDraggingInput && res.ResultType == ACTIONRESULT_ROUTERINPUT)
 			{
 				isValid = true;
 				inputChan = endDragChannel;
 				outputChan = _initDragChannel;
 			}
 
-			if (isValid)
+			const bool sameEndpoint = endDragChannel == _initDragChannel &&
+				res.ResultType == (_isDraggingInput ? ACTIONRESULT_ROUTERINPUT : ACTIONRESULT_ROUTEROUTPUT);
+			if (isValid || sameEndpoint)
 			{
-				std::cout << "Finished Router drag: " << inputChan << " to " << outputChan << std::endl;
-
-				if (!AddRoute(inputChan, outputChan))
-					RemoveRoute(inputChan, outputChan);
+				if (isValid)
+				{
+					if (!AddRoute(inputChan, outputChan))
+						RemoveRoute(inputChan, outputChan);
+				}
+				else
+				{
+					// Clearing a socket removes every cable attached to that endpoint.
+					std::erase_if(_routes, [&](const auto& route) {
+						return (_isDraggingInput ? route.first : route.second) == _initDragChannel;
+					});
+				}
 
 				auto receiver = _routerParams.Receiver.lock();
 
@@ -411,16 +499,11 @@ ActionResult GuiRouter::OnAction(TouchMoveAction action)
 	if (!_isEnabled || !_isVisible)
 		return res;
 
-	if (res.IsEaten)
-		return res;
-
 	res.IsEaten = false;
 	res.ResultType = ACTIONRESULT_DEFAULT;
 
-	if (!_isDragging)
-		return res;
-
-	_currentDragPos = action.Position;
+	_hoverPoint = action.Position;
+	_UpdateSocketHover(action.Position);
 
 	return res;
 }
@@ -466,7 +549,20 @@ void GuiRouter::_ReleaseResources()
 
 bool GuiRouter::_HitTest(Position2d localPos)
 {
-	return false;
+	return static_cast<bool>(_NearbyChannel(localPos, false, false));
+}
+
+std::shared_ptr<GuiElement> GuiRouter::FindTopmostDescendant(Position2d localPos)
+{
+	// Keep the router as the pointer owner for both rows, including socket
+	// proximity. Decorative labels and sockets must not become hover leaves.
+	return IsVisible() && IsEnabled() && _HitTest(localPos) ? shared_from_this() : nullptr;
+}
+
+void GuiRouter::ApplyHoverPoint(Position2d localPos)
+{
+	_hoverPoint = localPos;
+	_UpdateSocketHover(localPos);
 }
 
 unsigned int GuiRouter::_CalcChannelSpacingY() const
@@ -504,10 +600,12 @@ GuiRouter::GuiRouterChannelParams GuiRouter::_GetChannelParams(unsigned int inde
 		type
 	);
 
+	chanParams.TextureShader = "texture_tinted";
+	chanParams.TintColor = GuiStyle::Control();
 	chanParams.ActiveTexture = (GuiRouterParams::CHANNEL_DEVICE == type) ?
 		_routerParams.DeviceActiveTexture :
 		_routerParams.ChannelActiveTexture;
-	chanParams.HighlightTexture = _routerParams.HighlightTexture;
+	chanParams.HighlightTexture = "rounded_but_on_over";
 
 	return chanParams;
 }
@@ -541,7 +639,7 @@ bool GuiRouter::_InitVertexArray()
 
 	// Max verts = max routes plus 1 for dragging,
 	// each route has 2 coords for both start and end (4 in total)
-	unsigned int maxVerts = (_MaxRoutes + 1) * 4;
+	unsigned int maxVerts = (_MaxRoutes + 1) * 4 * 32;
 
 	glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer);
 	glBufferData(GL_ARRAY_BUFFER, maxVerts * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
@@ -602,6 +700,21 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 		}
 	}
 
+	// Cubic curves leave each socket vertically.
+	std::vector<float> curves;
+	for (size_t i = 0; i + 3 < vertices.size(); i += 4)
+	{
+		const float x1 = vertices[i], y1 = vertices[i+1], x2 = vertices[i+2], y2 = vertices[i+3];
+		const float bend = (y2 - y1) * 0.5f;
+		for (int step = 0; step < 32; ++step)
+			for (int end = 0; end < 2; ++end)
+			{
+				const float t = (step + end) / 32.0f, u = 1.0f - t;
+				curves.push_back(u*u*u*x1 + 3*u*u*t*x1 + 3*u*t*t*x2 + t*t*t*x2);
+				curves.push_back(u*u*u*y1 + 3*u*u*t*(y1+bend) + 3*u*t*t*(y2-bend) + t*t*t*y2);
+			}
+	}
+	vertices.swap(curves);
 	glBindBuffer(GL_ARRAY_BUFFER, _vertexBuffer);
 	glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
 
@@ -616,8 +729,33 @@ void GuiRouter::_DrawLines(DrawContext& ctx) const
 	glUseProgram(shader->GetId());
 
 	glBindVertexArray(_vertexArray);
-	glDrawArrays(GL_LINES, 0, (unsigned int)(vertices.size() / 2));
+	const auto vertexCount = static_cast<GLsizei>(vertices.size() / 2);
+	const GLsizei draggedVertices = _isDragging ? 64 : 0;
+	glDrawArrays(GL_LINES, 0, vertexCount - draggedVertices);
+	if (_isDragging)
+	{
+		glUniform4f(colorUniform, 0.4f, 0.85f, 1.0f, 1.0f);
+		glDrawArrays(GL_LINES, vertexCount - draggedVertices, draggedVertices);
+	}
 	glBindVertexArray(0);
 
 	glUseProgram(0);
+}
+
+
+void GuiRouter::ClearPointerState()
+{
+	_hoverPoint.reset();
+	_isDragging = false;
+	GuiElement::ClearPointerState();
+}
+
+void GuiRouter::ApplyHoverState(bool inside)
+{
+	if (!inside && !_isDragging)
+	{
+		_hoverPoint.reset();
+		for (const auto& channel : _inputs) channel->ApplyHoverState(false);
+		for (const auto& channel : _outputs) channel->ApplyHoverState(false);
+	}
 }

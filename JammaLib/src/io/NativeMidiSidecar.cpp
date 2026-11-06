@@ -45,12 +45,15 @@ bool NativeMidiSidecar::ToStream(const Stream& stream, std::ostream& out, std::s
 		const auto mapping = static_cast<std::uint8_t>(lane.Mapping);
 		const auto scope = static_cast<std::uint8_t>(lane.TargetScope == "station" ? 0u : lane.TargetScope == "take" ? 1u : 2u);
 		const auto pointCount = static_cast<std::uint32_t>(lane.Points.size());
+		const auto identityBytes = static_cast<std::uint32_t>(lane.TargetPluginId.size());
 		if (!WriteBytes(out, &mapping, sizeof(mapping)) || !WriteBytes(out, &lane.Channel, sizeof(lane.Channel))
 			|| !WriteBytes(out, &lane.Controller, sizeof(lane.Controller)) || !WriteBytes(out, &scope, sizeof(scope))
 			|| !WriteBytes(out, &lane.TargetPluginIndex, sizeof(lane.TargetPluginIndex))
 			|| !WriteBytes(out, &lane.TargetLoopIndex, sizeof(lane.TargetLoopIndex))
 			|| !WriteBytes(out, &lane.TargetParameterIndex, sizeof(lane.TargetParameterIndex))
-			|| !WriteBytes(out, &pointCount, sizeof(pointCount)))
+			|| !WriteBytes(out, &pointCount, sizeof(pointCount))
+			|| !WriteBytes(out, &identityBytes, sizeof(identityBytes))
+			|| !WriteBytes(out, lane.TargetPluginId.data(), identityBytes))
 		{
 			SetError(error, "could not write MIDI automation lane");
 			return false;
@@ -108,6 +111,9 @@ std::optional<NativeMidiSidecar::Stream> NativeMidiSidecar::FromStream(std::istr
 			return std::nullopt;
 		}
 	}
+	if (minor < 5u)
+		for (const auto& event : stream.Events)
+			if (event.Flags & 4u) { SetError(error, "invalid legacy MIDI flags"); return std::nullopt; }
 	stream.Lanes.resize(laneCount);
 	for (auto& lane : stream.Lanes)
 	{
@@ -131,6 +137,22 @@ std::optional<NativeMidiSidecar::Stream> NativeMidiSidecar::FromStream(std::istr
 		}
 		lane.Mapping = static_cast<JamFile::AutomationLane::MappingType>(mapping);
 		lane.TargetScope = scope == 0u ? "station" : scope == 1u ? "take" : "loop";
+		if (minor >= 4u)
+		{
+			std::uint32_t identityBytes = 0u;
+			if (!ReadBytes(in, &identityBytes, sizeof(identityBytes), consumed)
+				|| identityBytes > MaxPluginIdentityBytes)
+			{
+				SetError(error, "invalid MIDI automation plugin identity");
+				return std::nullopt;
+			}
+			lane.TargetPluginId.resize(identityBytes);
+			if (!ReadBytes(in, lane.TargetPluginId.data(), identityBytes, consumed))
+			{
+				SetError(error, "truncated MIDI automation plugin identity");
+				return std::nullopt;
+			}
+		}
 		lane.Points.resize(pointCount);
 		for (auto& point : lane.Points)
 		{
@@ -164,7 +186,8 @@ bool NativeMidiSidecar::Validate(const Stream& stream, std::string* error) noexc
 	{
 		const auto statusType = event.Status & 0xf0u;
 		if (event.SampleOffset >= stream.LogicalLength || statusType < 0x80u || statusType > 0xe0u || event.Data1 > 127u || event.Data2 > 127u
-			|| event.Flags > 3u || (event.Flags && statusType != 0x80u && statusType != 0x90u))
+			|| event.Flags > 7u
+			|| ((event.Flags & 4u) && !(statusType == 0x80u || (statusType == 0x90u && event.Data2 == 0u))) || (event.Flags && statusType != 0x80u && statusType != 0x90u))
 		{
 			SetError(error, "invalid MIDI event");
 			return false;
@@ -172,7 +195,8 @@ bool NativeMidiSidecar::Validate(const Stream& stream, std::string* error) noexc
 	}
 	for (const auto& lane : stream.Lanes)
 	{
-		if (lane.Points.size() > MaxPointsPerLane || (lane.Mapping == JamFile::AutomationLane::MappingType::Cc && (lane.Channel > 15u || lane.Controller > 127u))
+		if (!ValidatePluginIdentity(lane.TargetPluginId)
+			|| lane.Points.size() > MaxPointsPerLane || (lane.Mapping == JamFile::AutomationLane::MappingType::Cc && (lane.Channel > 15u || lane.Controller > 127u))
 			|| (lane.TargetScope != "station" && lane.TargetScope != "take" && lane.TargetScope != "loop"))
 		{
 			SetError(error, "invalid MIDI automation lane");
@@ -186,6 +210,33 @@ bool NativeMidiSidecar::Validate(const Stream& stream, std::string* error) noexc
 				return false;
 			}
 		}
+	}
+	return true;
+}
+
+bool NativeMidiSidecar::ValidatePluginIdentity(const std::string& identity) noexcept
+{
+	if (identity.size() > MaxPluginIdentityBytes) return false;
+	for (std::size_t index = 0u; index < identity.size();)
+	{
+		const auto first = static_cast<unsigned char>(identity[index++]);
+		if (first == 0u) return false;
+		if (first < 0x80u) continue;
+		unsigned int count = 0u;
+		unsigned int point = 0u;
+		unsigned int minimum = 0u;
+		if (first >= 0xc2u && first <= 0xdfu) { count = 1u; point = first & 0x1fu; minimum = 0x80u; }
+		else if (first >= 0xe0u && first <= 0xefu) { count = 2u; point = first & 0x0fu; minimum = 0x800u; }
+		else if (first >= 0xf0u && first <= 0xf4u) { count = 3u; point = first & 0x07u; minimum = 0x10000u; }
+		else return false;
+		if (count > identity.size() - index) return false;
+		while (count-- > 0u)
+		{
+			const auto next = static_cast<unsigned char>(identity[index++]);
+			if (next < 0x80u || next > 0xbfu) return false;
+			point = (point << 6u) | (next & 0x3fu);
+		}
+		if (point < minimum || point > 0x10ffffu || (point >= 0xd800u && point <= 0xdfffu)) return false;
 	}
 	return true;
 }

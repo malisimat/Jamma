@@ -115,7 +115,9 @@ GuiToggleParams GuiPerformanceGroupRow::_ButtonParams(bool selection, std::size_
 
 GuiPerformanceGroupRow::GuiPerformanceGroupRow(bool selection) : GuiPanel(_Params(selection)), _selection(selection)
 {
-    auto label = GuiLabelParams::PanelHeader(selection ? "Selection" : "Mute", 84u);
+    auto label = GuiLabelParams::PanelHeader(selection ? "Selection" : "Mute", LabelWidth);
+    label.WrapWidth = 0;
+    label.UseDarkFlatBackground();
     label.Size.Height = Height;
     label.MinSize = { 0u, 0u };
     _label = std::make_shared<GuiLabel>(label);
@@ -190,7 +192,7 @@ void GuiPerformanceGroupRow::SetSize(utils::Size2d size)
 {
     const auto old = GetSize();
     GuiPanel::SetSize(size);
-    const auto labelWidth = size.Width >= 160u ? 84u : 0u;
+    const auto labelWidth = size.Width >= LabelWidth + 76u ? LabelWidth : 0u;
     _label->SetVisible(labelWidth != 0u);
     _label->SetSize({ labelWidth, std::min(size.Height, Height) });
     _holder->SetPosition({ static_cast<int>(labelWidth), 0 });

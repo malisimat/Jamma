@@ -1,3 +1,5 @@
+#include "../gui/WorkspaceTestAccess.h"
+#include "../gui/LoopGridEditorTestAccess.h"
 
 #include "gtest/gtest.h"
 #include <sstream>
@@ -7,8 +9,10 @@
 #include "engine/LoopTake.h"
 #include "engine/Scene.h"
 #include "engine/Station.h"
+#include "engine/HierarchySelection.h"
 #include "engine/Trigger.h"
 #include "gui/GuiButton.h"
+#include "gui/GuiTextBox.h"
 #include "io/UserConfig.h"
 #include "io/Json.h"
 #include "io/RigFile.h"
@@ -59,6 +63,7 @@ namespace engine
 using base::ActionSender;
 using base::ActionReceiver;
 using engine::Loop;
+using engine::GroupCommand;
 using engine::LoopTake;
 using engine::LoopTakeParams;
 using engine::Scene;
@@ -315,6 +320,23 @@ public:
 	{
 	}
 
+	utils::Position2d CanvasPointForTest(utils::Position2d offset = {}) const
+	{
+		// Picker-driven tests still need a press outside the actual GUI chrome.
+		// The former (1,1) is inside the drawn status bar at these viewports.
+		const auto point = utils::Position2d{560, 200} + offset;
+		EXPECT_TRUE(utils::Size2d::RectTest(_sizeParams.Size, point));
+		EXPECT_FALSE(_workspace->Hud()->CapturesPointer(_workspace->Hud()->GlobalToLocal(point)));
+		EXPECT_FALSE(_workspace->SelectionPanel()->RouteHitTest(_workspace->SelectionPanel()->GlobalToLocal(point)));
+		EXPECT_FALSE(_workspace->MainPanel()->RouteHitTest(_workspace->MainPanel()->GlobalToLocal(point)));
+		return point;
+	}
+
+    bool DesiredMuteForTest(const engine::GroupTargetId& target)
+    { std::scoped_lock lock(_sceneMutex); return _performanceGroups.DesiredMuted(target,_stations); }
+    bool ApplyMuteBoundaryForTest()
+    { _audioEngine->CloseCallbackAdmission(); return _audioEngine->ApplyPendingRigWhileQuiescent(); }
+
 	void AddStationForTest(const std::shared_ptr<Station>& station)
 	{
 		_AddStation(station);
@@ -331,13 +353,12 @@ public:
 		return _isSceneReset.load(std::memory_order_relaxed);
 	}
 
-	void StopJobForTest()
+	void PauseJobForTest()
 	{
-		Shutdown();
-		// Keep the deterministic harness usable after joining its worker. This
-		// does not restart production teardown resources or the job thread.
-		_isSceneQuitting.store(false, std::memory_order_release);
-		_sessionReplacing.store(false, std::memory_order_release);
+		// These isolated GUI/timing tests need a stable engine view. The derived
+		// member releases before Scene destruction, so normal Shutdown keeps a
+		// live producer for permanent-close acknowledgement and join.
+		_jobPause = std::unique_lock<std::mutex>(_operation.LifecycleMutex());
 	}
 
 	void SeedTimingForTest()
@@ -375,32 +396,32 @@ public:
 
 	utils::Position3d CameraPositionForTest() const
 	{
-		return _camera.ModelPosition();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).ModelPosition();
 	}
 
 	graphics::Camera::View CameraViewForTest() const
 	{
-		return _camera.CurrentView();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).CurrentView();
 	}
 
 	graphics::Camera::Pose CameraPoseForTest() const
 	{
-		return _camera.CurrentPose();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).CurrentPose();
 	}
 
 	float StationInteriorFieldOfViewForTest() const
 	{
-		return _camera.StationInteriorFieldOfView();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).StationInteriorFieldOfView();
 	}
 
 	glm::mat4 CameraProjectionForTest() const
 	{
-		return _camera.Projection(1.0f, {});
+		return gui::WorkspaceTestAccess::Camera(*_workspace).Projection(1.0f, {});
 	}
 
 	utils::Position3d CameraFocusAtCursorForTest(utils::Position2d cursorPosition) const
 	{
-		return _camera.FocusPointAtCursor(cursorPosition,
+		return gui::WorkspaceTestAccess::Camera(*_workspace).FocusPointAtCursor(cursorPosition,
 			_sizeParams.Size.Width,
 			_sizeParams.Size.Height,
 			{});
@@ -411,7 +432,7 @@ public:
 		const auto width = static_cast<float>(_sizeParams.Size.Width);
 		const auto height = static_cast<float>(_sizeParams.Size.Height);
 		const auto aspectRatio = width / height;
-		const auto clip = _camera.Projection(aspectRatio, {}) * _camera.ViewMatrix()
+		const auto clip = gui::WorkspaceTestAccess::Camera(*_workspace).Projection(aspectRatio, {}) * gui::WorkspaceTestAccess::Camera(*_workspace).ViewMatrix()
 			* glm::vec4(position.X, position.Y, position.Z, 1.0f);
 		const auto ndc = glm::vec3(clip) / clip.w;
 		return { ((ndc.x + 1.0f) * width) / 2.0f, ((ndc.y + 1.0f) * height) / 2.0f };
@@ -419,7 +440,7 @@ public:
 
 	ViewMode CameraSelectDepthForTest() const
 	{
-		return _viewMode;
+		return static_cast<ViewMode>(_workspace->PresentationMode());
 	}
 
 	void SetCameraSelectDepthForTest(unsigned int value)
@@ -433,23 +454,51 @@ public:
 
 	void SetSelectionDepthForTest(unsigned int value)
 	{
-		_UpdateSelectDepth(value);
+		_workspace->UpdateSelectDepth(value, { _sceneMutex, _stations }, _WorkspaceInputPresentation());
 	}
 
 	std::shared_ptr<base::GuiElement> CurrentHoverElementForTest()
 	{
-		return _ChildFromPath(_selector->CurrentHover());
+		return _ChildFromPath(_workspace->CurrentHover());
 	}
 
+	midi::LoopGridEditor& EditorForTest() { return _workspace->Editor(); }
+	void RefreshEditorForTest() { _workspace->UpdateEditorUi(); }
+	void SelectionGroupForTest(GroupCommand command)
+	{
+		std::scoped_lock lock(_sceneMutex); _ExecuteGroupCommandLocked(true, command, 1u);
+	}
+	void ReplayExclusiveSelectionForTest(const std::shared_ptr<base::GuiElement>& first,
+		const std::shared_ptr<base::GuiElement>& second)
+	{
+		std::scoped_lock lock(_sceneMutex);
+		const std::vector<unsigned char> hover;
+		engine::HierarchySelection::EditBatch batch{true, base::DEPTH_LOOPTAKE, {}, 2u, {hover, false, false, false, false, false}};
+		std::size_t index = 0u;
+		for (const auto& target : {first, second})
+		{
+			std::vector<unsigned char> path;
+			for (const auto segment : target->GlobalId()) path.push_back(static_cast<unsigned char>(segment));
+			batch.Changes[index++] = {engine::HierarchySelection::Edit::Select, std::move(path)};
+		}
+		const auto outcome = engine::HierarchySelection::ApplyLocked(engine::HierarchySelection::BorrowLocked(_stations), batch);
+		_workspace->Editor().SelectionCommittedLocked({outcome.NewlySelected.data(), outcome.NewlySelectedCount});
+	}
+	void PopupForEditorTest() { _workspace->OpenPopup(std::make_shared<gui::GuiPopup>()); _workspace->ClosePopups(); }
+	void ReverseStationsForTest()
+	{
+		std::scoped_lock lock(_sceneMutex); std::reverse(_stations.begin(), _stations.end());
+		for (std::size_t index = 0u; index < _stations.size(); ++index) _stations[index]->SetIndex(static_cast<unsigned int>(index));
+	}
 	bool FindLoopGridEditorCandidateForTest(std::shared_ptr<LoopTake>& take,
 		std::shared_ptr<Loop>& audioLoop, std::shared_ptr<midi::MidiLoop>& midiLoop) const
 	{
-		return _loopEditor.FindCandidate(take, audioLoop, midiLoop);
+		return _workspace->Editor().FindCandidate(take, audioLoop, midiLoop);
 	}
 
 	bool IsCameraTransitioningForTest() const
 	{
-		return _camera.IsTransitioning();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).IsTransitioning();
 	}
 
 	void UpdateCameraStationFollowForTest()
@@ -459,7 +508,7 @@ public:
 
 	void TickCameraForTest(unsigned int samps, unsigned int sampleRate)
 	{
-		_camera.TickBackgroundDrag(static_cast<float>(samps) / static_cast<float>(sampleRate));
+		gui::WorkspaceTestAccess::Camera(*_workspace).TickBackgroundDrag(static_cast<float>(samps) / static_cast<float>(sampleRate));
 	}
 
 	void SettleCameraForTest()
@@ -472,39 +521,46 @@ public:
 	{
 		for (unsigned int tick = 0u; tick < 10u; ++tick)
 		{
-			_camera.TickBackgroundDrag(0.05f);
-			_loopEditor.Tick(0.05f);
+			gui::WorkspaceTestAccess::Camera(*_workspace).TickBackgroundDrag(0.05f);
+			_workspace->Editor().Tick(0.05f);
 		}
 	}
 
-	bool EditorOwnsPointerForTest() const { return _loopEditor.OwnsPointer(); }
-	bool SpaceHeldForTest() const { return _spaceHeld; }
+	bool EditorOwnsPointerForTest() const { return _workspace->Editor().OwnsPointer(); }
+	bool SpaceHeldForTest() const { return _workspace->SpaceHeld(); }
 	bool CtrlOverlayActiveForTest() const { return _quantisationInteraction.EditModeActive(); }
 	float GridAlphaForTest() const { return _quantisation.OverlayAlpha(Timer::GetTime()); }
 	void ClearGridForTest() { _quantisation.ClearOverlay(); }
-	void FocusTextForTest() { _focusManager.RequestFocus(_settingsControls->Offset()); }
-	void ClearTextFocusForTest() { _focusManager.ClearFocus(); }
-	glm::vec3 EditorProbeEyeLocalForTest() const { return _loopEditor.ProbeEyeLocal(); }
+	void FocusTextForTest()
+	{
+		_textFocusFixture = std::make_shared<gui::GuiTextBox>(gui::GuiTextBoxParams{});
+		EXPECT_TRUE(_workspace->RequestFocus(_textFocusFixture));
+	}
+	std::shared_ptr<gui::GuiTextBox> _textFocusFixture;
+	void ClearTextFocusForTest() { _workspace->CommitFocus(); }
+	glm::vec3 EditorProbeEyeLocalForTest() const { return _workspace->Editor().ProbeEyeLocal(); }
 
 	bool IsSceneTouchingForTest() const
 	{
-		return _camera.IsBackgroundDragging();
+		return gui::WorkspaceTestAccess::Camera(*_workspace).IsBackgroundDragging();
 	}
 
 	bool HasTouchCaptureForTest() const
 	{
-		return !_touchDownElement.expired();
+		return _workspace->HasPointerCapture();
 	}
 
 	void OpenPopupForTest(const std::shared_ptr<base::GuiElement>& popup)
 	{
-		_popupManager.Open(popup);
+		_workspace->OpenPopup(popup);
 	}
 
 	void ApplyHoverForTest()
 	{
 		ApplyDeferredHoverUpdates();
 	}
+private:
+	std::unique_lock<std::mutex> _jobPause;
 };
 
 TouchAction MakeSceneTouch(TouchAction::TouchState state,
@@ -2428,7 +2484,7 @@ TEST(Scene, LoopGridEditorTracksOneMidiLoopAndClosesWhenItIsReplaced) {
 TEST(Scene, SpaceAndCtrlReachPhysicalStateWithEditorOpenAndFocusLossClearsHolds) {
 	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
 	TestScene scene(params, {});
-	scene.StopJobForTest();
+	scene.PauseJobForTest();
 	auto station = MakeTestStation("space-editor");
 	scene.AddStationForTest(station);
 	auto take = station->AddTake();
@@ -2470,7 +2526,7 @@ TEST(Scene, SpaceAndCtrlReachPhysicalStateWithEditorOpenAndFocusLossClearsHolds)
 TEST(Scene, SpaceStartedInTextCannotTurnIntoATapOnRepeatAfterFocusChanges) {
 	SceneParams params{ base::DrawableParams(), base::MoveableParams(), base::SizeableParams({ 1400u, 900u }) };
 	TestScene scene(params, {});
-	scene.StopJobForTest();
+	scene.PauseJobForTest();
 	scene.FocusTextForTest();
 	scene.ClearGridForTest();
 	KeyAction key;
@@ -2569,9 +2625,9 @@ TEST(Scene, LoopGridEditorCanSelectMidiLoopAtEverySelectionDepthAndOpenWithE) {
 	for (const auto index : model->GlobalId())
 		pickPath.push_back(static_cast<unsigned char>(index + 1u));
 	const auto click = [&scene]() {
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0,
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0,
 			LeftMouseButtonMask));
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 0u, 0u));
 	};
 	for (const auto depth : { Scene::VIEW_STATION, Scene::VIEW_LOOPTAKE, Scene::VIEW_LOOP })
 	{
@@ -2616,18 +2672,22 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	};
 	const auto midiPath = pickPath(midiModel);
 	const auto audioPath = pickPath(audioLoop);
-	const auto down = MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 1u, 2u);
-	const auto up = MakeSceneTouch(TouchAction::TOUCH_UP, { 6, 1 }, 1u, 0u);
+	const auto down = MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 1u, 2u);
+	const auto up = MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest({5, 0}), 1u, 0u);
 
 	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
 	scene.OnAction(down);
 	EXPECT_FALSE(midiTake->IsMuted()); // Preview only until drag/release.
-	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, 2u));
-	EXPECT_TRUE(midiTake->IsMuted());
+    scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5,0}),2u));
+    ASSERT_TRUE(scene.DesiredMuteForTest({engine::GroupTargetKind::Take,station->Id(),midiTake->Id(),{}}));
+    EXPECT_FALSE(midiTake->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_TRUE(midiTake->IsMuted());
 	EXPECT_FALSE(midiModel->IsPicking3d());
 	EXPECT_FALSE(midiTake->GetMidiLoops()[1]->Model()->IsPicking3d());
-	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
-	EXPECT_TRUE(audioLoop->IsMuted());
+    scene.SetHover3d(audioPath,base::Action::MODIFIER_NONE);
+    ASSERT_TRUE(scene.DesiredMuteForTest({engine::GroupTargetKind::AudioLoop,station->Id(),audioTake->Id(),audioLoop->Id()}));
+    EXPECT_FALSE(audioLoop->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_TRUE(audioLoop->IsMuted());
 	EXPECT_FALSE(audioLoop->IsPicking3d());
 	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
 	EXPECT_TRUE(midiTake->IsMuted()); // Revisiting never toggles a painted item.
@@ -2639,10 +2699,14 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	// The cached MIDI target must resolve its take's muted state for the next stroke.
 	scene.OnAction(down);
 	EXPECT_TRUE(midiTake->IsMuted());
-	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, 2u));
-	EXPECT_FALSE(midiTake->IsMuted());
-	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
-	EXPECT_FALSE(audioLoop->IsMuted());
+    scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5,0}),2u));
+    EXPECT_FALSE(scene.DesiredMuteForTest({engine::GroupTargetKind::Take,station->Id(),midiTake->Id(),{}}));
+    EXPECT_TRUE(midiTake->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_FALSE(midiTake->IsMuted());
+    scene.SetHover3d(audioPath,base::Action::MODIFIER_NONE);
+    EXPECT_FALSE(scene.DesiredMuteForTest({engine::GroupTargetKind::AudioLoop,station->Id(),audioTake->Id(),audioLoop->Id()}));
+    EXPECT_TRUE(audioLoop->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_FALSE(audioLoop->IsMuted());
 	EXPECT_FALSE(audioLoop->IsPicking3d());
 	scene.OnAction(up);
 	EXPECT_TRUE(audioLoop->IsPicking3d());
@@ -2652,8 +2716,10 @@ TEST(Scene, MiddleMutePaintAppliesImmediatelySuppressesHoverAndPreservesOtherTak
 	scene.SetHover3d(midiPath, base::Action::MODIFIER_NONE);
 	scene.OnAction(down);
 	scene.SetHover3d(audioPath, base::Action::MODIFIER_NONE);
-	scene.OnAction(up);
-	EXPECT_TRUE(midiTake->IsMuted());
+    scene.OnAction(up);
+    ASSERT_TRUE(scene.DesiredMuteForTest({engine::GroupTargetKind::Take,station->Id(),midiTake->Id(),{}}));
+    EXPECT_FALSE(midiTake->IsMuted()); ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
+    EXPECT_TRUE(midiTake->IsMuted());
 	EXPECT_FALSE(audioLoop->IsMuted());
 	EXPECT_TRUE(untouched->IsMuted());
 }
@@ -2672,17 +2738,257 @@ TEST(Scene, StationMuteClickUsesAggregateTakeState) {
 	scene.SetSelectionDepthForTest(Scene::VIEW_STATION);
 	scene.SetHover3d({ 1u }, base::Action::MODIFIER_NONE);
 	const auto click = [&scene]() {
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 1u, 2u));
-		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 1u, 0u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 1u, 2u));
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 1u, 0u));
 	};
 	click();
+    ASSERT_TRUE(scene.DesiredMuteForTest({engine::GroupTargetKind::Station,station->Id(),{},{}}));
+    EXPECT_FALSE(first->IsMuted()); EXPECT_FALSE(second->IsMuted());
+    ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
 	EXPECT_TRUE(first->IsMuted());
 	EXPECT_TRUE(second->IsMuted());
 	EXPECT_TRUE(station->AllTakesMuted());
 	click();
+    EXPECT_FALSE(scene.DesiredMuteForTest({engine::GroupTargetKind::Station,station->Id(),{},{}}));
+    EXPECT_TRUE(first->IsMuted()); EXPECT_TRUE(second->IsMuted());
+    ASSERT_TRUE(scene.ApplyMuteBoundaryForTest());
 	EXPECT_FALSE(first->IsMuted());
 	EXPECT_FALSE(second->IsMuted());
 	EXPECT_FALSE(station->AllTakesMuted());
+}
+
+class EditorSelectionTestData
+{
+public:
+	static std::shared_ptr<LoopTake> AddMidiTake(const std::shared_ptr<Station>& station,
+		std::initializer_list<unsigned int> channels, int populatedChannel = -1, bool controllerOnly = false)
+	{
+		auto take = station->AddTake(); LoopTake::MidiExportState state; state.LoopLengthSamps = 400u;
+		for (const auto channel : channels)
+		{
+			LoopTake::MidiStreamExport stream; stream.Channel = channel; stream.Loop.LoopLengthSamps = 400u;
+			if (static_cast<int>(channel) == populatedChannel)
+			{
+				stream.Loop.EventCount = controllerOnly ? 1u : 2u;
+				stream.Loop.Events[0] = controllerOnly ? midi::MidiEvent{20u, static_cast<std::uint8_t>(0xB0u | channel), 11u, 80u}
+					: midi::MidiEvent::MakeNoteOn(20u, channel, 60u, 100u);
+				if (!controllerOnly) stream.Loop.Events[1] = midi::MidiEvent::MakeNoteOff(40u, channel, 60u);
+			}
+			state.Streams.push_back(stream);
+		}
+		EXPECT_TRUE(take->RestoreMidiFromExport(state)); station->CommitChanges(); return take;
+	}
+	static void Hover(TestScene& scene, const std::shared_ptr<base::GuiElement>& target)
+	{
+		std::vector<unsigned char> path;
+		for (const auto index : target->GlobalId()) path.push_back(static_cast<unsigned char>(index + 1u));
+		scene.SetHover3d(path, base::Action::MODIFIER_NONE);
+	}
+	static void PaintSelection(TestScene& scene, const std::shared_ptr<base::GuiElement>& target,
+		const std::shared_ptr<base::GuiElement>& repeatSelected = {})
+	{
+		Hover(scene, target);
+		const auto point = scene.CanvasPointForTest();
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, point, 0, LeftMouseButtonMask));
+		// Existing additive/subtractive paint commits selection without Shift's master shortcut.
+		scene.OnAction(MakeSceneTouchMove(point + utils::Position2d{5, 0}, LeftMouseButtonMask));
+		if (repeatSelected) Hover(scene, repeatSelected); // Repeated Select on an already selected target is not new recency.
+		scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, point + utils::Position2d{5, 0}, 0, 0u));
+	}
+	static void OpenKey(TestScene& scene)
+	{
+		KeyAction key; key.KeyChar = 69u; key.KeyActionType = KeyAction::KEY_UP;
+		EXPECT_TRUE(scene.OnAction(key).IsEaten);
+	}
+	static void Close(TestScene& scene) { scene.CloseLoopGridEditor(); scene.SettleLoopGridEditorForTest(); }
+
+};
+
+TEST(Scene, EditorPrefersSelectedHoverThenRecentSelectionAndUsesHoverWithoutSelection)
+{
+	for (const auto depth : {Scene::VIEW_LOOPTAKE, Scene::VIEW_LOOP})
+	{
+		SCOPED_TRACE(::testing::Message() << "selection depth " << depth);
+		SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+		TestScene scene(params, {}); scene.PauseJobForTest();
+		auto station = MakeTestStation("editor-hover"); scene.AddStationForTest(station);
+		auto first = EditorSelectionTestData::AddMidiTake(station, {0u}, 0);
+		auto recent = EditorSelectionTestData::AddMidiTake(station, {1u}, 1);
+		auto unselected = EditorSelectionTestData::AddMidiTake(station, {2u}, 2);
+		scene.SetSelectionDepthForTest(depth);
+		EditorSelectionTestData::PaintSelection(scene, first->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::PaintSelection(scene, recent->GetMidiLoops()[0]->Model());
+		ASSERT_TRUE(first->IsSelected()); ASSERT_TRUE(recent->IsSelected()); ASSERT_FALSE(unselected->IsSelected());
+		// Hovering an unselected take must not prevent E from opening the last selection.
+		EditorSelectionTestData::Hover(scene, unselected->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(recent, scene.LoopGridEditorTake());
+		EditorSelectionTestData::Close(scene);
+		EditorSelectionTestData::Hover(scene, first->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(first, scene.LoopGridEditorTake());
+		EditorSelectionTestData::Close(scene);
+		first->DeSelect(); recent->DeSelect();
+		EditorSelectionTestData::Hover(scene, unselected->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(unselected, scene.LoopGridEditorTake());
+		EXPECT_FALSE(unselected->IsSelected()); // Opening hover must not change persistent selection.
+		EditorSelectionTestData::Close(scene);
+		scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+		EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+		unselected->GetMidiLoops()[0]->StartRecord();
+		EditorSelectionTestData::Hover(scene, unselected->GetMidiLoops()[0]->Model());
+		EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	}
+}
+
+TEST(Scene, AudioEditorIgnoresUnselectedHoverUntilSelectionIsEmpty)
+{
+	for (const auto depth : {Scene::VIEW_LOOPTAKE, Scene::VIEW_LOOP})
+	{
+		SCOPED_TRACE(::testing::Message() << "selection depth " << depth);
+		SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+		TestScene scene(params, {}); scene.PauseJobForTest();
+		auto station = MakeTestStation("audio-editor-hover"); scene.AddStationForTest(station);
+		const auto addAudioTake = [&station]() {
+			auto take = station->AddTake();
+			const auto loop = take->AddLoop(0u, station->Name()); loop->Record();
+			std::vector<float> samples(constants::MaxLoopFadeSamps + 400u, 0.25f);
+			base::AudioWriteRequest write; write.samples = samples.data(); write.numSamps = static_cast<unsigned int>(samples.size());
+			write.stride = 1; write.fadeCurrent = 0.0f; write.fadeNew = 1.0f; write.source = base::Audible::AUDIOSOURCE_ADC;
+			loop->OnBlockWrite(write, 0); loop->EndWrite(write.numSamps, true); loop->Play(0u, 400u, false);
+			station->CommitChanges(); EXPECT_TRUE(loop->CanEditAudioSource());
+			return take;
+		};
+		auto first = addAudioTake(), recent = addAudioTake(), unselected = addAudioTake();
+		const auto firstLoop = first->GetLoops()[0], recentLoop = recent->GetLoops()[0], hoveredLoop = unselected->GetLoops()[0];
+		scene.SetSelectionDepthForTest(depth);
+		EditorSelectionTestData::PaintSelection(scene, firstLoop);
+		EditorSelectionTestData::PaintSelection(scene, recentLoop);
+		ASSERT_TRUE(first->IsSelected()); ASSERT_TRUE(recent->IsSelected()); ASSERT_FALSE(unselected->IsSelected());
+		EditorSelectionTestData::Hover(scene, hoveredLoop);
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(recent, scene.LoopGridEditorTake());
+		EXPECT_EQ(recentLoop, scene.LoopGridEditorAudioLoop());
+		EditorSelectionTestData::Close(scene);
+		EditorSelectionTestData::Hover(scene, firstLoop);
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(first, scene.LoopGridEditorTake());
+		EXPECT_EQ(firstLoop, scene.LoopGridEditorAudioLoop());
+		EditorSelectionTestData::Close(scene);
+		first->DeSelect(); recent->DeSelect();
+		EditorSelectionTestData::Hover(scene, hoveredLoop);
+		EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(unselected, scene.LoopGridEditorTake());
+		EXPECT_EQ(hoveredLoop, scene.LoopGridEditorAudioLoop()); EXPECT_FALSE(unselected->IsSelected());
+	}
+}
+
+TEST(Scene, EditorUsesCommittedRecentSelectionAcrossLifecycle)
+{
+	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+	TestScene scene(params, {}); scene.PauseJobForTest();
+	auto stationA = MakeTestStation("recent-A"), stationB = MakeTestStation("recent-B");
+	scene.AddStationForTest(stationA); scene.AddStationForTest(stationB);
+	stationB->SetIndex(1u); // Test-only AddStation does not perform a rig membership reindex.
+	auto a = EditorSelectionTestData::AddMidiTake(stationA, {0u});
+	auto aggregate = EditorSelectionTestData::AddMidiTake(stationA, {8u}); aggregate->Select();
+	auto b = EditorSelectionTestData::AddMidiTake(stationB, {4u}, 4);
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
+	EditorSelectionTestData::PaintSelection(scene, a->GetMidiLoops()[0]->Model());
+	EditorSelectionTestData::PaintSelection(scene, b->GetMidiLoops()[0]->Model(), a->GetMidiLoops()[0]->Model());
+	ASSERT_TRUE(a->IsSelected()); ASSERT_TRUE(b->IsSelected()); ASSERT_TRUE(aggregate->IsSelected());
+	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(b, scene.LoopGridEditorTake());
+	EXPECT_EQ(5u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
+	// Replay an exclusive command with the same final selection in the opposite order.
+	// This must not manufacture A as more recent than B.
+	scene.ReplayExclusiveSelectionForTest(b, a); aggregate->Select();
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(b, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	EditorSelectionTestData::Hover(scene, a->GetMidiLoops()[0]->Model());
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(a, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	// A group recall reselects B without inventing recency for its old selection.
+	scene.SelectionGroupForTest(GroupCommand::Store);
+	EditorSelectionTestData::PaintSelection(scene, b->GetMidiLoops()[0]->Model()); ASSERT_FALSE(b->IsSelected());
+	scene.SelectionGroupForTest(GroupCommand::RecallOrStore); ASSERT_TRUE(b->IsSelected());
+	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(a, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	EditorSelectionTestData::PaintSelection(scene, b->GetMidiLoops()[0]->Model()); ASSERT_FALSE(b->IsSelected());
+	EditorSelectionTestData::PaintSelection(scene, b->GetMidiLoops()[0]->Model()); ASSERT_TRUE(b->IsSelected());
+	scene.ReverseStationsForTest(); scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(b, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	b->GetMidiLoops()[0]->StartRecord(); // A recent incomplete stream must not block an older playable target.
+	EditorSelectionTestData::Hover(scene, b->GetMidiLoops()[0]->Model());
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(a, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	scene.RemoveStationForTest(stationB); // Externally retained B must not follow a reused hierarchy index.
+	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(a, scene.LoopGridEditorTake());
+	EditorSelectionTestData::Close(scene);
+	// Ordinary close preserves history; an explicit session-history reset leaves ambiguous aggregate selection alone.
+	scene.EditorForTest().ClearSelectionHistory();
+	EXPECT_EQ(0u, midi::LoopGridEditorTestAccess::SelectionHistorySize(scene.EditorForTest()));
+	EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	EXPECT_EQ("Select or hover a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
+	a->DeSelect(); aggregate->DeSelect();
+	EditorSelectionTestData::OpenKey(scene); EXPECT_FALSE(scene.IsLoopGridEditorOpen());
+	EXPECT_EQ("Select or hover a completed loop to edit", midi::LoopGridEditorTestAccess::Feedback(scene.EditorForTest()));
+}
+
+TEST(Scene, EditorTakeEntryPrefersEligibleChannelFiveWhileLeafAndManualChoiceStayExplicit)
+{
+	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+	TestScene scene(params, {}); scene.PauseJobForTest();
+	auto station = MakeTestStation("channel-five"); scene.AddStationForTest(station);
+	auto take = EditorSelectionTestData::AddMidiTake(station, {0u, 4u, 7u}, 4, true);
+	const auto empty = take->GetMidiLoops()[0], populated = take->GetMidiLoops()[1];
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
+	EditorSelectionTestData::PaintSelection(scene, empty->Model());
+	ASSERT_TRUE(take->IsSelected());
+	EditorSelectionTestData::Hover(scene, empty->Model()); // Take-level empty channel 1 does not hide CC-only channel 5.
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(populated, scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(5u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EXPECT_TRUE(scene.EditorForTest().SelectMidiChannel(1u)); EXPECT_EQ(empty, scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(1u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOP);
+	EditorSelectionTestData::Hover(scene, empty->Model());
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(empty, scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(1u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
+	// New session starts without any selection recency from this editor.
+	TestScene replacement(params, {}); replacement.PauseJobForTest();
+	auto replacementStation = MakeTestStation("replacement"); replacement.AddStationForTest(replacementStation);
+	EditorSelectionTestData::AddMidiTake(replacementStation, {0u})->Select();
+	EditorSelectionTestData::AddMidiTake(replacementStation, {4u})->Select();
+	EditorSelectionTestData::OpenKey(replacement); EXPECT_FALSE(replacement.IsLoopGridEditorOpen());
+}
+
+TEST(Scene, MixedTakeEditorDefaultsToMidiButExplicitAudioHoverRemainsEligible)
+{
+	SceneParams params{base::DrawableParams(), base::MoveableParams(), base::SizeableParams({1400u, 900u})};
+	TestScene scene(params, {}); scene.PauseJobForTest();
+	auto station = MakeTestStation("mixed-editor"); scene.AddStationForTest(station);
+	auto take = EditorSelectionTestData::AddMidiTake(station, {0u, 4u, 7u}, 4);
+	const auto audio = take->AddLoop(0u, station->Name()); audio->Record();
+	std::vector<float> samples(constants::MaxLoopFadeSamps + 400u, 0.25f);
+	base::AudioWriteRequest write; write.samples = samples.data(); write.numSamps = static_cast<unsigned int>(samples.size());
+	write.stride = 1; write.fadeCurrent = 0.0f; write.fadeNew = 1.0f; write.source = base::Audible::AUDIOSOURCE_ADC;
+	audio->OnBlockWrite(write, 0); audio->EndWrite(write.numSamps, true); audio->Play(0u, 400u, false);
+	station->CommitChanges(); ASSERT_TRUE(audio->CanEditAudioSource());
+	scene.SetSelectionDepthForTest(Scene::VIEW_LOOPTAKE);
+	EditorSelectionTestData::PaintSelection(scene, take->GetMidiLoops()[0]->Model());
+	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(take->GetMidiLoops()[1], scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(5u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
+	EditorSelectionTestData::Hover(scene, audio);
+	EditorSelectionTestData::OpenKey(scene); EXPECT_EQ(audio, scene.LoopGridEditorAudioLoop());
+	EditorSelectionTestData::Close(scene);
+	// An incomplete populated stream cannot block the next eligible wired stream.
+	take->GetMidiLoops()[1]->StartRecord();
+	EditorSelectionTestData::Hover(scene, take->GetMidiLoops()[1]->Model());
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(take->GetMidiLoops()[0], scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(1u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
 }
 
 TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
@@ -2713,8 +3019,8 @@ TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
 	for (const auto index : midiLoops[1]->Model()->GlobalId())
 		pickPath.push_back(static_cast<unsigned char>(index + 1u));
 	scene.SetHover3d(pickPath, base::Action::MODIFIER_NONE);
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0u, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 0u, 0u));
 	EXPECT_FALSE(midiLoops[0]->Model()->IsSelected());
 	EXPECT_TRUE(midiLoops[1]->Model()->IsSelected());
 
@@ -2725,14 +3031,14 @@ TEST(Scene, MidiStreamSelectionPreservesPickedEditorIdentity) {
 	EXPECT_EQ(midiLoops[1], midiLoop);
 	// Keep the same picker ID after the click: the next drag must start in
 	// subtractive paint mode using the newly selected state.
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouchMove({ 6, 1 }, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouchMove(scene.CanvasPointForTest({5, 0}), LeftMouseButtonMask));
 	EXPECT_FALSE(midiLoops[0]->Model()->IsSelected());
 	EXPECT_FALSE(midiLoops[1]->Model()->IsSelected());
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 6, 1 }, 0, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest({5, 0}), 0, 0u));
 	// Re-select to exercise the no-hover editor fallback separately.
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, { 1, 1 }, 0, LeftMouseButtonMask));
-	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, { 1, 1 }, 0, 0u));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_DOWN, scene.CanvasPointForTest(), 0, LeftMouseButtonMask));
+	scene.OnAction(MakeSceneTouch(TouchAction::TOUCH_UP, scene.CanvasPointForTest(), 0, 0u));
 	scene.SetHover3d({}, base::Action::MODIFIER_NONE);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, midiLoop));
 	EXPECT_EQ(midiLoops[1], midiLoop);
@@ -2763,6 +3069,9 @@ TEST(Scene, MidiEditorDefaultsToFirstPopulatedWiredChannel) {
 	std::shared_ptr<midi::MidiLoop> candidate;
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
 	EXPECT_EQ(loops[0], candidate); // All empty: first wired, not lowest channel number.
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(loops[0], scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(5u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
 	const std::array events{midi::MidiEvent::MakeNoteOn(20u, 7u, 60u, 100u),
 		midi::MidiEvent::MakeNoteOff(40u, 7u, 60u)};
 	loops[2]->ReplaceRecordedEvents(events.data(), events.size(), 400u);
@@ -2771,6 +3080,9 @@ TEST(Scene, MidiEditorDefaultsToFirstPopulatedWiredChannel) {
 	loops[1]->ReplaceRecordedEvents(events.data(), events.size(), 400u);
 	ASSERT_TRUE(scene.FindLoopGridEditorCandidateForTest(candidateTake, audioLoop, candidate));
 	EXPECT_EQ(loops[1], candidate);
+	EditorSelectionTestData::OpenKey(scene); ASSERT_EQ(loops[1], scene.LoopGridEditorMidiLoop());
+	EXPECT_EQ(2u, midi::LoopGridEditorTestAccess::DisplayedChannel(scene.EditorForTest()));
+	EditorSelectionTestData::Close(scene);
 	std::vector<unsigned char> path;
 	for (const auto index : loops[0]->Model()->GlobalId())
 		path.push_back(static_cast<unsigned char>(index + 1u));
@@ -2830,7 +3142,7 @@ TEST(SceneReset, ConnectedEmptyPreservesTimingAndEachDisconnectClearsOnce) {
 		base::SizeableParams() };
 	io::UserConfig userConfig = {};
 	TestScene scene(sceneParams, userConfig);
-	scene.StopJobForTest();
+	scene.PauseJobForTest();
 
 	scene.SeedTimingForTest();
 	scene.ObserveTimingAvailabilityForTest(true, 1u);
@@ -3134,6 +3446,116 @@ TEST(Trigger, RejectedDitchReleasesRollbackCapacityAfterRestoredCommandsDrain)
 	EXPECT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
 }
 
+TEST(Trigger, ContextualKeyboardCompletesOnlyAdmittedOrdinaryAndInverseReleases)
+{
+    for (const bool inverse : { false, true })
+    for (const bool modalStillOpen : { false, true })
+    {
+        auto receiver = std::make_shared<SequenceTriggerReceiver>();
+        engine::DualBinding binding;
+        binding.SetDown(engine::TriggerBinding(engine::TRIGGER_KEY, ActivateChar, inverse ? 0u : 1u), true);
+        TriggerParams params;
+        params.Activate = { binding };
+        auto trigger = std::make_shared<Trigger>(params);
+        trigger->SetReceiver(receiver);
+        engine::RigSnapshot rig;
+        rig.Revision = 1u;
+        engine::RigSnapshotTrigger runtime;
+        runtime.Id = "stable-trigger";
+        runtime.Instance = trigger;
+        rig.Triggers = { runtime };
+        rig.InputDispatch.KeyboardTriggers = { trigger };
+        engine::ContextualKeyboardInput keyboard;
+        engine::RigTriggerInputGate gate;
+        ASSERT_TRUE(gate.Open(rig.Revision));
+        KeyAction key;
+        key.SetActionTime(GetTime());
+        key.KeyChar = ActivateChar;
+        key.KeyActionType = inverse ? KeyAction::KEY_UP : KeyAction::KEY_DOWN;
+        std::optional<engine::KeyboardTriggerReceipt> receipt;
+        ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+            engine::TRIGGER_KEY, ActivateChar, inverse ? 0u : 1u, key, {},
+            std::nullopt, std::nullopt, &receipt).IsEaten);
+        ASSERT_TRUE(receipt);
+        keyboard.Record(rig, runtime, *receipt);
+        keyboard.Record(rig, runtime, *receipt); // Repeat admission occupies one slot.
+        EXPECT_EQ(1u, keyboard.Outstanding());
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        ASSERT_TRUE(trigger->IsActivateInputDown());
+        ASSERT_TRUE(gate.RequestCloseFromUi(rig.Revision));
+        key.KeyActionType = inverse ? KeyAction::KEY_DOWN : KeyAction::KEY_UP;
+        keyboard.Observe(key, modalStillOpen, gate.TryAcceptUi(rig.Revision));
+        EXPECT_FALSE(gate.TryAcceptUi(rig.Revision));
+        EXPECT_EQ(1u, keyboard.Outstanding());
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_TRUE(trigger->IsActivateInputDown());
+        // A name-only accepted revision preserves stable instance and binding identity.
+        trigger->SetName("renamed");
+        rig.Revision = 2u;
+        ASSERT_TRUE(gate.Open(rig.Revision));
+        ASSERT_TRUE(gate.TryAcceptUi(rig.Revision));
+        keyboard.Flush(rig, key);
+        EXPECT_EQ(0u, keyboard.Outstanding());
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+        keyboard.Flush(rig, key);
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+        // Swallowed modal presses cannot produce a newly configured inverse attack on close.
+        key.KeyActionType = KeyAction::KEY_DOWN;
+        keyboard.Observe(key, true);
+        key.KeyActionType = KeyAction::KEY_UP;
+        EXPECT_TRUE(keyboard.Observe(key, false));
+        EXPECT_FALSE(keyboard.Observe(key, false));
+        auto wrongSignature = *receipt;
+        wrongSignature.Down.Value += 1u;
+        EXPECT_FALSE(trigger->QueueAdmittedKeyboardRelease(wrongSignature, rig.Revision, key));
+        key.KeyActionType = inverse ? KeyAction::KEY_UP : KeyAction::KEY_DOWN;
+        ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+            engine::TRIGGER_KEY, ActivateChar, inverse ? 0u : 1u, key, {},
+            std::nullopt, std::nullopt, &receipt).IsEaten);
+        ASSERT_TRUE(receipt);
+        keyboard.Record(rig, runtime, *receipt);
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        ASSERT_TRUE(trigger->IsActivateInputDown());
+        if (!inverse)
+        {
+            // An admitted press repeats inside a modal; its release arrives after close.
+            keyboard.Observe(key, true);
+            key.KeyActionType = KeyAction::KEY_UP;
+            EXPECT_TRUE(keyboard.Observe(key, false, true));
+            keyboard.Flush(rig, key);
+            TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+            EXPECT_FALSE(trigger->IsActivateInputDown());
+            key.KeyActionType = KeyAction::KEY_DOWN;
+            ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+                engine::TRIGGER_KEY, ActivateChar, 1u, key, {}, std::nullopt, std::nullopt, &receipt).IsEaten);
+            keyboard.Record(rig, runtime, *receipt);
+            TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+            ASSERT_TRUE(gate.RequestCloseFromUi(rig.Revision));
+            key.KeyActionType = KeyAction::KEY_UP;
+            keyboard.Observe(key, false, false);
+            ASSERT_TRUE(gate.Open(rig.Revision));
+            // Reopened input admits another press before the next UI frame.
+            key.KeyActionType = KeyAction::KEY_DOWN;
+            keyboard.Flush(rig, key); // The Scene prologue drains old pending UP first.
+            keyboard.Observe(key, false, true);
+            ASSERT_TRUE(trigger->QueueInputEvent(engine::TRIGGER_INPUT_UI, rig.Revision,
+                engine::TRIGGER_KEY, ActivateChar, 1u, key, {}, std::nullopt, std::nullopt, &receipt).IsEaten);
+            keyboard.Record(rig, runtime, *receipt);
+            keyboard.Flush(rig, key); // A frame cannot release the newly admitted press.
+            TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+            EXPECT_TRUE(trigger->IsActivateInputDown());
+            EXPECT_EQ(1u, keyboard.Outstanding());
+        }
+        keyboard.FocusLost();
+        keyboard.Flush(rig, key);
+        TickAndComplete(trigger, 0u, std::nullopt, rig.Revision);
+        EXPECT_FALSE(trigger->IsActivateInputDown());
+        EXPECT_EQ(0u, keyboard.Outstanding());
+    }
+}
+
 TEST(Trigger, FutureRigReleaseWaitsForAudioRevisionInBothIngressDomains)
 {
     for (const auto domain : { engine::TRIGGER_INPUT_UI, engine::TRIGGER_INPUT_JOB })
@@ -3282,8 +3704,14 @@ TEST(Trigger, ActivateRecordsConfiguredMidiLanesWithoutConnectedDevices)
             ASSERT_EQ(1u, station->GetLoopTakeSnapshot().size());
             auto take = station->GetLoopTakeSnapshot().front();
             EXPECT_EQ(mixed ? 1u : 0u, take->GetLoops().size());
-            ASSERT_EQ(2u, take->GetMidiLoops().size());
-            EXPECT_EQ(params.MidiInputDevices, take->MidiLoopDevices());
+            ASSERT_EQ(32u, take->GetMidiLoops().size());
+            ASSERT_EQ(32u, take->MidiLoopDevices().size());
+            ASSERT_EQ(32u, take->MidiLoopChannels().size());
+            for (auto stream = 0u; stream < 32u; ++stream)
+            {
+                EXPECT_EQ(params.MidiInputDevices[stream / 16u], take->MidiLoopDevices()[stream]);
+                EXPECT_EQ(stream % 16u, take->MidiLoopChannels()[stream]);
+            }
             EXPECT_FALSE(take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), "unrelated", 0u));
             trigger->OnTick(GetTime(), 256u, cfg, std::nullopt);
 			boundary += 256u;
@@ -3291,15 +3719,17 @@ TEST(Trigger, ActivateRecordsConfiguredMidiLanesWithoutConnectedDevices)
 			station->CompleteMidiIngressPump(boundary + 4410u);
             EXPECT_EQ(engine::TRIGSTATE_DEFAULT, trigger->GetState());
             ASSERT_EQ(1u, trigger->GetTakes().size());
-            for (const auto& loop : take->GetMidiLoops())
+            for (auto stream = 0u; stream < take->GetMidiLoops().size(); ++stream)
             {
+                const auto& loop = take->GetMidiLoops()[stream];
+                const auto channel = static_cast<std::uint8_t>(take->MidiLoopChannels()[stream]);
                 EXPECT_EQ(midi::MidiLoopState::Playing, loop->State());
                 EXPECT_GT(loop->CompletedLengthForEditor(), 0u);
                 EXPECT_EQ(0u, loop->EventCount());
                 midi::MidiLoop::EditState edit;
                 ASSERT_TRUE(loop->SnapshotForEdit(edit));
-                edit.Events[0] = midi::MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u);
-                edit.Events[1] = midi::MidiEvent::MakeNoteOff(1u, 0u, 60u);
+                edit.Events[0] = midi::MidiEvent::MakeNoteOn(0u, channel, 60u, 100u);
+                edit.Events[1] = midi::MidiEvent::MakeNoteOff(1u, channel, 60u);
                 edit.EventCount = 2u;
                 ASSERT_TRUE(loop->PublishEdit(edit));
                 midi::MidiEvent published;
@@ -3396,6 +3826,8 @@ TEST(Trigger, LosingOlderTailPreservesNewIndependentPunchAndItsQueuedRelease)
 {
     auto oldStation = MakeTestStation("old-tail-source");
     auto healthyStation = MakeTestStation("new-punch-source");
+    oldStation->SetAllowedMidiChannels({});
+    healthyStation->SetAllowedMidiChannels({}); // Rack permissions do not suppress the wired MIDI capture.
     TriggerParams params;
     params.InputChannels = { 0u };
     params.MidiInputDevices = { "old" };
@@ -3428,6 +3860,9 @@ TEST(Trigger, LosingOlderTailPreservesNewIndependentPunchAndItsQueuedRelease)
     press(true, true); press(true, false);
     trigger->OnTick(GetTime(), 64u, cfg, std::nullopt);
     press(true, true); press(true, false);
+    // The wired source is mixed MIDI/audio even with its rack channels disabled.
+    // Supply the device-phase observation normally published by the audio boundary.
+    healthyStation->GetLoopTakeSnapshot().back()->BeginCaptureAudioBoundary(0u,0u,0u);
     press(false, true);
     press(true, true); press(true, false);
     ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
@@ -3566,6 +4001,7 @@ TEST(Trigger, LossDuringPendingEndSettlesBeforeReconnectAndRejectsOldQueuedRelea
 TEST(Trigger, ConfirmedTailLossStaysStickyAfterCompletionAndPreservesEarlierCompletedHistory)
 {
     auto station = MakeTestStation("sticky-tail-loss");
+    station->SetAllowedMidiChannels({}); // Disable rack reception, retaining the physical loss source.
     TriggerParams params;
     params.InputChannels = { 0u };
     params.MidiInputDevices = { "lost" };
@@ -3587,12 +4023,14 @@ TEST(Trigger, ConfirmedTailLossStaysStickyAfterCompletionAndPreservesEarlierComp
     record();
     auto completed = station->GetLoopTakeSnapshot().front();
     completed->EndRecording();
+    station->CompleteMidiIngressPump(100000u); // Close the wired MIDI side of the completed mixed take.
     ASSERT_FALSE(completed->HasPendingTriggerCapture());
     record();
     auto tail = station->GetLoopTakeSnapshot().back();
     ASSERT_TRUE(tail->HasPendingTriggerCapture());
     trigger->ConfirmMidiAvailabilityOnJob({}, { "lost" });
     tail->EndRecording(); // Completion races the already-confirmed request.
+    station->CompleteMidiIngressPump(200000u);
     ASSERT_FALSE(tail->HasPendingTriggerCapture());
     for (unsigned int step = 0u; step < 4u; ++step) TickAndComplete(trigger, 0u, cfg);
     ASSERT_EQ(1u, trigger->GetTakes().size());
@@ -3752,4 +4190,157 @@ TEST(Trigger, UntimestampedSerialUsesAdmissionBoundary)
 	ASSERT_EQ(1u, receiver->Actions().size());
 	EXPECT_EQ(12345u, receiver->Actions()[0].MidiSample);
 	EXPECT_DOUBLE_EQ(0.0, receiver->Actions()[0].PreDelayMs);
+}
+
+// Build real completed members: admission must not depend on test-only state setters.
+static std::shared_ptr<LoopTake> AddCompletedOverdubSource(const std::shared_ptr<Station>& station,
+	const std::string& id, unsigned long length = 128ul)
+{
+	station->SetVisible(true);
+	station->SetEnabled(true);
+	auto take = MakeTestLoopTake(id);
+	station->AddTake(take);
+	take->Record({0u}, station->Name());
+	take->CommitChanges();
+	take->EndMultiWrite(constants::MaxLoopFadeSamps + length, true, base::Audible::AUDIOSOURCE_ADC);
+	take->Play(constants::MaxLoopFadeSamps, length, 0u);
+	station->CommitChanges();
+	return take;
+}
+
+TEST(Trigger, ExplicitNextSourceIsOneShotAndActiveCaptureRemainsPinnedAcrossRebind)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "armed-A");
+	auto b = AddCompletedOverdubSource(station, "latest-B", 256ul);
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	ASSERT_TRUE(a->IsCompletedRecording());
+	a->Mute(); // User mute is not an eligibility restriction.
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	io::UserConfig cfg;
+	cfg.Audio = { "", 48000, 256, 256, 0, 2, 2, 2 };
+	cfg.Trigger = { 0, 0 };
+	base::Action action;
+	auto press = [&](bool activate, bool down)
+	{
+		ASSERT_TRUE(trigger->QueueExternalControlAction(activate, down, action).IsEaten);
+		TickAndComplete(trigger, 0u, cfg);
+	};
+	press(false, true);
+	press(true, true);
+	ASSERT_EQ(engine::TRIGSTATE_OVERDUBBING, trigger->GetState());
+	ASSERT_FALSE(trigger->GetTakes().empty());
+	EXPECT_EQ(a->Id(), trigger->GetTakes().back().SourceTakeId);
+	EXPECT_FALSE(trigger->HasExplicitNextOverdubSource());
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, b));
+	press(true, false);
+	press(true, true);
+	ASSERT_EQ(engine::TRIGSTATE_PUNCHEDIN, trigger->GetState());
+	EXPECT_EQ(a->Id(), trigger->GetTakes().back().SourceTakeId);
+	EXPECT_EQ(b, trigger->NextOverdubSource());
+	EXPECT_FALSE(b->IsSourceMuted());
+	trigger->Reset();
+	EXPECT_FALSE(trigger->HasExplicitNextOverdubSource());
+}
+
+TEST(Trigger, SupersededQueuedExplicitStartRejectsAndKeepsNewerBinding)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "queued-A");
+	auto b = AddCompletedOverdubSource(station, "queued-B");
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	base::Action action;
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_TRUE(trigger->QueueExternalControlAction(true, true, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, b));
+	CompleteQueuedStructuralAction(trigger);
+	EXPECT_EQ(2u, station->GetLoopTakes().size());
+	EXPECT_TRUE(trigger->GetTakes().empty());
+	EXPECT_EQ(b, trigger->NextOverdubSource());
+	EXPECT_NE(std::string::npos, trigger->NextOverdubSourceStatus().find("changed before start"));
+}
+
+TEST(Trigger, QueuedUnboundStartKeepsLatestAndDoesNotConsumeLaterArmedChoice)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "later-A");
+	auto b = AddCompletedOverdubSource(station, "latest-B");
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	base::Action action;
+	ASSERT_TRUE(trigger->QueueExternalControlAction(false, true, action).IsEaten);
+	TickAndComplete(trigger);
+	ASSERT_TRUE(trigger->QueueExternalControlAction(true, true, action).IsEaten);
+	trigger->OnTick(GetTime(), 0u, std::nullopt, std::nullopt);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	CompleteQueuedStructuralAction(trigger);
+	ASSERT_FALSE(trigger->GetTakes().empty());
+	EXPECT_EQ(b->Id(), trigger->GetTakes().back().SourceTakeId);
+	EXPECT_EQ(a, trigger->NextOverdubSource());
+}
+
+TEST(Trigger, RemovedOrReroutedExplicitSourceLeavesInvalidTombstoneUntilClear)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "removed-A");
+	auto b = AddCompletedOverdubSource(station, "surviving-B");
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	actions::TriggerAction ditch;
+	ditch.ActionType = TriggerAction::TRIGGER_DITCH;
+	ditch.TargetId = a->Id();
+	ASSERT_TRUE(station->OnAction(ditch).IsEaten);
+	EXPECT_TRUE(trigger->NextOverdubSourceInvalid());
+	EXPECT_EQ(nullptr, trigger->NextOverdubSource());
+	EXPECT_TRUE(trigger->HasExplicitNextOverdubSource());
+	base::Action action;
+	trigger->QueueExternalControlAction(false, true, action);
+	TickAndComplete(trigger);
+	trigger->QueueExternalControlAction(true, true, action);
+	TickAndComplete(trigger);
+	EXPECT_TRUE(trigger->GetTakes().empty());
+	EXPECT_EQ(1u, station->GetLoopTakes().size());
+	trigger->Reset();
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, b));
+	std::shared_ptr<base::ActionReceiver> route = MakeTestStation("replacement");
+	std::vector<unsigned int> channels;
+	std::vector<std::string> devices;
+	std::shared_ptr<audio::AudioMixer> mixer;
+	std::shared_ptr<base::BounceWriter> writer;
+	trigger->ApplyCaptureRouting(route, channels, devices, mixer, writer);
+	EXPECT_TRUE(trigger->NextOverdubSourceInvalid());
+	trigger->ClearNextOverdubSource();
+	EXPECT_FALSE(trigger->HasExplicitNextOverdubSource());
+}
+
+TEST(Trigger, RejectedAdmissionRetainsBindingAndTimingFailureCreatesNoTake)
+{
+	auto station = MakeTestStation();
+	auto a = AddCompletedOverdubSource(station, "retained-A");
+	auto trigger = MakeDefaultTrigger(station, 0u);
+	ASSERT_TRUE(trigger->BindNextOverdubSource(station, a));
+	station->SetEnabled(false);
+	base::Action action;
+	trigger->QueueExternalControlAction(false, true, action);
+	TickAndComplete(trigger);
+	trigger->QueueExternalControlAction(true, true, action);
+	TickAndComplete(trigger);
+	EXPECT_EQ(a, trigger->NextOverdubSource());
+	EXPECT_FALSE(trigger->NextOverdubSourceStatus().empty());
+	EXPECT_EQ(1u, station->GetLoopTakes().size());
+	station->SetEnabled(true);
+	TriggerAction start;
+	start.ActionType = TriggerAction::TRIGGER_OVERDUB_START;
+	start.SourceId = a->Id();
+	start.PreDelayMs = std::numeric_limits<double>::quiet_NaN();
+	EXPECT_FALSE(station->OnAction(start).IsEaten);
+	EXPECT_EQ(1u, station->GetLoopTakes().size());
+	auto recording = station->AddTake();
+	recording->Record({0u}, station->Name());
+	EXPECT_FALSE(trigger->BindNextOverdubSource(station, recording));
+	EXPECT_EQ(a, trigger->NextOverdubSource());
+	station->SetMembershipRemoving(true);
+	EXPECT_TRUE(trigger->NextOverdubSourceInvalid());
 }

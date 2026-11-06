@@ -1,0 +1,257 @@
+#pragma once
+
+#include <array>
+#include <atomic>
+#include <bitset>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <vector>
+#include "MidiQueue.h"
+#include "MidiNote.h"
+#include "MidiChannelRoute.h"
+#include "MidiLoop.h"
+#include "../engine/LoopTake.h"
+
+namespace engine { class LoopTake; class Loop; }
+namespace vst { class IVstPlugin; class VstChain; }
+
+namespace midi
+{
+	class MidiLoop;
+
+	// MIDI routing and delivery. Prepared topology is immutable while borrowed;
+	// destination ownership/queues are callback-owned. The structural publisher
+	// retains and collects binding/plugin lifetimes after reader acknowledgements.
+	class MidiDelivery
+	{
+	public:
+		// Prepared/pinned on the structural owner; MIDI ownership is mutated only
+		// by audio dispatch. Counts are per destination, never per changing output index.
+		struct MidiPlaybackBinding;
+		struct MidiDestination
+		{
+			std::shared_ptr<vst::IVstPlugin> Plugin;
+			std::shared_ptr<engine::Loop> AudioLoop;
+			unsigned int RenderChannels = 0u; // Immutable captured hosted width.
+			std::bitset<midi::MidiNote::TotalNoteSlots> LiveHeld;
+			// Callback-owned pedal accounting, independent of changing live routes.
+			std::bitset<16> LiveSustain;
+			std::array<std::uint32_t, 16> LiveSustainRevision{};
+			std::array<std::uint64_t, 16> AppliedLiveRetirements{};
+			std::uint16_t AppliedLiveChannels = 0u; // Callback-only effective route mask.
+			std::bitset<16> PluginSustain;
+			std::bitset<16> BlockSustainAtStart;
+			std::bitset<16> PendingSustainRelease;
+			std::array<unsigned int, 16> RecordedSustainOwners{};
+			// Audio owner consumes; quiescent lifecycle owner marks actual delivered
+			// live notes after all writers drain. Destination lifetime follows snapshots.
+			std::bitset<midi::MidiNote::TotalNoteSlots> PendingLiveReset;
+			std::array<std::uint32_t, midi::MidiNote::TotalNoteSlots> LiveNoteOnRevision{};
+			std::array<unsigned int, midi::MidiNote::TotalNoteSlots> PlaybackOwners{};
+			std::array<unsigned int, midi::MidiNote::TotalNoteSlots> RecordedAudibleOwners{}; // Audio delivery time.
+			// Audio callback owner: rejected releases retry in later blocks.
+			std::bitset<midi::MidiNote::TotalNoteSlots> PendingReleases;
+			std::array<std::uint8_t, midi::MidiNote::TotalNoteSlots> PendingReleaseVelocity{};
+			std::bitset<midi::MidiNote::TotalNoteSlots> PluginHeld;
+			std::bitset<midi::MidiNote::TotalNoteSlots> BlockHeldAtStart;
+			std::bitset<midi::MidiNote::TotalNoteSlots> BlockTouched;
+			std::size_t ReleaseCursor = 0u;
+			struct ScheduledMidi
+			{
+				midi::MidiEvent Event;
+				midi::MidiVoiceEvent Voice;
+				std::uint64_t Sequence = 0u;
+				MidiPlaybackBinding* Owner = nullptr; // Pinned by QueuedEvents.
+				bool IsRealtime = false;
+                std::uint32_t SourceCrossingSample = 0u, CompensationSamps = 0u;
+                double RevisedSourceDelta = 0.0;
+                bool PendingSourceEndpoint = false;
+			};
+			static constexpr std::size_t ScheduledCapacity = 1024u;
+			static constexpr std::size_t ScheduledReleaseReserve = 256u;
+			std::array<ScheduledMidi, ScheduledCapacity> Scheduled{};
+			std::size_t ScheduledCount = 0u; // Audio callback only.
+			std::uint64_t ScheduleSequence = 0u;
+			std::atomic<unsigned int> CompensationDelaySamps{ 0u };
+			std::atomic<std::uint32_t> CompensationEpoch{ 0u }; // Job publication.
+			std::uint32_t AppliedCompensationEpoch = 0u; // Audio callback.
+			unsigned int ActiveCompensationDelaySamps = 0u; // Audio callback.
+			bool RecoveringCompensationChange = false; // Current callback block.
+			bool LastBypassed = false; // Audio callback.
+			std::atomic<bool> RetirementReleased{false}; // Audio publishes, structural owner reclaims.
+		};
+		struct MidiPlaybackBinding
+		{
+			std::shared_ptr<engine::LoopTake> Take;
+			std::shared_ptr<midi::MidiLoop> Loop;
+			std::shared_ptr<MidiDestination> Destination;
+			std::bitset<midi::MidiNote::TotalNoteSlots> Held;
+			std::bitset<midi::MidiNote::TotalNoteSlots> AudibleHeld; // Delayed note reached the plugin.
+			std::bitset<16> AudibleSustain; // Callback-owned delivered pedal state.
+			std::array<std::uint64_t, 16> AppliedRetirements{};
+			std::uint16_t CancelChannelsThisBlock = 0u;
+			std::uint16_t AllowedChannels = 0xffffu; // Callback-owned route eligibility.
+			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlots{};
+			std::array<std::uint16_t, midi::MidiNote::TotalNoteSlots> AudibleSlotPositions{};
+			std::size_t AudibleSlotCount = 0u; // Dense callback-owned active slots.
+			std::atomic<bool> HasHeld{ false }; // Audio publishes; job reclaims unused bindings.
+			std::atomic<unsigned int> QueuedEvents{ 0u }; // Pins raw queue identity until removed.
+			std::atomic<bool> RoutingActive{ true }; // Job publication; callback cancellation.
+			std::uint64_t ObservedRecoveryEpoch = 0u;
+			bool ReconcileScheduledThisBlock = false;
+			std::uint64_t ObservedSourceRevision = 0u; // Audio callback.
+			bool HasObservedSourceRevision = false;
+			bool HasObservedSourceState = false;
+			bool CancelScheduledThisBlock = false;
+			std::uint64_t ObservedRelocationGeneration = 0u; // Audio callback.
+			std::atomic<bool> ReleaseConsumed{ false };
+			std::size_t ReleaseSlot = 0u; // Audio only; preserves the per-block ingress budget.
+			bool ReleaseQueued = false; // Job producer only.
+			bool EmitSourceLossRelease = true; // Frozen before queue publication.
+		};
+	private:
+		struct ImmediateMidi
+		{
+			midi::MidiEvent Event;
+			std::uint64_t Generation = 0u; // Accepted topology observed by producer.
+		};
+		struct SyntheticMidi
+		{
+			midi::MidiEvent Event;
+			MidiPlaybackBinding* Release = nullptr; // Pinned until audio acknowledges.
+			bool SourceLossNoteOff = false;
+			std::uint32_t LiveNoteOnRevision = 0u;
+		};
+	public:
+		// Whole-hierarchy admission limits bound destination queues and every event's
+		// fanout. Rejected preparation leaves the preceding render topology intact.
+		static constexpr std::size_t MaxRacks = 64u;
+		static constexpr std::size_t MaxDestinations = 64u;
+		static constexpr std::size_t MaxRetainedDestinations = 128u;
+		static constexpr std::size_t MaxBindings = 512u;
+		static constexpr std::size_t MaxSources = MaxBindings;
+		static constexpr std::size_t MaxRetainedBindings = 1024u;
+		struct PreparedRack
+		{
+			std::shared_ptr<vst::VstChain> Chain;
+			engine::LoopTake* Take = nullptr; // Null means Station; source groups pin takes.
+			std::shared_ptr<engine::Loop> Loop; // Audio leaf, never a MidiLoop.
+			unsigned int RenderChannels = 0u;
+			std::uint16_t EnabledChannels = 0u;
+			std::array<MidiChannelRoute,16> ChannelRoutes{};
+		};
+		struct SourceGroup
+		{
+			std::shared_ptr<engine::LoopTake> Take;
+			std::vector<std::shared_ptr<MidiLoop>> Sources;
+			std::shared_ptr<const engine::LoopTake::AudioState> Audio;
+		};
+		struct PreparedState
+		{
+			std::uint64_t Generation = 0u;
+			std::shared_ptr<vst::VstChain> MidiChain;
+			std::vector<PreparedRack> Racks;
+			std::vector<SourceGroup> SourceGroups;
+			std::vector<std::uint64_t> DestinationPathLatency;
+			std::vector<bool> DestinationLegacyVelocity;
+			std::vector<bool> DestinationHasMidiInput;
+			std::vector<std::vector<std::size_t>> PlaybackDestinationIndices;
+			std::array<std::vector<std::shared_ptr<MidiDestination>>, 16> LiveChannelDestinations;
+			std::uint16_t EnabledChannels = 0u;
+			std::vector<std::uint16_t> DestinationChannels; // Shared live/recorded permissions, immutable.
+			// Retirements survive skipped publications, including disable/re-enable between blocks.
+			std::vector<std::array<std::uint64_t, 16>> DestinationRetirements;
+			std::vector<std::shared_ptr<MidiDestination>> MidiDestinations;
+			std::vector<std::shared_ptr<MidiDestination>> RetiredMidiDestinations;
+			mutable std::atomic<bool> RetiredMidiQueueCancelled{ false };
+			std::vector<std::vector<std::shared_ptr<MidiPlaybackBinding>>> MidiPlaybackRoutes;
+		};
+
+		bool Prepare(PreparedState& state, const PreparedState* previous,
+			std::shared_ptr<vst::VstChain> chain, const std::vector<std::shared_ptr<engine::LoopTake>>& takes,
+			std::uint16_t enabledChannels, const std::array<MidiChannelRoute, 16>& channelRoutes,
+			unsigned int renderChannels, std::span<const PreparedRack> childRacks = {},
+			std::span<const SourceGroup> sources = {});
+		static bool LatencyPathsChanged(const PreparedState& state) noexcept; // Structural owner only.
+		static bool CanConfigureCompensation(const PreparedState& state, unsigned int referenceLatencySamps) noexcept;
+		static bool ConfigureCompensation(const PreparedState& state, unsigned int referenceLatencySamps) noexcept;
+		static void BeginRetiredBlock(const PreparedState& state,
+			std::uint32_t blockStartSample, unsigned int numSamps) noexcept;
+		void ProcessBlock(const PreparedState& state,
+			std::span<const std::shared_ptr<engine::LoopTake>> takes, std::span<float* const> instrumentPtrs,
+			bool vstActive, const std::atomic<bool>& membershipRemoving,
+			unsigned int numSamps,
+			std::uint32_t blockStartSample, bool discontinuity = false) noexcept;
+		static void RecoverSkippedBlocks(const PreparedState& state) noexcept { _RecoverSkippedMidiBlocks(state); }
+		bool TryEnqueueImmediateLiveMidi(const MidiEvent& event, const PreparedState* state = nullptr,
+			std::uint64_t fallbackGeneration = 0u) noexcept;
+		bool TryEnqueueSyntheticLiveMidi(const MidiEvent& event) noexcept { return _TryEnqueueSyntheticMidi({event}); }
+		bool TryEnqueueSourceLossRelease(const MidiEvent& event, std::uint32_t revision) noexcept
+		{ return _TryEnqueueSyntheticMidi({event, nullptr, true, revision}); }
+		void ResetLiveMidiWhileQuiescent() noexcept;
+        static void FinalReleaseWhileQuiescent(const PreparedState& state) noexcept;
+		std::uint32_t LiveSustainRevision(unsigned int channel) const noexcept
+		{ return _liveSustainRevisions[channel].load(std::memory_order_acquire); }
+		std::uint32_t LiveNoteOnRevision(std::size_t slot) const noexcept
+		{ return _liveNoteOnRevisions[slot].load(std::memory_order_acquire); }
+		void QueueLostPlaybackMidi(const std::shared_ptr<engine::LoopTake>& take, bool emitRelease = true);
+		void FlushPendingLostPlaybackMidi();
+		void Collect(); // Serialized structural owner only.
+		bool HasUnconsumedRemovedBinding() const noexcept;
+		void ClearAfterReadersStopped();
+
+	protected:
+		class MidiPlaybackSink final : public midi::IMidiOutputSink
+		{
+		public:
+			explicit MidiPlaybackSink(const PreparedState& state) noexcept : _state(state) {}
+			void OnEvent(unsigned int outputIndex, const midi::MidiEvent& event) noexcept override;
+			bool TryOnEvent(unsigned int outputIndex, const midi::MidiEvent& event) noexcept override;
+			bool TryOnVoiceEvent(unsigned int outputIndex, const midi::MidiEvent& event, const midi::MidiVoiceEvent& voice) noexcept override;
+		private:
+			const PreparedState& _state;
+		};
+
+		static bool _TryDeliverMidi(MidiDestination& destination, const midi::MidiEvent& event, bool isRealtime, MidiPlaybackBinding* owner = nullptr, const midi::MidiVoiceEvent& voice = {}) noexcept;
+		static bool _TryDeliverMidiNow(MidiDestination& destination, const midi::MidiEvent& event, bool isRealtime) noexcept;
+		static bool _TryDeliverRecordedMidiNow(MidiDestination& destination, const midi::MidiEvent& event,
+			MidiPlaybackBinding& owner, bool isRealtime) noexcept;
+		static void _DropRecordedAudibleOwner(MidiDestination& destination, MidiPlaybackBinding& owner,
+			bool emitRelease = true, std::uint16_t channels = 0xffffu) noexcept;
+		static void _DrainScheduledMidi(const PreparedState& state, std::uint32_t blockStartSample, unsigned int numSamps) noexcept;
+		static std::bitset<midi::MidiNote::TotalNoteSlots> _CancelScheduledMidiForOwner(
+			MidiDestination& destination, MidiPlaybackBinding* owner) noexcept;
+		static void _RecoverCancelledScheduledMidi(MidiDestination& destination,
+			const std::bitset<midi::MidiNote::TotalNoteSlots>& affected) noexcept;
+		static void _InvalidateScheduledMidiAtBlockStart(const PreparedState& state, std::uint32_t blockStartSample, bool forceCancel = false) noexcept;
+		static void _DrainPendingMidiReleases(const PreparedState& state, std::uint32_t sample) noexcept;
+		static void _RecoverSkippedMidiBlocks(const PreparedState& state) noexcept;
+		static void _DispatchLiveMidi(const PreparedState& state, const midi::MidiEvent& event,
+			bool sourceLossNoteOff, std::uint32_t liveNoteOnRevision) noexcept;
+		static bool _ReleaseLostPlaybackMidi(MidiPlaybackBinding& binding, std::uint32_t sample,
+			unsigned int& budget, unsigned int& slotBudget) noexcept;
+		bool _TryEnqueueSyntheticMidi(SyntheticMidi entry) noexcept;
+
+		static bool _TryEnqueueOrderedLiveMidi(MidiQueue<1024, ImmediateMidi>& queue,
+			bool& hasLastSample, std::uint32_t& lastSample, ImmediateMidi entry) noexcept;
+
+	private:
+		midi::MidiQueue<1024, ImmediateMidi> _immediateLiveMidiIngress;
+		midi::MidiQueue<1024, SyntheticMidi> _syntheticLiveMidiIngress;
+		std::vector<std::weak_ptr<MidiDestination>> _midiDestinations;
+		std::vector<std::shared_ptr<MidiPlaybackBinding>> _midiPlaybackBindings;
+		std::vector<std::shared_ptr<MidiPlaybackBinding>> _pendingLostPlaybackMidi;
+		bool _hasDiscontinuityCutoff = false; // Callback-owned until both bounded ingress queues cross cutoff.
+		std::uint32_t _discontinuityCutoff = 0u;
+		bool _hasLastImmediateLiveMidiSample = false;
+		std::uint32_t _lastImmediateLiveMidiSample = 0u;
+		bool _hasLastSyntheticLiveMidiSample = false;
+		std::uint32_t _lastSyntheticLiveMidiSample = 0u;
+		// Audio publishes delivered attacks; the job owner snapshots revisions for
+		// source-loss releases. Rejected ingress never reserves ownership.
+		std::array<std::atomic<std::uint32_t>, 16> _liveSustainRevisions{};
+		std::array<std::atomic<std::uint32_t>, midi::MidiNote::TotalNoteSlots> _liveNoteOnRevisions{};
+	};
+}

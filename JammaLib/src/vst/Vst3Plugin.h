@@ -137,6 +137,9 @@ namespace vst
 		utils::Size2d GetEditorSize() const noexcept override;
 
 		bool IsLoaded() const noexcept override { return _isLoaded; }
+		RenderRole Role() const noexcept override { return _role; }
+		MidiInputCapabilities MidiInput() const noexcept override { return _midiInput; }
+		unsigned int HostedChannelCount() const noexcept override { return _hostedChannels; }
 		const std::string& Name() const noexcept override { return _name; }
 
 		void SetBypassed(bool bypass) noexcept override
@@ -166,7 +169,12 @@ namespace vst
 		void PollPendingControllerChanges() const noexcept;
 
 	private:
+		// Discovery owner writes before publication; no SDK calls from metadata readers.
+		RenderRole _role = RenderRole::Unknown;
+		MidiInputCapabilities _midiInput{};
+		unsigned int _hostedChannels = 0u; // Load owner writes before publication; immutable while hosted.
 		friend struct Vst3PluginTestAccess;
+		static RenderRole InferRoleFromAudioBuses(RenderRole reportedRole, int audioInputBuses, int audioOutputChannels) noexcept;
 		static std::wstring ResolveModulePath(const std::wstring& path, std::error_code& error);
 		bool LoadModule(const std::wstring& path, const char* stage);
 		std::wstring _requestedModulePath, _resolvedModulePath; // Non-RT lifecycle owner only.

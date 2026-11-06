@@ -27,6 +27,8 @@
 
 namespace engine
 {
+	class Station;
+	class LoopTake;
 	struct TriggerTake
 	{
 		enum SourceType
@@ -102,7 +104,7 @@ namespace engine
 			return false;
 		}
 
-		bool operator==(const TriggerBinding& other) {
+		bool operator==(const TriggerBinding& other) const {
 			if (TriggerSource != other.TriggerSource)
 				return false;
 
@@ -233,9 +235,11 @@ namespace engine
 			return MATCH_NONE;
 		}
 
+		const TriggerBinding& Down() const noexcept { return _triggerDown; }
+		const std::optional<TriggerBinding>& Release() const noexcept { return _triggerRelease; }
 		void Reset() { _isDown = false;	}
 
-		bool operator==(const DualBinding& other) {
+		bool operator==(const DualBinding& other) const {
 			if (!(_triggerDown == other._triggerDown))
 				return false;
 
@@ -252,6 +256,15 @@ namespace engine
 		TriggerBinding _triggerDown;
 		std::optional<TriggerBinding> _triggerRelease;
 		bool _isDown;
+	};
+
+	// UI-only admission evidence; descriptors are immutable, never callback hold state.
+	struct KeyboardTriggerReceipt
+	{
+		TriggerControl Control = TRIGGER_CONTROL_ACTIVATE;
+		std::uint16_t BindingIndex = 0u; // Revalidated lookup hint, never identity.
+		TriggerBinding Down;
+		std::optional<TriggerBinding> Release;
 	};
 
 	struct TriggerParams
@@ -313,7 +326,11 @@ namespace engine
 			const base::Action& action,
 			const std::string& device = "",
 			std::optional<std::int64_t> eventTimeUsec = std::nullopt,
-			std::optional<std::uint32_t> midiSample = std::nullopt);
+			std::optional<std::uint32_t> midiSample = std::nullopt,
+			std::optional<KeyboardTriggerReceipt>* admittedDown = nullptr,
+			std::optional<KeyboardTriggerReceipt>* matchedRelease = nullptr);
+		bool QueueAdmittedKeyboardRelease(const KeyboardTriggerReceipt& receipt,
+			std::uint64_t rigRevision, const base::Action& action);
 		actions::ActionResult QueueMidiInputEvent(TriggerInputDomain domain,
 			std::uint64_t rigRevision,
 			const midi::MidiEvent& event,
@@ -335,6 +352,15 @@ namespace engine
 		std::uint64_t StructuralCommandDropCount() const noexcept { return _structuralCommandDropCount.load(std::memory_order_acquire); }
 		std::uint64_t ActivationOutcomeCount() const noexcept { return _activationOutcomeCount.load(std::memory_order_acquire); }
 		std::uint64_t DitchOutcomeCount() const noexcept { return _ditchOutcomeCount.load(std::memory_order_acquire); }
+		// Initial wiring and the following pending-source API are Scene-serialized, nonaudio only.
+		void SetReceiver(std::shared_ptr<base::ActionReceiver> receiver);
+		bool RoutesToStation(const std::shared_ptr<Station>& station) const noexcept;
+		bool BindNextOverdubSource(const std::shared_ptr<Station>& station, const std::shared_ptr<LoopTake>& source);
+		void ClearNextOverdubSource();
+		std::shared_ptr<LoopTake> NextOverdubSource();
+		bool HasExplicitNextOverdubSource() const noexcept { return _nextSourceVersion != 0u; }
+		bool NextOverdubSourceInvalid() { _RefreshNextOverdubSource(); return _nextSourceInvalid; }
+		const std::string& NextOverdubSourceStatus() { _RefreshNextOverdubSource(); return _nextSourceStatus; }
 		// Hold the Scene mutex while processing commands so they cannot race Station edits.
 		void ProcessStructuralActionsOnJob(
 			const std::optional<io::UserConfig>& cfg,
@@ -472,6 +498,7 @@ namespace engine
 			bool ApplyToTargetMidi = true;
 			bool IsSourceLossCancellation = false;
 			std::uint64_t InputGeneration = 0u;
+			std::uint64_t NextSourceVersion = 0u;
 		};
 		struct CaptureSession
 		{
@@ -617,7 +644,19 @@ namespace engine
 
 		std::atomic<std::uint64_t> _activationOutcomeCount{ 0u };
 		std::atomic<std::uint64_t> _ditchOutcomeCount{ 0u };
-		std::string _overdubSourceId;
+		// Only the version and accepted route identity cross the audio boundary.
+		std::atomic<base::ActionReceiver*> _acceptedRouteIdentity{ nullptr };
+		std::atomic<std::uint64_t> _acceptedRouteRevision{ 0u };
+		std::atomic<std::uint64_t> _publishedNextSourceVersion{ 0u };
+		std::weak_ptr<Station> _nextSourceStation;
+		std::weak_ptr<LoopTake> _nextSource;
+		std::string _nextSourceId;
+		std::string _nextSourceStatus;
+		std::uint64_t _nextSourceVersion = 0u;
+		std::uint64_t _nextSourceVersionAllocator = 0u;
+		std::uint64_t _nextSourceRouteRevision = 0u;
+		bool _nextSourceInvalid = false;
+		void _RefreshNextOverdubSource();
 		// Written by audio thread (OnTick) and read by event-handler threads
 		// (key/MIDI/serial pumps) during state transitions. Atomic load/store
 		// (relaxed) gives a coherent snapshot without locks on the RT path.

@@ -9,10 +9,13 @@
 #include "engine/Scene.h"
 #include "engine/LoopTake.h"
 #include "engine/Loop.h"
+#include "engine/PerformanceGroupService.h"
 #include "engine/Trigger.h"
 #include "audio/ChannelMixer.h"
 #include "audio/AudioMixer.h"
 #include "audio/AudioHost.h"
+#include "ninjam/NinjamTimingCoordinator.h"
+#include "midi/MidiLoop.h"
 #include "actions/TriggerAction.h"
 #include "actions/GuiAction.h"
 #ifdef _DEBUG
@@ -476,19 +479,60 @@ public:
 	}
 };
 
+TEST(AudioFlow, RetainedEmptyStationCapturesAudioAndAdvancesPlaybackButFirstCompletedBlockIsSilent)
+{
+	constexpr auto block=16u; constexpr auto length=128u;
+	auto station=MakeStation(1u); station->SetupBuffers(block); station->Mute(); auto take=station->AddTake(); take->Record({0u},"muted-capture"); station->CommitChanges();
+	constexpr auto captureBlock=block;
+	auto mixer=MakeChannelMixer(1u,constants::MaxBlockSize); std::vector<float> input(captureBlock,0.25f);
+	const auto total=constants::MaxLoopFadeSamps+length;
+	for (auto at=0u; at<total; at+=captureBlock) WriteBlock(mixer,station,input.data(),1u,std::min(captureBlock,total-at));
+	EXPECT_EQ(total,take->NumRecordedSamps()); take->Play(constants::MaxLoopFadeSamps,length,0u); station->CommitChanges(); take->UnMute();
+	const auto loop=take->GetLoops().front(); EXPECT_TRUE(take->IsMuted()); EXPECT_TRUE(loop->IsMuted());
+	EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED); EXPECT_FALSE(loop->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+	std::array<float,block> output{}; const auto before=loop->BodyPlayIndex(); ReadBlock(mixer,station,output.data(),1u,block);
+	EXPECT_TRUE(std::all_of(output.begin(),output.end(),[](float value){return value==0.0f;}));
+	EXPECT_EQ((before+block)%length,loop->BodyPlayIndex());
+	auto bounced=std::make_shared<AudioFlowCaptureMultiSink>(block); take->WriteBlock(bounced,std::make_shared<AudioFlowAdditiveBounceWriter>(),0,block);
+	EXPECT_TRUE(HasNonZero(bounced->GetSink()->Samples.data(),block)); // Parent gate does not alter captured/bounce source samples.
+	for (auto frame=0u; frame<8u; ++frame)
+	{ output.fill(0.0f); ReadBlock(mixer,station,output.data(),1u,block); EXPECT_FALSE(HasNonZero(output.data(),block)); }
+	station->UnMute(); ASSERT_FALSE(take->IsMuted()); ASSERT_FALSE(loop->IsMuted()); bool audible=false;
+	for (auto frame=0u; frame<16u; ++frame)
+	{ output.fill(0.0f); ReadBlock(mixer,station,output.data(),1u,block); audible |= HasNonZero(output.data(),block); }
+	EXPECT_TRUE(audible);
+}
+
+TEST(AudioFlow, RetainedParentSurvivesOverdubPunchCompletionAndReplacementAudition)
+{
+	auto station=MakeStation(1u); station->Mute(); auto source=station->AddTake(); auto target=station->AddTake(); station->CommitChanges();
+	target->Overdub({0u},"parent-overdub"); TriggerAction in; in.ActionType=TriggerAction::TRIGGER_PUNCHIN_START; in.SourceId=source->Id(); in.TargetId=target->Id();
+	ASSERT_TRUE(station->OnAction(in).IsEaten); EXPECT_EQ(LoopTake::STATE_PUNCHEDIN,target->TakeState());
+	TriggerAction out; out.ActionType=TriggerAction::TRIGGER_PUNCHIN_END; out.SourceId=source->Id(); out.TargetId=target->Id();
+	ASSERT_TRUE(station->OnAction(out).IsEaten); EXPECT_EQ(LoopTake::STATE_OVERDUBBING,target->TakeState());
+	EXPECT_TRUE(source->IsMuted()); source->UnMute(); target->UnMute(); EXPECT_TRUE(source->IsMuted()); EXPECT_TRUE(target->IsMuted());
+	target->AcquireReplacementSourceMute(source); source->UnMute(); EXPECT_TRUE(source->IsMuted()); EXPECT_FALSE(source->IsUserOrSourceMuted());
+	target->Play(0u,128u,0u); target->UnMute(); EXPECT_TRUE(target->IsMuted()); EXPECT_TRUE(station->RetainedMuted());
+	station->UnMute(); EXPECT_FALSE(source->IsMuted()); EXPECT_FALSE(target->IsMuted());
+}
+
 class AudioFlowTemporaryPlaybackRegression
 {
 public:
 	struct Result
 	{
 		std::vector<float> Exported, Dac;
+		bool ExplicitSourceAccepted = false, OtherMaterialUnchanged = false;
+		bool SourceAndNewMidi = false, LaterMidiUnchanged = false;
+		bool RightCaptureComplete = false;
+		std::vector<float> SecondChannel;
 		std::vector<bool> Complete;
 		std::vector<unsigned int> CompletionEdges;
 		unsigned int HistoryReads = 0u;
 		bool DelayedPunchOpened = false, DelayedPunchClosed = false;
 	};
 
-	static Result CapturePunch(bool temporary, int delay, bool productionTrigger = false)
+	static Result CapturePunch(bool temporary, int delay, bool productionTrigger = false, bool explicitSource = false, bool mixedStereo = false)
 	{
 		constexpr unsigned int trigger = 1024u, length = 2048u;
 		constexpr unsigned int inputLatency = 11u, outputLatency = 23u, block = 128u;
@@ -498,16 +542,63 @@ public:
 		constexpr unsigned int punchStart = trigger + 333u, punchEnd = trigger + 1031u;
 		const auto seam = delay > 0 ? static_cast<unsigned int>(delay + (productionTrigger ? 480 : 10)) : 0u;
 		const auto deadline = trigger + length - seam + age;
-		auto station = MakeStation(1u);
-		auto source = MakeTake(); source->SetNumBusChannels(1u);
-		source->Record({}, "old");
+		const auto channels = mixedStereo ? 2u : 1u;
+		auto station = MakeStation(channels);
+		auto source = MakeTake(); source->SetNumBusChannels(channels);
+		source->Record({}, "old", mixedStereo ? std::vector<unsigned int>{3u} : std::vector<unsigned int>{},
+			mixedStereo ? std::vector<std::string>{"Keys"} : std::vector<std::string>{});
 		auto sourceLoop = source->AddLoop(0u, "old"); sourceLoop->Record();
 		std::vector<float> old(constants::MaxLoopFadeSamps + length, 0.0f);
 		old[constants::MaxLoopFadeSamps + 77u] = 0.25f;
 		WriteLoopSamples(sourceLoop, old);
+		std::shared_ptr<Loop> secondSourceLoop;
+		std::vector<float> secondBefore;
+		if (mixedStereo)
+		{
+			secondSourceLoop = source->AddLoop(1u, "old-stereo"); secondSourceLoop->Record();
+			std::vector<float> second(constants::MaxLoopFadeSamps + length, 0.0f);
+			std::fill(second.begin() + constants::MaxLoopFadeSamps, second.end(), 0.375f);
+			WriteLoopSamples(secondSourceLoop, second);
+			source->EndMultiWrite(length, true, Audible::AUDIOSOURCE_ADC);
+			EXPECT_TRUE(source->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(10u, 3u, 60u, 100u), "Keys", length));
+			EXPECT_TRUE(source->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(90u, 3u, 60u), "Keys", length));
+			station->SetAllowedMidiChannels({4u});
+		}
 		source->Play(constants::MaxLoopFadeSamps, length, 0u); source->CommitChanges();
+		if (mixedStereo)
+		{
+			secondBefore = secondSourceLoop->ExportSamples();
+			EXPECT_EQ(length, secondBefore.size());
+			EXPECT_EQ(1u, secondSourceLoop->LoopChannel());
+			EXPECT_TRUE(HasNonZero(secondBefore.data(), static_cast<unsigned int>(secondBefore.size())))
+				<< "Completed source A right channel must contain authored material before trigger admission";
+			auto probe = std::make_shared<AudioFlowCaptureStereoSink>(block);
+			source->WriteBlock(probe, std::make_shared<AudioFlowAdditiveBounceWriter>(), 0, block);
+			EXPECT_TRUE(HasNonZero(probe->GetSink(1u)->Samples.data(), block))
+				<< "Source A must actually bounce its right slot before delayed mixed capture";
+		}
 		std::shared_ptr<LoopTake> target;
 		station->AddTake(source);
+		std::shared_ptr<LoopTake> latest;
+		std::vector<float> latestBefore;
+		if (explicitSource)
+		{
+			latest = MakeTake(); latest->Record({0u}, "latest-B",
+				mixedStereo ? std::vector<unsigned int>{3u} : std::vector<unsigned int>{},
+				mixedStereo ? std::vector<std::string>{"Keys"} : std::vector<std::string>{}); latest->CommitChanges();
+			std::vector<float> other(constants::MaxLoopFadeSamps + length * 2u, 0.0f);
+			std::fill(other.begin() + constants::MaxLoopFadeSamps, other.end(), 0.875f);
+			WriteLoopSamples(latest->GetLoops().front(), other);
+			if (mixedStereo)
+			{
+				latest->EndMultiWrite(length * 2u, true, Audible::AUDIOSOURCE_ADC);
+				EXPECT_TRUE(latest->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(10u, 3u, 67u, 100u), "Keys", length * 2u));
+				EXPECT_TRUE(latest->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(90u, 3u, 67u), "Keys", length * 2u));
+			}
+			latest->Play(constants::MaxLoopFadeSamps, length * 2u, 0u);
+			station->AddTake(latest);
+			latestBefore = latest->GetLoops().front()->ExportSamples();
+		}
 		if (!productionTrigger)
 		{
 			target = MakeTake(); target->SetNumBusChannels(1u);
@@ -517,7 +608,7 @@ public:
 			station->AddTake(target);
 		}
 		station->SetVisible(true); station->SetEnabled(true); station->CommitChanges();
-		auto mixer = MakeChannelMixer(1u, age + 2u * block);
+		auto mixer = MakeChannelMixer(channels, age + 2u * block);
 		config.Audio.LatencyIn = inputLatency;
 		config.Audio.LatencyOut = outputLatency;
 		audio::AudioStreamParams stream;
@@ -527,8 +618,11 @@ public:
 		ditch.SetRelease(engine::TriggerBinding(engine::TRIGGER_KEY, 50u, 0u), true);
 		TriggerParams triggerParams;
 		triggerParams.Activate = {activate}; triggerParams.Ditch = {ditch};
+		if (mixedStereo) triggerParams.MidiInputDevices = {"Keys"};
 		triggerParams.InputChannels = {0u}; triggerParams.PreDelayMs = static_cast<double>(delay) / 48.0;
 		auto realTrigger = std::make_shared<Trigger>(triggerParams); realTrigger->SetReceiver(station);
+		if (mixedStereo) source->BeginCaptureAudioBoundary(0u, 0u, 0u);
+		if (explicitSource && !realTrigger->BindNextOverdubSource(station, source)) return {};
 		const auto key = [&](unsigned int value, unsigned int down) {
 			base::Action action; action.SetUserConfig(config); action.SetAudioParams(stream);
 			realTrigger->OnEvent(engine::TRIGGER_KEY, value, down, action);
@@ -540,7 +634,7 @@ public:
 		{
 			unsigned int end = (std::min)(start + block, deadline + 2u * block);
 			for (const auto edge : {trigger, trigger + 1u, trigger + length, punchStart, punchEnd,
-				punchStart + age, punchEnd + age, deadline})
+				punchStart + age, punchEnd + age, punchStart + 16u, punchStart + 32u, deadline})
 				if (edge > start && edge < end) end = edge;
 			const auto count = end - start;
 			if (productionTrigger)
@@ -558,6 +652,10 @@ public:
 				if (start == trigger + length) { key(50u, 1u); key(49u, 1u); }
 			}
 			if (start >= trigger) target->BeginCaptureAudioBoundary(start, start, start);
+			if (mixedStereo && start == punchStart + 16u)
+				EXPECT_TRUE(target->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(start, 3u, 62u, 100u), "Keys", start));
+			if (mixedStereo && start == punchStart + 32u)
+				EXPECT_TRUE(target->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(start, 3u, 62u), "Keys", start));
 			if (!productionTrigger && start == punchStart + age) target->TriggerPunchInAudio();
 			if (!productionTrigger && start == punchEnd + age) target->TriggerPunchOutAudio();
 			if (start == punchStart + age) result.DelayedPunchOpened = target->IsPunchInActive();
@@ -567,14 +665,14 @@ public:
 				target->SetTriggerCaptureStop(start);
 				target->Play(constants::MaxLoopFadeSamps, length, 0u, 0, false, outputLatency);
 			}
-			std::array<float, block> input{};
+			std::array<float, block * 2u> input{};
 			for (auto i = 0u; i < count; ++i)
 			{
 				const auto physical = static_cast<std::int64_t>(start) + i - inputLatency;
-				if (physical == punchStart || physical == punchEnd - 1u || physical == punchStart + 350u) input[i] = 0.75f;
-				if (physical == punchStart - 1u || physical == punchEnd) input[i] = 9.0f;
+				if (physical == punchStart || physical == punchEnd - 1u || physical == punchStart + 350u) input[i * channels] = 0.75f;
+				if (physical == punchStart - 1u || physical == punchEnd) input[i * channels] = 9.0f;
 			}
-			mixer.FromAdc(input.data(), 1u, count);
+			mixer.FromAdc(input.data(), channels, count);
 			audio::DacRenderContext dac{mixer.ObserveInputHistory(start, count, inputLatency, true)};
 			dac.History.ReadCount = &result.HistoryReads;
 			mixer.InitPlay(age - inputLatency, count);
@@ -589,8 +687,8 @@ public:
 			station->Zero(count, Audible::AUDIOSOURCE_LOOPS);
 			mixer.Sink()->Zero(count, Audible::AUDIOSOURCE_LOOPS);
 			station->WriteBlock(mixer.Sink(), nullptr, 0, count, start, temporary ? &dac : nullptr);
-			std::array<float, block> output{}; mixer.ToDac(output.data(), 1u, count);
-			result.Dac.insert(result.Dac.end(), output.begin(), output.begin() + count);
+			std::array<float, block * 2u> output{}; mixer.ToDac(output.data(), channels, count);
+			result.Dac.insert(result.Dac.end(), output.begin(), output.begin() + count * channels);
 			station->EndMultiPlay(count);
 			mixer.Sink()->EndMultiWrite(count, true, Audible::AUDIOSOURCE_LOOPS);
 			if (productionTrigger) realTrigger->OnTick(utils::Timer::GetTime(), count, config, stream);
@@ -606,7 +704,34 @@ public:
 			}
 			start = end;
 		}
+		if (mixedStereo) station->CompleteMidiIngressPump(deadline + 2u * block);
 		result.Exported = target->GetLoops().front()->ExportSamples();
+		if (explicitSource)
+		{
+			const auto history = realTrigger->GetTakes();
+			result.ExplicitSourceAccepted = !history.empty() && history.back().SourceTakeId == source->Id()
+				&& !realTrigger->HasExplicitNextOverdubSource();
+			result.OtherMaterialUnchanged = latest->GetLoops().front()->ExportSamples() == latestBefore
+				&& sourceLoop->ExportSamples() == std::vector<float>(old.begin() + constants::MaxLoopFadeSamps, old.end());
+		}
+		if (mixedStereo)
+		{
+			EXPECT_EQ(2u, target->GetLoops().size());
+			if (target->GetLoops().size() > 1u) result.RightCaptureComplete = target->GetLoops()[1]->TriggerCaptureComplete();
+			if (target->GetLoops().size() > 1u) result.SecondChannel = target->GetLoops()[1]->ExportSamples();
+			bool oldNote = false, newNote = false, wrongNote = false;
+			for (const auto& loop : target->GetMidiLoops())
+				for (std::size_t i = 0u; i < loop->EventCount(); ++i)
+				{
+					midi::MidiEvent event{};
+					if (loop->TryGetEvent(i, event) && event.IsNoteOn())
+					{ oldNote |= event.data1 == 60u; newNote |= event.data1 == 62u; wrongNote |= event.data1 == 67u; }
+				}
+			result.SourceAndNewMidi = oldNote && newNote && !wrongNote;
+			result.OtherMaterialUnchanged &= secondSourceLoop->ExportSamples() == secondBefore;
+			midi::MidiEvent b{};
+			result.LaterMidiUnchanged = latest->GetMidiLoops().front()->TryGetEvent(0u, b) && b.data1 == 67u;
+		}
 		return result;
 	}
 };
@@ -1725,6 +1850,8 @@ namespace audio
 	class AudioHostRealtimeTestAccess
 	{
 	public:
+        static void ApplyMaster(AudioHost& host,const std::vector<std::shared_ptr<Station>>& stations,utils::Timer* clock) noexcept
+        { host.ApplyLocalMasterTimingAtAudioBoundary(stations,clock); }
 		static bool Enter(AudioHost& host) noexcept { return host.TryEnterCallback(); }
 		static void Leave(AudioHost& host) noexcept { host.LeaveCallback(); }
 		static void Prepare(AudioHost& host,
@@ -1746,6 +1873,21 @@ namespace audio
 			host.SetStations(std::move(stations));
 		}
 
+        static void PrepareRateClock(AudioHost& host, const std::shared_ptr<utils::Timer>& clock,
+            unsigned int sampleRate)
+        {
+            host._playbackRate.Configure(sampleRate);
+            host._playbackRateHistory.Prepare(1024u);
+            host._rateHistoryWindow = 512u;
+            host.SetTimingClock(clock);
+            host._tickCallback = [&host, clock](Time time, unsigned int frames,
+                const std::optional<io::UserConfig>& config, const std::optional<AudioStreamParams>& params)
+            { host.AdvanceBlock(clock.get(), time, frames, config, params); };
+        }
+
+        static void LimitRateHistory(AudioHost& host, std::size_t segments)
+        { host._playbackRateHistory.Prepare(segments); }
+
 		static int InvokeCallback(AudioHost& host, float* output, float* input,
 			unsigned int frames) noexcept
 		{
@@ -1758,6 +1900,8 @@ namespace audio
 			auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(
 				scene.SnapshotStations());
 			auto& host = *scene._audioEngine;
+			host.CloseCallbackAdmission();
+			ASSERT_TRUE(host.CallbackAdmissionIsQuiescent());
 			Prepare(host, std::move(stations), params);
 			host._tickCallback = [&scene, &tickCallbackCalled](Time streamTime,
 				unsigned int numSamps, const std::optional<io::UserConfig>& cfg,
@@ -1766,7 +1910,10 @@ namespace audio
 				tickCallbackCalled = true;
 				scene.OnTick(streamTime, numSamps, cfg, streamParams);
 			};
+			ASSERT_TRUE(host.ReopenCallbackAdmission());
 		}
+		static std::unique_lock<std::mutex> ExcludeSceneJob(engine::Scene& scene)
+		{ return std::unique_lock(scene._operation.LifecycleMutex()); }
 
 		static int InvokeSceneCallback(engine::Scene& scene, float* output,
 			unsigned int frames) noexcept
@@ -1790,7 +1937,7 @@ namespace audio
 TEST(AudioHostInputMeter, EightChannelInterleavedCaptureReportsPhysicalInputPeaks)
 {
 	audio::AudioHost host(io::UserConfig{});
-	const audio::AudioStreamParams params{ "Focusrite USB ASIO", 44100u, 2u, 64u, 0u, 0u, 8u, 8u };
+	const audio::AudioStreamParams params{ "Primary ASIO device", 44100u, 2u, 64u, 0u, 0u, 8u, 8u };
 	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
 	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
 	std::array<float, 64u * 8u> input{};
@@ -1893,6 +2040,50 @@ thread_local bool AudioCallbackAllocationProbe::Scope::ArmedForThread = false;
 thread_local AudioCallbackAllocationProbe::Counts AudioCallbackAllocationProbe::Scope::CountsForThread{};
 std::atomic<_CRT_ALLOC_HOOK> AudioCallbackAllocationProbe::Scope::PreviousHook{ nullptr };
 
+class MidiAdoptionFixedSink final : public midi::IMidiSink
+{
+public:
+	void OnEvent(const midi::MidiEvent& event) noexcept override { (void)TryOnEvent(event); }
+	bool TryOnEvent(const midi::MidiEvent& event) noexcept override
+	{
+		if (RejectRelease && event.IsNoteOff()) return false;
+		if (Count < Events.size()) Events[Count++] = event;
+		return true;
+	}
+	std::array<midi::MidiEvent, 64> Events{};
+	std::size_t Count = 0u;
+	bool RejectRelease = false;
+};
+
+TEST(AudioCallbackRealtime, OrdinaryMidiAdoptionAndRejectedSelectiveRetryDoNotAllocateReallocateOrFree)
+{
+	auto loop = std::make_unique<midi::MidiLoop>();
+	const std::array source{midi::MidiEvent::MakeNoteOn(10u, 0u, 60u, 100u), midi::MidiEvent::MakeNoteOn(10u, 0u, 64u, 90u),
+		midi::MidiEvent::MakeNoteOff(80u, 0u, 60u), midi::MidiEvent::MakeNoteOff(90u, 0u, 64u)};
+	loop->ReplaceRecordedEvents(source.data(), source.size(), 100u);
+	MidiAdoptionFixedSink sink; loop->ReadBlock(0u, 31u, sink); sink.Count = 0u;
+	auto edit = std::make_unique<midi::MidiLoop::EditState>(); ASSERT_TRUE(loop->SnapshotForEdit(*edit));
+	edit->Events[2].sampleOffset = 25u;
+	ASSERT_TRUE(loop->PublishEdit(*edit)); sink.RejectRelease = true;
+	AudioCallbackAllocationProbe::Counts adoption, retry;
+	{
+		AudioCallbackAllocationProbe::Scope measured;
+		loop->ReadBlock(31u, 1u, sink);
+		adoption = measured.GetCounts();
+	}
+	sink.RejectRelease = false;
+	{
+		AudioCallbackAllocationProbe::Scope measured;
+		loop->ReadBlock(32u, 1u, sink);
+		retry = measured.GetCounts();
+	}
+	EXPECT_EQ(0u, adoption.Allocations); EXPECT_EQ(0u, adoption.Reallocations); EXPECT_EQ(0u, adoption.Frees);
+	EXPECT_EQ(0u, retry.Allocations); EXPECT_EQ(0u, retry.Reallocations); EXPECT_EQ(0u, retry.Frees);
+	ASSERT_EQ(1u, sink.Count); EXPECT_TRUE(sink.Events[0].IsNoteOff()); EXPECT_EQ(60u, sink.Events[0].data1);
+	RecordProperty("MidiLoopBytes", std::to_string(sizeof(midi::MidiLoop)));
+	RecordProperty("MidiEditStateBytes", std::to_string(sizeof(midi::MidiLoop::EditState)));
+}
+
 TEST(AudioCallbackRealtime, PreparedCallbackDoesNotAllocateOrFree)
 {
 	io::UserConfig config{};
@@ -1943,6 +2134,281 @@ TEST(AudioCallbackRealtime, PreparedCallbackDoesNotAllocateOrFree)
 	EXPECT_EQ(0u, counts.Frees);
 }
 
+TEST(AudioCallbackRealtime, PlaybackRateTransitionAdvancesPhysicalClockAndSourceOnceWithoutHeap)
+{
+    io::UserConfig config;
+    audio::AudioHost host(config);
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto station = MakeStation(1u);
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    std::array<float, 128u> output{};
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u));
+    ninjam::NinjamTimingCoordinator coordinator;
+    const auto edit = coordinator.SetLocalPlaybackRate(0.5);
+    ASSERT_TRUE(edit.DesiredTransport);
+    host.PublishDesiredTiming(*edit.DesiredTransport);
+    audio::PlaybackRate expected;
+    ASSERT_TRUE(expected.Configure(48000u));
+    ASSERT_TRUE(expected.SetTarget(0.5, edit.DesiredTransport->PlaybackRateRevision));
+    double sourceAdvance = 128.0;
+    for (unsigned int blockIndex = 0u; blockIndex < 8u; ++blockIndex)
+    {
+        const auto block = expected.DescribeBlock(128u);
+        sourceAdvance += block.Advance(128u);
+        ASSERT_TRUE(expected.Commit(block));
+    }
+    AudioCallbackAllocationProbe::Counts counts;
+    int result = 0;
+    {
+        AudioCallbackAllocationProbe::Scope probe;
+        for (unsigned int blockIndex = 0u; blockIndex < 8u; ++blockIndex)
+            result |= audio::AudioHostRealtimeTestAccess::InvokeCallback(host,
+                blockIndex % 2u ? nullptr : output.data(), nullptr, 128u);
+        counts = probe.GetCounts();
+    }
+    EXPECT_EQ(0, result);
+    EXPECT_EQ(9u * 128u, clock->SceneSamplePos());
+    EXPECT_EQ(clock->SceneSamplePos(), host.GetAudioSampleCounter());
+    EXPECT_NEAR(sourceAdvance, static_cast<double>(clock->AbsoluteSamplePos()) + clock->MusicalFractionAtAudioBoundary(), 1e-9);
+    const auto receipt = host.ObservePlaybackRate();
+    ASSERT_TRUE(receipt);
+    EXPECT_DOUBLE_EQ(expected.Current(), receipt->Applied);
+    EXPECT_EQ(168000u, receipt->MasterLength);
+    EXPECT_EQ(24000u, receipt->Grain);
+    EXPECT_EQ(7u, receipt->FullBpi);
+    EXPECT_DOUBLE_EQ(120.0 * expected.Current(), receipt->Tempo);
+    EXPECT_FALSE(receipt->Following);
+    EXPECT_EQ(0u, counts.Allocations);
+    EXPECT_EQ(0u, counts.Reallocations);
+    EXPECT_EQ(0u, counts.Frees);
+}
+
+TEST(AudioCallbackRealtime, FullRateHistoryDefersLatestControlAndContinuesAcceptedRamp)
+{
+    audio::AudioHost host(io::UserConfig{});
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    audio::AudioHostRealtimeTestAccess::LimitRateHistory(host, 2u);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ninjam::NinjamTimingCoordinator coordinator;
+    const auto slow = coordinator.SetLocalPlaybackRate(0.5);
+    ASSERT_TRUE(slow.DesiredTransport);
+    host.PublishDesiredTiming(*slow.DesiredTransport);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto before = host.ObservePlaybackRate();
+    ASSERT_TRUE(before);
+    const auto fast = coordinator.SetLocalPlaybackRate(2.0);
+    ASSERT_TRUE(fast.DesiredTransport);
+    host.PublishDesiredTiming(*fast.DesiredTransport);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto pending = host.ObservePlaybackRate();
+    ASSERT_TRUE(pending);
+    EXPECT_TRUE(pending->ControlPending);
+    EXPECT_FALSE(pending->Settled());
+    EXPECT_DOUBLE_EQ(2.0, pending->Target);
+    EXPECT_LT(pending->Applied, before->Applied);
+    EXPECT_EQ(before->Revision, pending->Revision);
+    for (unsigned int block = 0; block < 6u; ++block)
+        ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto accepted = host.ObservePlaybackRate();
+    ASSERT_TRUE(accepted);
+    EXPECT_FALSE(accepted->ControlPending);
+    EXPECT_EQ(fast.DesiredTransport->PlaybackRateRevision, accepted->Revision);
+    EXPECT_GT(accepted->Applied, pending->Applied);
+    EXPECT_EQ(1152u, clock->SceneSamplePos());
+}
+
+TEST(AudioCallbackRealtime, UnsupportedRemoteRateIsRejectedBeforeReplacingLocalGeometry)
+{
+    audio::AudioHost host(io::UserConfig{});
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto station = MakeStation(1u);
+    station->AddTake(MakeTake());
+    station->CommitChanges();
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    ninjam::NinjamDesiredTransportState desired;
+    desired.Version = desired.Generation = desired.SessionEpoch = desired.FollowRevision = 1u;
+    desired.Intent = ninjam::NinjamDesiredTimingIntent::Replacement;
+    desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::BlockSync;
+    desired.HasRemoteTiming = desired.HasRemotePhaseDeviceSample = true;
+    desired.SourceMasterIntervalLengthSamps = 64000u;
+    desired.RemoteMasterIntervalLengthSamps = 100u;
+    desired.RemoteGridStepSamps = 100u;
+    desired.BeatsPerInterval = 1u;
+    desired.TempoBpm = 120.0f;
+    host.PublishDesiredTiming(desired);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    EXPECT_EQ(168000u, clock->SeedSourceLength());
+    EXPECT_EQ(7u, clock->MasterBeatsPerInterval());
+    const auto receipt = host.ObservePlaybackRate();
+    ASSERT_TRUE(receipt);
+    EXPECT_TRUE(receipt->UnsupportedRemoteRate);
+    EXPECT_FALSE(receipt->Following);
+    EXPECT_EQ(128u, clock->SceneSamplePos());
+
+    desired.Version = desired.Generation = 2u;
+    desired.SourceMasterIntervalLengthSamps = 100u;
+    desired.RemoteMasterIntervalLengthSamps = 64000u;
+    host.PublishDesiredTiming(desired);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto slowReceipt = host.ObservePlaybackRate();
+    ASSERT_TRUE(slowReceipt);
+    EXPECT_TRUE(slowReceipt->UnsupportedRemoteRate);
+    EXPECT_FALSE(slowReceipt->Following);
+    EXPECT_EQ(168000u, clock->SeedSourceLength());
+    EXPECT_EQ(256u, clock->SceneSamplePos());
+}
+
+TEST(AudioCallbackRealtime, ManualDetachRestoresWholeLocalMasterReference)
+{
+    audio::AudioHost host(io::UserConfig{});
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    clock->SetMasterRecordingPlaybackRate(0.5);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    ninjam::NinjamDesiredTransportState follow;
+    follow.Version = follow.Generation = follow.SessionEpoch = follow.FollowRevision = 1u;
+    follow.Intent = ninjam::NinjamDesiredTimingIntent::Replacement;
+    follow.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::BlockSync;
+    follow.HasRemoteTiming = follow.HasRemotePhaseDeviceSample = true;
+    follow.SourceMasterIntervalLengthSamps = 168000u;
+    follow.RemoteMasterIntervalLengthSamps = 336000u;
+    follow.RemoteGridStepSamps = 48000u;
+    follow.BeatsPerInterval = 7u;
+    follow.TempoBpm = 60.0f;
+    follow.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
+    host.PublishDesiredTiming(follow);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ASSERT_EQ(336000u, clock->SeedSourceLength());
+    auto local = follow;
+    local.Version = 2u;
+    local.FollowRevision = 2u;
+    local.Intent = ninjam::NinjamDesiredTimingIntent::NoSync;
+    local.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+    local.HasRemoteTiming = false;
+    local.PlaybackRate = 0.5;
+    local.PlaybackRateRevision = 1u;
+    host.PublishDesiredTiming(local);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    EXPECT_EQ(168000u, clock->SeedSourceLength());
+    EXPECT_EQ(24000u, clock->QuantiseSamps());
+    EXPECT_EQ(7u, clock->MasterBeatsPerInterval());
+    EXPECT_DOUBLE_EQ(0.5, clock->MasterRecordingPlaybackRate());
+    EXPECT_EQ(256u, clock->SceneSamplePos());
+    ASSERT_TRUE(host.ObservePlaybackRate());
+    EXPECT_FALSE(host.ObservePlaybackRate()->Following);
+
+    follow.Version = follow.Generation = follow.FollowRevision = 3u;
+    host.PublishDesiredTiming(follow);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ASSERT_TRUE(host.ObservePlaybackRate()->Following);
+    // Session reset is quiescent and must discard the remembered pre-follow master.
+    clock->Clear();
+    host.InitialisePlaybackRate(1.0);
+    local.Version = local.FollowRevision = 4u;
+    local.PlaybackRate = 1.0;
+    local.PlaybackRateRevision = 2u;
+    host.PublishDesiredTiming(local);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    EXPECT_EQ(0u, clock->SeedSourceLength());
+    ASSERT_TRUE(host.ObservePlaybackRate());
+    EXPECT_DOUBLE_EQ(1.0, host.ObservePlaybackRate()->Applied);
+    EXPECT_FALSE(host.ObservePlaybackRate()->Following);
+}
+
+TEST(AudioCallbackRealtime, PinnedHistoryKeepsRemoteProjectionUntilWholeDetachCanBeAdmitted)
+{
+    audio::AudioHost host(io::UserConfig{});
+    const audio::AudioStreamParams params{"rate-test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+    auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>();
+    audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+    auto clock = std::make_shared<utils::Timer>();
+    clock->SetQuantisation(24000u, utils::Timer::QUANTISE_MULTIPLE);
+    clock->SetSeedSourceLength(168000u);
+    clock->SetMasterBeatsPerInterval(7u);
+    audio::AudioHostRealtimeTestAccess::PrepareRateClock(host, clock, params.SampleRate);
+    audio::AudioHostRealtimeTestAccess::LimitRateHistory(host, 2u);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ninjam::NinjamDesiredTransportState follow;
+    follow.Version = follow.Generation = follow.SessionEpoch = follow.FollowRevision = 1u;
+    follow.Intent = ninjam::NinjamDesiredTimingIntent::Replacement;
+    follow.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::BlockSync;
+    follow.HasRemoteTiming = follow.HasRemotePhaseDeviceSample = true;
+    follow.SourceMasterIntervalLengthSamps = 168000u;
+    follow.RemoteMasterIntervalLengthSamps = 84000u;
+    follow.RemoteGridStepSamps = 12000u;
+    follow.BeatsPerInterval = 7u;
+    follow.TempoBpm = 240.0f;
+    follow.Quantisation = utils::Timer::QUANTISE_MULTIPLE;
+    host.PublishDesiredTiming(follow);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ASSERT_EQ(84000u, clock->SeedSourceLength());
+    auto phaseEdit = follow;
+    phaseEdit.Version = phaseEdit.Generation = 2u;
+    phaseEdit.Intent = ninjam::NinjamDesiredTimingIntent::PhaseDiscipline;
+    phaseEdit.RemotePhaseDeviceSample = 256u;
+    phaseEdit.RemoteMasterPhaseSamps = 10000u;
+    const auto phaseBefore = clock->SampOffset();
+    host.PublishDesiredTiming(phaseEdit);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    ASSERT_TRUE(host.ObservePlaybackRate());
+    EXPECT_TRUE(host.ObservePlaybackRate()->ControlPending);
+    EXPECT_EQ(phaseBefore + 128u, clock->SampOffset());
+    EXPECT_EQ(1u, host.ObservePlaybackRate()->AuthorityVersion);
+    auto local = follow;
+    local.Version = 3u;
+    local.FollowRevision = 2u;
+    local.Intent = ninjam::NinjamDesiredTimingIntent::NoSync;
+    local.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+    local.HasRemoteTiming = false;
+    local.PlaybackRate = 0.5;
+    local.PlaybackRateRevision = 1u;
+    host.PublishDesiredTiming(local);
+    ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto pending = host.ObservePlaybackRate();
+    ASSERT_TRUE(pending);
+    EXPECT_TRUE(pending->ControlPending);
+    EXPECT_FALSE(pending->Following);
+    EXPECT_DOUBLE_EQ(1.0, pending->Applied);
+    EXPECT_EQ(84000u, clock->SeedSourceLength());
+    const auto history = host.RateHistory().DescribeAt(256u);
+    ASSERT_TRUE(history);
+    EXPECT_EQ(84000u, history->RemoteIntervalLengthSamps);
+    host.PublishDesiredTiming(follow); // An in-flight older publication cannot resume authority.
+    for (unsigned int block = 0; block < 6u; ++block)
+        ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, nullptr, nullptr, 128u));
+    const auto accepted = host.ObservePlaybackRate();
+    ASSERT_TRUE(accepted);
+    EXPECT_FALSE(accepted->ControlPending);
+    EXPECT_FALSE(accepted->Following);
+    EXPECT_DOUBLE_EQ(0.5, accepted->Target);
+    EXPECT_LT(accepted->Applied, 1.0);
+    EXPECT_EQ(168000u, clock->SeedSourceLength());
+}
+
 TEST(AudioCallbackRealtime, AllocationProbeDetectsHeapAllocationAndFree)
 {
 	AudioCallbackAllocationProbe::Counts counts;
@@ -1956,6 +2422,199 @@ TEST(AudioCallbackRealtime, AllocationProbeDetectsHeapAllocationAndFree)
 
 	EXPECT_GE(counts.Allocations + counts.Reallocations, 1u);
 	EXPECT_GE(counts.Frees, 1u);
+}
+
+// The functional MIDI fake grows vectors; this measured-callback fake retains
+// only bounded events/counters and does no assertions or formatting in dispatch.
+class CallbackMidiFixedPlugin final : public vst::IVstPlugin
+{
+public:
+	bool PreInit(const std::wstring&) override { return true; }
+	bool Load(const std::wstring&, float, unsigned int, unsigned int channels, vst::HostedLayoutMode) override
+	{ _loaded = true; _channels = channels; return true; }
+	void Unload() override { _loaded = false; }
+	void ProcessBlock(float*, int32_t) noexcept override { _processed = true; }
+	void ProcessBlockStereo(float*, float*, int32_t) noexcept override { _processed = true; }
+	void ProcessBlockMulti(float* const*, int32_t, int32_t) noexcept override { _processed = true; ++ProcessCalls; }
+	void BeginMidiBlock(std::uint32_t, std::uint32_t) noexcept override { _processed = false; }
+	void SendMidiEvent(const midi::MidiEvent& event, bool realtime) noexcept override { (void)TrySendMidiEvent(event, realtime); }
+	bool TrySendMidiEvent(const midi::MidiEvent& event, bool) noexcept override
+	{
+		if (RejectSustainRelease && event.MessageType() == 0xb0u && event.data1 == 64u && event.data2 < 64u)
+		{ ++RejectedReleases; return false; }
+		if (_eventCount == _events.size()) { Overflow = true; return false; }
+		_events[_eventCount++] = event;
+		return true;
+	}
+	bool MidiBlockWasProcessed() const noexcept override { return _processed; }
+	void SetParameter(unsigned int, float) noexcept override {}
+	float GetParameter(unsigned int) const noexcept override { return 0.0f; }
+	bool OpenEditor(HWND) override { return false; }
+	void CloseEditor() override {}
+	utils::Size2d GetEditorSize() const noexcept override { return {}; }
+	bool IsLoaded() const noexcept override { return _loaded; }
+	const std::string& Name() const noexcept override { return _name; }
+	void SetBypassed(bool bypassed) noexcept override { _bypassed = bypassed; }
+	bool IsBypassed() const noexcept override { return _bypassed; }
+	vst::RenderRole Role() const noexcept override { return vst::RenderRole::Instrument; }
+	vst::MidiInputCapabilities MidiInput() const noexcept override { return {true, true, true}; }
+	unsigned int HostedChannelCount() const noexcept override { return _channels; }
+	std::size_t Count(std::uint8_t status, std::uint8_t data1, std::uint8_t data2) const
+	{
+		return std::count_if(_events.begin(), _events.begin() + _eventCount, [=](const auto& event) {
+			return event.status == status && event.data1 == data1 && event.data2 == data2;
+		});
+	}
+	bool HasNoteAt(std::uint8_t note, std::uint32_t sample) const
+	{
+		return std::any_of(_events.begin(), _events.begin() + _eventCount, [=](const auto& event) {
+			return event.IsNoteOn() && event.data1 == note && event.sampleOffset == sample;
+		});
+	}
+	bool RejectSustainRelease = false, Overflow = false;
+	unsigned int RejectedReleases = 0u, ProcessCalls = 0u;
+private:
+	std::array<midi::MidiEvent, 128u> _events{};
+	std::size_t _eventCount = 0u;
+	std::string _name = "fixed-midi";
+	unsigned int _channels = 0u;
+	bool _loaded = false, _bypassed = false, _processed = false;
+};
+
+TEST(AudioCallbackRealtime, OrdinaryMidiDeliveryQueueReconciliationAndDrainDoNotUseHeap)
+{
+	using midi::MidiEvent;
+	audio::AudioHost host(io::UserConfig{}); auto station = MakeStation(1u);
+	auto plugin = std::make_shared<CallbackMidiFixedPlugin>();
+	actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
+	job.VstPath = L"fixed-edit-queue.dll"; job.PreInitPlugin = plugin; if(!job.VstManaged) EXPECT_TRUE(station->StageVstJob(job)); station->OnAction(job); station->CommitChanges();
+	const audio::AudioStreamParams params{"test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+	std::array<float, 128u> output{};
+	ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u));
+	auto take = MakeTake(); take->Record({}, station->Name(), {0u}, {"source"}); take->Play(0u, 1000u, 0u);
+	auto loop = take->GetMidiLoops().at(0u);
+	const std::array source{MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u), MidiEvent::MakeNoteOff(80u, 0u, 60u, 23u)};
+	loop->ReplaceRecordedEvents(source.data(), source.size(), 1000u); station->AddTake(take); station->CommitChanges();
+	ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
+	auto measured = [&] {
+		AudioCallbackAllocationProbe::Counts counts; int result;
+		{
+			AudioCallbackAllocationProbe::Scope probe;
+			result = audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u);
+			counts = probe.GetCounts();
+		}
+		EXPECT_EQ(0, result); EXPECT_EQ(0u, counts.Allocations); EXPECT_EQ(0u, counts.Reallocations); EXPECT_EQ(0u, counts.Frees);
+	};
+	measured(); // 128: source has accepted ON/OFF, both still waiting in the device queue.
+	EXPECT_EQ(0u, plugin->Count(0x90u, 60u, 100u));
+	auto edit = std::make_unique<midi::MidiLoop::EditState>(); ASSERT_TRUE(loop->SnapshotForEdit(*edit));
+	edit->Events[1].sampleOffset = 180u; ASSERT_TRUE(loop->PublishEdit(*edit));
+	measured(); // 256: binary token lookup and queued release endpoint update.
+	measured(); // 384: queued attack reaches the fixed plugin; old release at464 is gone.
+	EXPECT_EQ(1u, plugin->Count(0x90u, 60u, 100u)); EXPECT_EQ(0u, plugin->Count(0x80u, 60u, 23u));
+	measured(); // 512: extended endpoint564 releases once, despite source Held having cleared at80.
+	EXPECT_EQ(1u, plugin->Count(0x80u, 60u, 23u)); EXPECT_FALSE(plugin->Overflow);
+}
+
+TEST(AudioCallbackRealtime, RetainedStationGroupApplicationAndHeldCleanupDoNotUseHeap)
+{
+	using midi::MidiEvent;
+	audio::AudioHost host(io::UserConfig{}); auto station=MakeStation(1u); auto plugin=std::make_shared<CallbackMidiFixedPlugin>();
+	actions::JobAction job; job.JobActionType=actions::JobAction::JOB_LOADVST; job.VstPath=L"fixed-parent-mute.dll"; job.PreInitPlugin=plugin; if(!job.VstManaged) EXPECT_TRUE(station->StageVstJob(job)); station->OnAction(job); station->CommitChanges();
+	const audio::AudioStreamParams params{"test",48000u,2u,128u,0u,0u,0u,1u};
+	auto stations=std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station}); audio::AudioHostRealtimeTestAccess::Prepare(host,stations,params); std::array<float,128u> output{};
+	ASSERT_EQ(0,audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u));
+	auto take=MakeTake(); take->Record({},station->Name(),{0u},{"source"}); take->Play(0u,1000u,0u);
+	const std::array source{MidiEvent{0u,0xb0u,64u,127u},MidiEvent::MakeNoteOn(10u,0u,60u,100u),MidiEvent::MakeNoteOff(900u,0u,60u),MidiEvent{950u,0xb0u,64u,0u}};
+	take->GetMidiLoops().front()->ReplaceRecordedEvents(source.data(),source.size(),1000u); station->AddTake(take); station->CommitChanges();
+	ASSERT_EQ(0,audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u)); ASSERT_EQ(1u,plugin->Count(0x90u,60u,100u));
+	auto snapshot=engine::PerformanceGroupService::CaptureMuteConfiguration({station});
+	for (auto& state : snapshot.Targets) if (state.Target.Kind==engine::GroupTargetKind::Station) state.Muted=true;
+	auto application=engine::PerformanceGroupService::PrepareMuteApplication(snapshot,{station},1u); host.PublishGroupMuteApplication(application);
+	AudioCallbackAllocationProbe::Counts counts; int result;
+	{
+		AudioCallbackAllocationProbe::Scope probe; result=audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u); counts=probe.GetCounts();
+	}
+	EXPECT_EQ(0,result); EXPECT_EQ(0u,counts.Allocations); EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
+	EXPECT_EQ(1u,host.GroupMuteReceipt()); EXPECT_TRUE(station->RetainedMuted()); EXPECT_FALSE(take->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED);
+	EXPECT_EQ(1u,plugin->Count(0x80u,60u,0u)); EXPECT_EQ(1u,plugin->Count(0xb0u,64u,0u)); EXPECT_FALSE(plugin->Overflow);
+}
+
+TEST(AudioCallbackRealtime, MidiPublicationCableCancellationAndRetirementRetryDoNotUseHeap)
+{
+	using midi::MidiEvent;
+	audio::AudioHost host(io::UserConfig{});
+	auto station = MakeStation(1u);
+	const auto addPlugin = [&](const wchar_t* path) {
+		auto plugin = std::make_shared<CallbackMidiFixedPlugin>();
+		actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
+		job.VstPath = path; job.PreInitPlugin = plugin;
+		if(!job.VstManaged) EXPECT_TRUE(station->StageVstJob(job)); station->OnAction(job); station->CommitChanges();
+		return plugin;
+	};
+	auto removed = addPlugin(L"fixed-removed.dll"), survivor = addPlugin(L"fixed-survivor.dll");
+	station->SetAllowedMidiChannels({1, 2});
+	const audio::AudioStreamParams params{"test", 48000u, 2u, 128u, 0u, 0u, 0u, 1u};
+	auto stations = std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+	audio::AudioHostRealtimeTestAccess::Prepare(host, stations, params);
+	std::array<float, 128u> output{};
+	ASSERT_EQ(0, audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u)); // Warm host and plugins.
+	ASSERT_GT(removed->ProcessCalls, 0u); ASSERT_GT(survivor->ProcessCalls, 0u);
+
+	// All fixture storage, recorded material, topology publication and route edits
+	// are prepared outside the measured full AudioHost callback invocations.
+	auto take = MakeTake();
+	take->Record({}, station->Name(), {0u}, {"source"}); take->Play(0u, 1000u, 0u);
+	const std::array events{
+		MidiEvent{0u, 0xb0u, 64u, 127u}, MidiEvent::MakeNoteOn(0u, 0u, 60u, 100u),
+		MidiEvent{0u, 0xb1u, 64u, 127u}, MidiEvent::MakeNoteOn(0u, 1u, 62u, 100u),
+		MidiEvent{128u, 0xb0u, 64u, 0u}, MidiEvent::MakeNoteOff(512u, 0u, 60u),
+		MidiEvent{512u, 0xb1u, 64u, 0u}, MidiEvent::MakeNoteOff(512u, 1u, 62u)};
+	take->GetMidiLoops().at(0u)->ReplaceRecordedEvents(events.data(), events.size(), 1000u);
+	station->AddTake(take); station->CommitChanges();
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{removed->StateId(), survivor->StateId()}}, station->RackRevision()));
+	ASSERT_TRUE(station->ConfigureRecordedMidiCompensation(256u));
+	unsigned int measuredBlocks = 0u;
+	const auto measuredCallback = [&] {
+		AudioCallbackAllocationProbe::Counts counts;
+		int result = -1;
+		{
+			AudioCallbackAllocationProbe::Scope probe;
+			result = audio::AudioHostRealtimeTestAccess::InvokeCallback(host, output.data(), nullptr, 128u);
+			counts = probe.GetCounts();
+		}
+		++measuredBlocks;
+		EXPECT_EQ(0, result);
+		EXPECT_EQ(0u, counts.Allocations); EXPECT_EQ(0u, counts.Reallocations); EXPECT_EQ(0u, counts.Frees);
+	};
+	measuredCallback(); // 128: newly published MIDI attacks wait for compensation.
+	EXPECT_EQ(0u, removed->Count(0x90u, 60u, 100u)); EXPECT_EQ(0u, survivor->Count(0x90u, 60u, 100u));
+	ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{survivor->StateId()}}, station->RackRevision()));
+	measuredCallback(); // 256: cancel only the disconnected channel's future attacks.
+	measuredCallback(); // 384: surviving delayed attacks reach both retained routes.
+	EXPECT_EQ(0u, removed->Count(0x90u, 60u, 100u)); EXPECT_EQ(0u, removed->Count(0xb0u, 64u, 127u));
+	EXPECT_TRUE(survivor->HasNoteAt(60u, 384u)); EXPECT_TRUE(removed->HasNoteAt(62u, 384u));
+	removed->RejectSustainRelease = true;
+	actions::JobAction unload; unload.JobActionType = actions::JobAction::JOB_UNLOADVST; unload.VstIdentity = removed->StateId();
+	ASSERT_TRUE(station->StageVstJob(unload)); station->OnAction(unload); station->CommitChanges();
+	ASSERT_FALSE(station->OwnsPlugin(removed.get())); ASSERT_TRUE(station->OwnsPlugin(survivor.get()));
+	const auto activeCalls = removed->ProcessCalls;
+	measuredCallback(); // 512: retired processor runs release recovery, rejecting pedal-up.
+	EXPECT_GT(removed->RejectedReleases, 0u); EXPECT_EQ(activeCalls + 1u, removed->ProcessCalls);
+	EXPECT_EQ(0u, removed->Count(0xb1u, 64u, 0u));
+	removed->RejectSustainRelease = false;
+	measuredCallback(); // 640: a later block retries and completes retirement.
+	EXPECT_EQ(1u, removed->Count(0xb1u, 64u, 0u));
+	const auto retiredCalls = removed->ProcessCalls;
+	station->ReleaseRetiredAudioStates(); // Structural reclamation/publication stays off callback.
+	measuredCallback(); // 768: released retired processor is no longer rendered.
+	measuredCallback(); // 896: surviving channel's original release still arrives.
+	EXPECT_EQ(retiredCalls, removed->ProcessCalls); EXPECT_EQ(1u, survivor->Count(0xb1u, 64u, 0u));
+	EXPECT_EQ(1u, survivor->Count(0x81u, 62u, 0u));
+	EXPECT_FALSE(removed->Overflow); EXPECT_FALSE(survivor->Overflow);
+	EXPECT_EQ(7u, measuredBlocks); EXPECT_EQ(1024u, host.GetAudioSampleCounter());
 }
 
 TEST(AudioCallbackRealtime, PreparedCallbackWithSceneTickDoesNotAllocate)
@@ -1986,6 +2645,9 @@ TEST(AudioCallbackRealtime, PreparedCallbackWithSceneTickDoesNotAllocate)
 	const audio::AudioStreamParams params{
 		std::string(192u, 'd'), 48000u, 2u, 128u, 0u, 0u, 1u, 1u };
 	bool tickCallbackCalled = false;
+	// The real job can close admission while acknowledging freshly prepared
+	// station state. Serialize this synthetic lifecycle and callback with it.
+	auto excludeJob = audio::AudioHostRealtimeTestAccess::ExcludeSceneJob(*scene);
 	audio::AudioHostRealtimeTestAccess::PrepareScene(*scene, params, tickCallbackCalled);
 	std::array<float, 128u> output{};
 	output.fill(1.0f);
@@ -2007,6 +2669,7 @@ TEST(AudioCallbackRealtime, PreparedCallbackWithSceneTickDoesNotAllocate)
 	EXPECT_EQ(0u, counts.Allocations);
 	EXPECT_EQ(0u, counts.Reallocations);
 	EXPECT_EQ(0u, counts.Frees);
+	excludeJob.unlock();
 	scene->Shutdown();
 }
 
@@ -2049,4 +2712,251 @@ TEST(AudioCallbackRealtime, MembershipPublicationDuringPlaybackDoesNotAllocateOr
  host.SetStations(candidate->Stations, candidate->TopologyRevision);
  host.CollectRetiredSnapshots();
 }
+TEST(AudioCallbackRealtime, ActiveAudioShiftSeekDoesNotAllocateOrFree)
+{
+    io::UserConfig config{};
+    audio::AudioHost host(config);
+    const audio::AudioStreamParams params{"shift-test",48000u,2u,128u,0u,0u,0u,1u};
+    auto station = MakeStation(1u);
+    auto take = MakeTake();
+    station->AddTake(take); take->Record({0u},"shift-allocation"); station->CommitChanges();
+    ASSERT_EQ(1u,take->GetLoops().size());
+    const auto loop = take->GetLoops().front();
+    constexpr auto length = 4096ul;
+    std::vector<float> recorded(constants::MaxLoopFadeSamps + length,0.25f);
+    AudioWriteRequest request;
+    request.samples=recorded.data(); request.numSamps=static_cast<unsigned int>(recorded.size());
+    request.stride=1u; request.fadeCurrent=0.0f; request.fadeNew=1.0f; request.source=Audible::AUDIOSOURCE_ADC;
+    loop->OnBlockWrite(request,0); loop->EndWrite(request.numSamps,true);
+    take->Play(constants::MaxLoopFadeSamps,length,0u);
+    station->CommitChanges();
+    auto stations=std::make_shared<const std::vector<std::shared_ptr<Station>>>(std::vector{station});
+    audio::AudioHostRealtimeTestAccess::Prepare(host,stations,params);
+    std::array<float,128> output{};
+    audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u);
+    loop->SetPlaybackOffsetSamps(1024);
+    audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u); // Prepare active ramp.
+    AudioCallbackAllocationProbe::Counts counts;
+    {
+        AudioCallbackAllocationProbe::Scope probe;
+        for (auto block=0u; block<8u; ++block)
+            audio::AudioHostRealtimeTestAccess::InvokeCallback(host,output.data(),nullptr,128u);
+        counts=probe.GetCounts();
+    }
+    EXPECT_GT(loop->AppliedPlaybackOffsetSamps(),0.0);
+    EXPECT_LT(loop->AppliedPlaybackOffsetSamps(),1024.0);
+    EXPECT_EQ(1024,loop->PlaybackOffsetSamps());
+    EXPECT_EQ(0u,counts.Allocations); EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
+    EXPECT_TRUE(std::any_of(output.begin(),output.end(),[](float sample){ return sample!=0.0f; }));
+}
 #endif
+
+TEST(AudioFlow, ExplicitEarlierSourceCreatesItsAudioPlusNewPunchWithoutChangingLaterUnequalTake)
+{
+	for (const int delay : {-97, 0, 97})
+	{
+		SCOPED_TRACE(delay);
+		const auto original = AudioFlowTemporaryPlaybackRegression::CapturePunch(false, delay, true);
+		const auto selected = AudioFlowTemporaryPlaybackRegression::CapturePunch(false, delay, true, true);
+		ASSERT_EQ(2048u, selected.Exported.size());
+		EXPECT_TRUE(selected.ExplicitSourceAccepted);
+		EXPECT_TRUE(selected.OtherMaterialUnchanged);
+		EXPECT_EQ(original.Exported, selected.Exported);
+		EXPECT_GT(*std::max_element(selected.Exported.begin(), selected.Exported.end()), 0.25f);
+		EXPECT_EQ(selected.Exported.end(), std::find(selected.Exported.begin(), selected.Exported.end(), 0.875f));
+		EXPECT_TRUE(selected.DelayedPunchOpened);
+		EXPECT_TRUE(selected.DelayedPunchClosed);
+	}
+}
+
+TEST(AudioFlow, ExplicitEarlierMixedStereoSourceCompletesAudioAndMidiPlusNewPunch)
+{
+	const auto selected = AudioFlowTemporaryPlaybackRegression::CapturePunch(false, 0, true, true, true);
+	ASSERT_EQ(2048u, selected.Exported.size());
+	ASSERT_EQ(2048u, selected.SecondChannel.size());
+	EXPECT_TRUE(selected.ExplicitSourceAccepted);
+	EXPECT_TRUE(selected.OtherMaterialUnchanged);
+	EXPECT_TRUE(selected.SourceAndNewMidi);
+	EXPECT_TRUE(selected.LaterMidiUnchanged);
+	EXPECT_GT(*std::max_element(selected.Exported.begin(), selected.Exported.end()), 0.25f);
+	EXPECT_GT(*std::max_element(selected.SecondChannel.begin(), selected.SecondChannel.end()), 0.0f);
+	EXPECT_TRUE(selected.RightCaptureComplete);
+	EXPECT_EQ(1u, selected.CompletionEdges.size());
+	EXPECT_EQ(selected.Exported.end(), std::find(selected.Exported.begin(), selected.Exported.end(), 0.875f));
+	EXPECT_TRUE(selected.DelayedPunchOpened); EXPECT_TRUE(selected.DelayedPunchClosed);
+}
+
+#ifdef _DEBUG
+TEST(AudioCallbackRealtime, LocalMasterActivationAndCancellationDoNotAllocateReallocateOrFree)
+{
+    auto station=MakeStation(1u); auto take=MakeTake(); station->AddTake(take);
+    take->Record({},"master allocation",{0u},{"Keys"}); take->EndMultiWrite(48000u,true,Audible::AUDIOSOURCE_ADC);
+    take->Play(0u,48000u,0u); take->BeginCaptureAudioBoundary(0u,0u,0u); station->CommitChanges();
+    const std::vector<std::shared_ptr<Station>> stations{station};
+    auto clock=std::make_shared<utils::Timer>(); clock->SetQuantisation(6000u,utils::Timer::QUANTISE_POWER); clock->SetSeedSourceLength(24000u);
+    audio::AudioHost host(io::UserConfig{});
+    const auto version=host.PublishLocalMasterTiming(12000u,48000u,utils::Timer::QUANTISE_POWER,take.get(),nullptr);
+    audio::AudioHostRealtimeTestAccess::ApplyMaster(host,stations,clock.get()); ASSERT_TRUE(host.LastPreparedLocalMasterTiming());
+    ASSERT_TRUE(take->PrepareLocalMasterQuantisation(12000u,0u)); host.CommitLocalMasterTiming(version);
+    AudioCallbackAllocationProbe::Counts counts;
+    {
+        AudioCallbackAllocationProbe::Scope probe;
+        audio::AudioHostRealtimeTestAccess::ApplyMaster(host,stations,clock.get()); counts=probe.GetCounts();
+    }
+    EXPECT_EQ(version,host.LastActivatedLocalMasterTimingVersion()); EXPECT_EQ(48000ul,clock->SeedSourceLength());
+    EXPECT_EQ(0u,counts.Allocations); EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
+    const auto cancelled=host.PublishLocalMasterTiming(6000u,24000u,utils::Timer::QUANTISE_POWER,take.get(),nullptr);
+    ASSERT_TRUE(host.CancelLocalMasterTiming(cancelled));
+    {
+        AudioCallbackAllocationProbe::Scope probe;
+        audio::AudioHostRealtimeTestAccess::ApplyMaster(host,stations,clock.get()); counts=probe.GetCounts();
+    }
+    EXPECT_EQ(version,host.LastActivatedLocalMasterTimingVersion()); EXPECT_EQ(0u,counts.Allocations);
+    EXPECT_EQ(0u,counts.Reallocations); EXPECT_EQ(0u,counts.Frees);
+}
+#endif
+
+class AudioFlowRateGainPlugin final : public vst::IVstPlugin
+{
+public:
+    bool PreInit(const std::wstring&) override { return true; }
+    bool Load(const std::wstring&, float, unsigned int, unsigned int, vst::HostedLayoutMode) override { return true; }
+    void Unload() override {}
+    void ProcessBlock(float* samples, int32_t count) noexcept override
+    {
+        Count = static_cast<unsigned int>(count);
+        for (int32_t i = 0; i < count; ++i) { Input[i] = samples[i]; samples[i] *= 2.0f; }
+    }
+    void ProcessBlockStereo(float* left, float* right, int32_t count) noexcept override
+    { ProcessBlock(left, count); for (int32_t i = 0; i < count; ++i) right[i] *= 2.0f; }
+    void ProcessBlockMulti(float* const* channels, int32_t count, int32_t frames) noexcept override
+    { for (int32_t i = 0; i < count; ++i) ProcessBlock(channels[i], frames); }
+    void BeginMidiBlock(std::uint32_t, std::uint32_t) noexcept override {}
+    void SendMidiEvent(const midi::MidiEvent&, bool) noexcept override {}
+    void SetParameter(unsigned int, float) noexcept override {}
+    float GetParameter(unsigned int) const noexcept override { return 0.0f; }
+    bool OpenEditor(HWND) override { return false; }
+    void CloseEditor() override {}
+    utils::Size2d GetEditorSize() const noexcept override { return {}; }
+    bool IsLoaded() const noexcept override { return true; }
+    const std::string& Name() const noexcept override { return _name; }
+    void SetBypassed(bool bypassed) noexcept override { _bypassed = bypassed; }
+    bool IsBypassed() const noexcept override { return _bypassed; }
+    vst::RenderRole Role() const noexcept override { return vst::RenderRole::Effect; }
+    std::array<float, constants::MaxBlockSize> Input{};
+    unsigned int Count = 0u;
+private:
+    std::string _name = "rate-gain";
+    bool _bypassed = false;
+};
+
+TEST(AudioFlow, MappedOverdubPluginInputUsesCaptureHistoryWithLatencyAndChildShift)
+{
+    constexpr auto trigger = 256u, age = 37u, outputLatency = 23u, length = 4096u;
+    for (const auto speed : {0.5, 1.0, 1.5, 0.0})
+    {
+        std::vector<float> partitionReference;
+        for (const auto blockSize : {32u, 64u})
+        {
+            SCOPED_TRACE(speed);
+            SCOPED_TRACE(blockSize);
+            auto source = MakeTake(); source->ResetPlaybackRateHistoryForDevice(1000u);
+            source->Record({0u}, "source"); source->CommitChanges();
+            auto leaf = source->GetLoops().front();
+            std::vector<float> body(constants::MaxLoopFadeSamps + length, 0.0f);
+            for (unsigned int i = 0u; i < length; ++i)
+                body[constants::MaxLoopFadeSamps + i] = static_cast<float>(0.0001 * i);
+            WriteLoopSamples(leaf, body);
+            source->Play(constants::MaxLoopFadeSamps, length, 0u); source->CommitChanges();
+            source->RestoreRecordingPlaybackRate(1.0);
+            leaf->SetPlaybackOffsetSamps(11);
+            auto plugin = std::make_shared<AudioFlowRateGainPlugin>();
+            actions::JobAction job; job.JobActionType = actions::JobAction::JOB_LOADVST;
+            job.VstPath = L"rate-gain.dll"; job.PreInitPlugin = plugin;
+            leaf->OnAction(job);
+            leaf->CommitChanges();
+            auto target = MakeTake(); target->ResetPlaybackRateHistoryForDevice(1000u);
+            audio::PlaybackRateHistory history(64u);
+            audio::PlaybackRateBlock rate{speed ? speed : 0.7, speed ? speed : 1.9, 480.0, blockSize, 1u};
+            auto reference = rate.Cursor();
+            std::array<double, 1025u> positions{};
+            for (unsigned int i = 0u; i < 1024u; ++i) positions[i + 1u] = positions[i] + reference.Next();
+            for (unsigned int start = 0u; start < 768u; start += blockSize)
+            {
+                ASSERT_TRUE(history.Append(start, rate));
+                if (start == 320u) leaf->SetPlaybackOffsetSamps(31);
+                source->BeginPlaybackRateBlock(rate, start, &history, false);
+                if (start == trigger)
+                {
+                    target->ConfigureTriggerCapture({trigger, 0, length, age, 0u});
+                    target->Overdub({}, "target", {}, {}, source); target->CommitChanges();
+                    target->SetActiveBounce(source, std::make_shared<AudioFlowAdditiveBounceWriter>());
+                    ASSERT_TRUE(target->GetLoops().front()->SetTriggerCaptureLength(128u));
+                }
+                if (start >= trigger)
+                {
+                    target->BeginPlaybackRateBlock(rate, start, &history, false);
+                    target->BeginCaptureAudioBoundary(start, start, start);
+                    std::array<float, 64u> normalRead{};
+                    ASSERT_EQ(blockSize, leaf->ReadBlock(normalRead.data(), 0, blockSize));
+                    plugin->Count = 0u;
+#ifdef _DEBUG
+                    AudioCallbackAllocationProbe::Counts counts;
+                    {
+                        AudioCallbackAllocationProbe::Scope probe;
+                        target->ProcessActiveBounce(-static_cast<int>(age + outputLatency), blockSize);
+                        counts = probe.GetCounts();
+                    }
+                    EXPECT_EQ(0u, counts.Allocations);
+                    EXPECT_EQ(0u, counts.Reallocations);
+                    EXPECT_EQ(0u, counts.Frees);
+#else
+                    target->ProcessActiveBounce(-static_cast<int>(age + outputLatency), blockSize);
+#endif
+                    ASSERT_EQ(blockSize, plugin->Count);
+                    const auto pastOutput = positions[trigger] - positions[trigger - outputLatency];
+                    for (unsigned int i = 0u; i < blockSize; ++i)
+                    {
+                        // A linear source exposes phase directly. Reuse the ordinary
+                        // reader's SHFT motion instead of duplicating its recurrence.
+                        const auto expected = normalRead[i] + 0.0001 *
+                            (positions[start - age + i] - positions[start + i] - pastOutput);
+                        EXPECT_NEAR(expected, plugin->Input[i], 1e-6) << start << "/" << i;
+                    }
+                    ASSERT_TRUE(target->GetLoops().front()->TriggerCaptureCoverageValid());
+                    target->EndMultiWrite(blockSize, true, Audible::AUDIOSOURCE_BOUNCE);
+                    target->EndMultiPlay(blockSize);
+                }
+                source->EndMultiPlay(blockSize);
+                auto cursor = rate.Cursor();
+                for (unsigned int i = 0u; i < blockSize; ++i) cursor.Next();
+                rate.InitialRate = cursor.Current();
+            }
+            {
+                ASSERT_TRUE(target->GetLoops().front()->TriggerCaptureComplete());
+                target->Play(constants::MaxLoopFadeSamps, 128u, 0u);
+                target->EndRecording();
+                const auto captured = target->GetLoops().front()->ExportSamples();
+                ASSERT_EQ(128u, captured.size());
+                for (unsigned int i = 0u; i < 8u; ++i)
+                    EXPECT_NEAR(2.0 * 0.0001 * (positions[trigger - outputLatency] - 11.0 + i), captured[i], 1e-6) << i;
+                if (partitionReference.empty()) partitionReference = captured;
+                else for (unsigned int i = 0u; i < captured.size(); ++i)
+                    EXPECT_NEAR(partitionReference[i], captured[i], 1e-6) << i;
+            }
+            auto cancelled = MakeTake(); cancelled->ResetPlaybackRateHistoryForDevice(1000u);
+            cancelled->ConfigureTriggerCapture({trigger, 0, length, age, 0u});
+            cancelled->Overdub({}, "cancelled", {}, {}, source); cancelled->CommitChanges();
+            cancelled->SetActiveBounce(source, std::make_shared<AudioFlowAdditiveBounceWriter>());
+            cancelled->BeginPlaybackRateBlock(rate, 768u, &history, false);
+            cancelled->BeginCaptureAudioBoundary(768u, 768u, 768u);
+            ASSERT_TRUE(cancelled->IsArmed());
+            cancelled->CancelRateCaptureBefore(10000u);
+            ASSERT_EQ(LoopTake::STATE_OVERDUBBING, cancelled->TakeState());
+            ASSERT_FALSE(cancelled->IsArmed());
+            plugin->Count = 0u;
+            cancelled->ProcessActiveBounce(-static_cast<int>(age + outputLatency), blockSize);
+            EXPECT_EQ(0u, plugin->Count);
+        }
+    }
+}

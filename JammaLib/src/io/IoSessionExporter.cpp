@@ -302,8 +302,22 @@ namespace io
         const bool captured = [&]() -> bool
         {
 			std::scoped_lock lock(sceneMutex);
+            if (host)
+            {
+                const auto rate = host->ObservePlaybackRate();
+                if (!rate) { appendError("Playback timing snapshot unavailable"); return false; }
+                jam.PlaybackRate = rate->Target;
+            }
+            if(quantisation.LocalMasterTimingPending())
+            {
+                appendError("Wait for the master change before saving");
+                return false;
+            }
+            jam.ChosenMaster=quantisation.ExportChosenMasterReference(stations);
             jam.QuantiseSamps = quantisation.EffectiveSamps();
             jam.GlobalPhaseOffsetSamps = quantisation.GlobalPhaseOffsetSamps();
+            jam.DefaultMidiQuantFraction = quantisation.DefaultMidiQuantisationFraction();
+            jam.MasterAudioLoopId = quantisation.MasterAudioLoopId();
 		if (groups)
 		{
 			for (std::size_t slot = 1u; slot <= 9u; ++slot)
@@ -325,19 +339,32 @@ namespace io
 					return std::any_of(takes.begin(), takes.end(), [](const std::shared_ptr<LoopTake>& take)
 						{ return take && (!take->GetLoops().empty() || !take->GetMidiLoops().empty()); });
 				});
-			if (clock && clock->SeedSourceLength() != 0ul)
+			if (!hasSavedLoopContent)
+				jam.TransportInitialised = false;
+			else if (clock && clock->SeedSourceLength() != 0ul)
 			{
 				jam.MasterLengthSamps = clock->SeedSourceLength();
+				jam.MasterRecordingPlaybackRate = clock->MasterRecordingPlaybackRate();
+                jam.MasterBeatsPerInterval = clock->MasterBeatsPerInterval();
 				jam.AbsoluteSamplePos = clock->AbsoluteSamplePos();
 				jam.Quantisation = clock->Quantisation();
+				if (host)
+					if (const auto local = host->LocalMasterReferenceForSaveAfterReadersStopped())
+					{
+						jam.AbsoluteSamplePos = clock->LoopCount() * local->Length
+							+ static_cast<std::uint64_t>(clock->SampOffset()) * local->Length / clock->SeedSourceLength();
+						jam.MasterLengthSamps = local->Length;
+						jam.QuantiseSamps = local->Grain;
+						jam.MasterBeatsPerInterval = local->Bpi;
+						jam.MasterRecordingPlaybackRate = local->RecordingRate;
+						jam.Quantisation = local->Quantisation;
+					}
 			}
-			else if (hasSavedLoopContent)
+			else
 			{
 				std::cout << "Export: local master timer is not initialised" << std::endl;
 	            result.Error = "Session capture failed"; return false;
 			}
-			else
-				jam.TransportInitialised = false;
 
 			for (std::size_t stationIndex = 0u; stationIndex < stations.size(); ++stationIndex)
 			{
@@ -355,20 +382,13 @@ namespace io
 				jamStation.BusLevels = station->BusLevelsForExport();
 				jamStation.VstChain = station->VstEntries();
 				jamStation.StationPhaseOffsetSamps = station->StationPhaseOffsetSamps();
+				jamStation.Muted = station->RetainedMuted();
 				jamStation.AllowedMidiChannels = station->AllowedMidiChannels();
+				jamStation.MidiChannelRoutes = station->MidiChannelRoutes();
 				jamStation.AudioRoutes = station->SnapshotAudioRoutesForExport();
 				jamStation.HasAudioRoutes = true;
                 if (numbered) for (auto& routes : jamStation.AudioRoutes)
                     std::erase_if(routes, [&](auto channel) { return channel >= streamParams.NumOutputChannels; });
-				const auto routes = station->SnapshotMidiVstRoutesForExport();
-				for (std::size_t outputIndex = 0u; outputIndex < routes.PluginByMidiOutput.size(); ++outputIndex)
-				{
-					if (routes.PluginByMidiOutput[outputIndex] != midi::MidiVstRoutingSnapshot::NoPlugin)
-						jamStation.MidiRoutes.push_back({ static_cast<unsigned int>(outputIndex), false,
-							static_cast<unsigned int>(routes.PluginByMidiOutput[outputIndex]) });
-				}
-				if (routes.LivePlugin != midi::MidiVstRoutingSnapshot::NoPlugin)
-					jamStation.MidiRoutes.push_back({ 0u, true, static_cast<unsigned int>(routes.LivePlugin) });
 
 				const auto takes = station->GetLoopTakes();
 				for (std::size_t takeIndex = 0u; takeIndex < takes.size(); ++takeIndex)
@@ -379,9 +399,15 @@ namespace io
 					io::JamFile::LoopTake jamTake;
 					jamTake.Id = take->Id();
 					jamTake.Name = take->Id();
+					const auto recordingGeometry = take->RecordingGeometry();
+					jamTake.RecordingMasterLengthSamps = recordingGeometry.IntervalLengthSamps;
+					jamTake.RecordingPlaybackRate = take->RecordingPlaybackRate();
+					jamTake.RecordingBeatsPerInterval = recordingGeometry.Bpi;
 					jamTake.MasterLevel = take->MasterLevelForExport();
 					jamTake.BusLevels = take->BusLevelsForExport();
 					jamTake.VstChain = take->VstEntries();
+					jamTake.AllowedMidiChannels = take->AllowedMidiChannels();
+					jamTake.MidiChannelRoutes = take->MidiChannelRoutes();
 					jamTake.MidiQuantEnabled = take->MidiQuantisation().Enabled;
 					jamTake.MidiQuantFraction = midi::MidiQuantisation::FractionIndex(take->MidiQuantisation().Fraction);
 					jamTake.TakePhaseOffsetSamps = take->MidiQuantisation().PhaseOffsetSamps;
@@ -405,6 +431,8 @@ namespace io
 							continue;
 
 						auto jamLoop = loop->ToJamFile(wavFilename);
+						if (loop->LoopLength()) jamLoop.BodyPlayIndex = static_cast<unsigned long>(ninjam::PositiveModulo(
+							static_cast<std::int64_t>(jamLoop.BodyPlayIndex) + take->SavedSharedPlaybackOffset(), loop->LoopLength()));
 						jamTake.Loops.push_back(std::move(jamLoop));
 
 						LoopSnapshot snap;
@@ -423,6 +451,7 @@ namespace io
 			            result.Error = "Session capture failed"; return false;
 					}
 					jamTake.MidiPlayIndex = midiExport.PlayIndex;
+					jamTake.MidiSourcePosition = midiExport.SourcePosition;
 					jamTake.MidiPlayLength = midiExport.LoopLengthSamps;
 					jamTake.MidiQuantTransportStart = midiExport.QuantisationTransportStartSamps;
 					if (midiExport.BaseIntervalSamps > 0u && midiExport.BaseDivisions > 0u)
@@ -431,17 +460,22 @@ namespace io
 						jamTake.BaseDivisions = midiExport.BaseDivisions;
 					}
 
-					auto resolveAutomationTarget = [&](const vst::IVstPlugin* target,
+					auto resolveAutomationTarget = [&](const midi::MidiLoop::AutomationLaneExport& exported,
 						io::JamFile::AutomationLane& lane) -> bool
 					{
-						if (!target)
-				            return false;
+						const auto* target = exported.TargetPlugin;
+						const auto& saved = exported.SavedTarget;
+						const auto matches = [&](const std::shared_ptr<vst::IVstPlugin>& plugin, const char* scope) {
+							return plugin && (saved.Scope.empty() || saved.Scope == scope)
+								&& (saved.PluginId.empty() ? plugin.get() == target : plugin->StateId() == saved.PluginId);
+						};
 						for (std::size_t pluginIndex = 0u; pluginIndex < jamStation.VstChain.size(); ++pluginIndex)
 						{
 							auto plugin = station->GetVstPlugin(pluginIndex);
-							if (plugin && plugin.get() == target)
+							if (matches(plugin, "station"))
 							{
 								lane.TargetScope = "station";
+								lane.TargetPluginId = plugin->StateId();
 								lane.TargetPluginIndex = static_cast<unsigned int>(pluginIndex);
 								return true;
 							}
@@ -449,9 +483,10 @@ namespace io
 						for (std::size_t pluginIndex = 0u; pluginIndex < jamTake.VstChain.size(); ++pluginIndex)
 						{
 							auto plugin = take->GetVstPlugin(pluginIndex);
-							if (plugin && plugin.get() == target)
+							if (matches(plugin, "take"))
 							{
 								lane.TargetScope = "take";
+								lane.TargetPluginId = plugin->StateId();
 								lane.TargetPluginIndex = static_cast<unsigned int>(pluginIndex);
 								return true;
 							}
@@ -464,16 +499,28 @@ namespace io
 							for (std::size_t pluginIndex = 0u; pluginIndex < loopVstEntryCount; ++pluginIndex)
 							{
 								auto plugin = audioLoops[loopIndex]->GetVstPlugin(pluginIndex);
-								if (plugin && plugin.get() == target)
+								if (matches(plugin, "loop"))
 								{
 									lane.TargetScope = "loop";
+									lane.TargetPluginId = plugin->StateId();
 									lane.TargetLoopIndex = static_cast<unsigned int>(loopIndex);
 									lane.TargetPluginIndex = static_cast<unsigned int>(pluginIndex);
 									return true;
 								}
 							}
 						}
-			            return false;
+						// Missing/inactive/removed targets retain their exact identity and
+						// curve. ID-aware import cannot bind a survivor at the old index.
+						if (!saved.Scope.empty())
+						{
+							lane.TargetScope = saved.Scope;
+							lane.TargetPluginId = !saved.PluginId.empty() && io::NativeMidiSidecar::ValidatePluginIdentity(saved.PluginId)
+								? saved.PluginId : "unavailable:" + utils::GetGuid();
+							lane.TargetPluginIndex = saved.PluginIndex;
+							lane.TargetLoopIndex = saved.LoopIndex;
+							return true;
+						}
+						return false;
 					};
 					for (std::size_t streamIndex = 0u; streamIndex < midiExport.Streams.size(); ++streamIndex)
 					{
@@ -501,7 +548,7 @@ namespace io
 							lane.Channel = static_cast<std::uint8_t>((exportedLane.MatchKey >> 8u) & 0xffu);
 							lane.Controller = static_cast<std::uint8_t>(exportedLane.MatchKey & 0xffu);
 							lane.TargetParameterIndex = exportedLane.TargetParameterIndex;
-							if (!resolveAutomationTarget(exportedLane.TargetPlugin, lane))
+							if (!resolveAutomationTarget(exportedLane, lane))
 							{
 								std::cout << "Export: unresolved automation target in take " << take->Id() << std::endl;
 					            result.Error = "Session capture failed"; return false;
@@ -559,10 +606,11 @@ namespace io
 		}
 
 		std::stringstream jamStream;
-		if (!io::JamFile::ToStream(jam, jamStream))
+		std::string serializationError;
+		if (!io::JamFile::ToStream(jam, jamStream, &serializationError))
 		{
-			std::cout << "Export: failed to serialize session.jam" << std::endl;
-            appendError("Session capture or serialization failed"); return result;
+			std::cout << "Export: failed to serialize session.jam: " << serializationError << std::endl;
+            appendError("Session serialization failed: " + serializationError); return result;
 		}
 
         // Audio has resumed before serialization and all disk work.

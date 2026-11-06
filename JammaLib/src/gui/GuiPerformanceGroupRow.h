@@ -33,7 +33,8 @@ namespace gui
     class GuiPerformanceGroupRow : public GuiPanel
     {
     public:
-        static constexpr unsigned int ButtonHeight = 32u;
+        static constexpr unsigned int ButtonHeight = 48u;
+        static constexpr unsigned int LabelWidth = 90u;
         static constexpr unsigned int Padding = 4u;
         static constexpr unsigned int Height = ButtonHeight + 2u * Padding;
         static constexpr float TransitionSeconds = 0.12f;

@@ -46,7 +46,7 @@ namespace gui
 	//
 	// The editing core (caret, selection, insert/delete/navigation) is plain CPU
 	// state so it is fully testable without a GL context.  Rendering reuses a
-	// child GuiLabel for the glyphs and draws a caret/selection bar on top.
+	// child GuiLabel for the glyphs, with a selection fill behind the text.
 	//
 	// Keyboard input arrives as Windows virtual-key codes (see Window.cpp), so
 	// printable characters are reconstructed from VK + Shift.  Scope is ASCII
@@ -59,6 +59,7 @@ namespace gui
 	public:
 		const std::string& Text() const;
 		void SetText(const std::string& text, bool notify = false);
+		void BeginEditing(bool selectAll = true);
 
 		// Editing-state accessors (testable without GL).
 		unsigned int CaretIndex() const;
@@ -103,6 +104,7 @@ namespace gui
 		void _NotifyReceiver(bool commit);
 
 		static base::GuiElementParams _MakeCaretParams(const std::string& texture);
+		static base::GuiElementParams _MakeSelectionParams();
 		static GuiLabelParams _MakeLabelParams(const GuiTextBoxParams& params);
 
 	protected:
@@ -112,6 +114,7 @@ namespace gui
 		unsigned int _padding;
 		bool _editing;
 		std::shared_ptr<GuiLabel> _label;
+		base::GuiElement _selectionQuad;
 		base::GuiElement _caretQuad;
 		std::weak_ptr<base::ActionReceiver> _receiver;
 	};

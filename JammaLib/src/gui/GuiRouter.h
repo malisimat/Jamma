@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include "GuiElement.h"
 #include "GuiLabel.h"
 #include "ActionReceiver.h"
@@ -14,7 +15,7 @@ namespace gui
 		public base::GuiElementParams
 	{
 	public:
-		static constexpr unsigned int BusWidth = 30u;
+		static constexpr unsigned int BusWidth = 42u;
 		static constexpr unsigned int BusGap = 8u;
 
 		enum GuiRouterChannelType
@@ -86,13 +87,13 @@ namespace gui
 			params.Texture = "router";
 			params.PinTexture = "";
 			params.LinkTexture = "";
-			params.DeviceInactiveTexture = "router";
-			params.DeviceActiveTexture = "router_inactive";
-			params.ChannelInactiveTexture = "router";
-			params.ChannelActiveTexture = "router_inactive";
-			params.OverTexture = "router_over";
-			params.DownTexture = "router_down";
-			params.HighlightTexture = "router_over";
+			params.DeviceInactiveTexture = "rounded_but";
+			params.DeviceActiveTexture = "rounded_but_on";
+			params.ChannelInactiveTexture = "rounded_but";
+			params.ChannelActiveTexture = "rounded_but_on";
+			params.OverTexture = "rounded_but_over";
+			params.DownTexture = "rounded_but_down";
+			params.HighlightTexture = "rounded_but_over";
 			params.LineShader = "colour";
 			return params;
 		}
@@ -168,14 +169,23 @@ namespace gui
 			unsigned int Channel() const { return _params.Channel; }
 			bool IsActive() const { return _isActive; }
 			void SetActive(bool active) { _isActive = active; }
+			utils::Position2d SocketPosition() const;
+			void ApplyHoverState(bool inside) override;
+			void ClearPointerState() override;
+		private:
+			class Socket;
+			std::shared_ptr<Socket> _socket;
+		public:
 
 		protected:
+			graphics::Image& _CurrentTexture() override;
 			virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 
 		protected:
 			bool _isActive;
 			graphics::Image _activeTexture;
 			graphics::Image _highlightTexture;
+			graphics::Image _activeDownTexture;
 			std::shared_ptr<GuiLabel> _label;
 			GuiRouterChannelParams _params;
 		};
@@ -192,6 +202,11 @@ namespace gui
 		virtual void Draw(base::DrawContext& ctx) override;
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::TouchMoveAction action) override;
+
+		void ClearPointerState() override;
+		void ApplyHoverPoint(utils::Position2d localPos) override;
+		void ApplyHoverState(bool inside) override;
+		std::shared_ptr<base::GuiElement> FindTopmostDescendant(utils::Position2d localPos) override;
 
 		unsigned int NumInputs() const;
 		unsigned int NumOutputs() const;
@@ -218,6 +233,8 @@ namespace gui
 		bool _InitShader(resources::ResourceLib& resourceLib);
 		bool _InitVertexArray();
 		void _DrawLines(base::DrawContext& ctx) const;
+		std::shared_ptr<GuiRouterChannel> _NearbyChannel(utils::Position2d point, bool inputsOnly, bool outputsOnly) const;
+		void _UpdateSocketHover(utils::Position2d point);
 
 	protected:
 		static const unsigned int _MaxRoutes;
@@ -225,6 +242,7 @@ namespace gui
 
 		GLuint _vertexArray;
 		GLuint _vertexBuffer;
+		std::optional<utils::Position2d> _hoverPoint;
 		bool _isDragging;
 		bool _isDraggingInput;
 		unsigned int _initDragChannel;

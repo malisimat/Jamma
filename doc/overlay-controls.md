@@ -10,6 +10,8 @@ green locally; division uses orange globally and red locally. Dragging shows
 only the active handle and its caption. The bottom status area temporarily shows
 scope, signed shift in ms/samples, or fraction/divisions, including mixed values.
 Normal status returns when the gesture ends.
+The panel also labels its captured scope: Global, Station, Take or Loop, with
+the number of local targets. This label stays fixed while Ctrl holds that capture.
 
 ## Scope and capture
 
@@ -20,16 +22,30 @@ targets are supported. A shift drag applies one absolute offset to the captured
 targets, while DIV chooses one fraction; its press feedback reports mixed values.
 
 - Station: SHFT changes station offset; DIV changes the station's current takes.
-- Take: SHFT and DIV change the captured take settings.
+- Take: SHFT moves every audio and MIDI loop in the captured takes, preserving
+  loop-local shifts. DIV changes the captured take settings.
 - MIDI loop: SHFT is a stream-local additive offset; DIV is a stream-local
   fraction/enable override. Sibling MIDI streams keep their settings. A missing
-  override inherits take settings. Audio loops have no paired MIDI stream, so
-  selecting only audio loops shows no MIDI edit handles.
+  override inherits take settings.
+- Audio loop: SHFT delays only the captured audio loops by the displayed samples
+  (milliseconds at the current sample rate). Audio playback and waveform move
+  together, independently of MIDI grid offsets. DIV remains hidden. Double-click
+  SHFT to reset the captured targets to zero. Positive/negative offsets wrap at
+  each audio loop's own length; recorded samples are unchanged.
 - Global fallback: SHFT changes the global offset; DIV edits current local takes.
+
+The Timing subdivision selection also becomes the default for new local audio
+and MIDI takes, and is retained in saved sessions. Selection changes do not alter
+that creation default.
 
 Global Off/All still controls playback enablement; Mixed uses take/loop choices.
 Global, station, take and stream offsets are composed once. Stream overrides
 and local tap base grids are saved separately from the unchanged packed fields.
+SHFT moves MIDI playback even with quantisation off, including exact editor
+events; it does not enable snapping or rewrite recorded events. Station and
+global SHFT also propagate to audio loops through their takes.
+With snapping enabled, events and the grid receive the same composed offset;
+note-ons snap to the shifted grid and note-offs follow to retain note duration.
 
 Release Ctrl during a drag to retain its capture and grid hold. Mouse release
 ends the gesture. Escape, capture/focus loss and deleted targets release the
@@ -55,7 +71,8 @@ smoothing; the accepted geometry remains unchanged. Sample zero is valid.
 
 One completed local take counts as one performance, including multichannel and
 MIDI-only takes. Remote, incomplete and pre-reclock takes are excluded. With one
-eligible take under local authority, taps reinterpret its integer beat count.
+eligible take, taps reinterpret its integer beat count. When connected, this
+prepares local timing and requests the resulting server BPM/BPI.
 Half ties round upward; audio grain floors to integer samples, and logical audio
 length is grain × beat count. The physical audio tail remains available and is
 retained by session WAV export. MIDI source events and their original logical
@@ -72,7 +89,23 @@ The selected base composes once with each take/stream fraction: effective cells
 per base interval = base divisions × fraction divisor. Without a tap base, local
 fractions refer to local grain; following NINJAM uses the authoritative remote
 beat. A tap base adds density relative to that reference. These references need
-not have equal lengths. Remote BPM/BPI stays authoritative; local taps can choose
-compatible subdivisions, and reclock is rejected until **Stay local** is chosen.
+not have equal lengths. Remote BPM/BPI stays authoritative while following. With additional eligible
+takes, local taps choose compatible subdivisions. Reclock suspends following
+until the new local master is established and its requested timing is confirmed.
 Repeated remote observations retain the tap base; a changed remote geometry or
 NoSync resets it. Remote authority is never restored from a saved session.
+
+### Connected NINJAM timing edits
+
+On the Timing page, **Reclock** keeps the NINJAM connection and its remote
+metronome active while a new local master is recorded. Once the new master has
+activated, Jamma requests its BPM/BPI from the server. Single-master taps also
+request updated timing; with more eligible takes they retain subdivision behavior.
+Local playback aligns when a fresh server observation confirms both requested
+values. A failed request leaves playback local.
+
+Use **Sync to server** to follow current remote timing again after Stay local or
+a failed local tempo request. It cancels the old request and waits for fresh
+server timing; it may jump local playback into alignment. The adjacent status
+shows local, pending, or following state. The metronome continues to reflect the
+actual remote beats throughout these workflows.

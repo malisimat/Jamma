@@ -2,6 +2,9 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <utility>
+#include <limits>
 
 #include "../../include/Constants.h"
 
@@ -12,6 +15,20 @@ namespace midi
 
 namespace engine
 {
+    struct RecordedMasterReference
+    {
+        unsigned long LengthSamps = 0ul;
+        unsigned int Bpi = 0u;
+        double RecordingPlaybackRate = 1.0;
+    };
+
+    // A chosen source, not a transport ruler. Missing AudioLoopId means take provenance.
+    struct ChosenMasterReference
+    {
+        std::string StationId, TakeId;
+        std::optional<std::string> AudioLoopId;
+    };
+
 	// Exact, frozen audio geometry for locally recorded loops. This deliberately
 	// does not describe the musical grid: a grid cell may be fractional in samples.
 	struct LocalAudioGeometry
@@ -68,6 +85,43 @@ namespace engine
 		unsigned int PhaseSamps = 0u;
 		float Bpm = 0.0f;
 		std::uint64_t Generation = 0u;
+
+		// Remote beats are rational subdivisions of the full interval. Multiplying
+		// a rounded beat length would move interval boundaries by sample(s).
+		std::pair<unsigned long, int> QuantiseLength(unsigned long length, bool powers) const noexcept
+		{
+			if (IntervalLengthSamps == 0ul || Bpi == 0u) return { length, 0 };
+			const auto boundary = [this](std::uint64_t beats) noexcept
+			{
+				return (beats * IntervalLengthSamps + Bpi / 2u) / Bpi;
+			};
+			std::uint64_t snapped = 0u;
+			const auto distance = [length](std::uint64_t value) noexcept
+			{ return value > length ? value - length : length - value; };
+			const auto consider = [&](std::uint64_t candidate) noexcept
+			{
+				if (candidate <= (std::numeric_limits<unsigned long>::max)()
+					&& (distance(candidate) < distance(snapped)
+						|| (distance(candidate) == distance(snapped) && candidate > snapped))) snapped = candidate;
+			};
+			if (powers)
+			{
+				for (std::uint64_t multiple = 1u; multiple <= 128u; multiple *= 2u)
+				{
+					consider(boundary(multiple));
+					// A full remote interval remains valid even for e.g. seven beats.
+					consider(multiple * IntervalLengthSamps);
+				}
+			}
+			else
+			{
+				const auto beats = static_cast<std::uint64_t>(length) * Bpi / IntervalLengthSamps;
+				consider(boundary(beats));
+				consider(boundary(beats + 1u));
+			}
+			return { static_cast<unsigned long>(snapped), static_cast<int>(static_cast<std::int64_t>(length)
+				- static_cast<std::int64_t>(snapped)) };
+		}
 	};
 
 	struct QuantisationParams
@@ -94,6 +148,9 @@ namespace engine
 		std::uint32_t GridIntervalSamps = 0u;
 		std::uint32_t GridBaseDivisions = 0u;
 		std::int64_t GridOriginSamps = 0;
+		std::int32_t MasterAudioOffsetSamps = 0;
+		// Presentation scope: station-wide at station depth, otherwise take-local.
+		bool ContainsMidiLoops = false;
 	};
 
 	struct QuantisationPolicy

@@ -1,4 +1,6 @@
 #include "AudioMixer.h"
+#include <algorithm>
+#include <cmath>
 
 using namespace audio;
 using namespace actions;
@@ -59,9 +61,22 @@ bool AudioMixer::UnMute()
 	return Tweakable::UnMute();
 }
 
+void AudioMixer::SetStationMuteControl(const std::shared_ptr<const std::atomic<bool>>& control) noexcept
+{
+	_stationMuteControl = control;
+	if (control && control->load(std::memory_order_acquire))
+	{
+		// Pre-publication initialization: an already-muted station must never
+		// emit a first-block fade from the new mixer's default unity level.
+		_appliedFadeTarget = 0.0; _fade->Jump(0.0);
+		_publishedFadeLevel.store(0.0, std::memory_order_release);
+	}
+}
+
 bool AudioMixer::IsMuted() const
 {
-	return Tweakable::IsMuted() || IsCaptureSourceMuted();
+	return Tweakable::IsMuted() || IsCaptureSourceMuted()
+		|| (_stationMuteControl && _stationMuteControl->load(std::memory_order_acquire));
 }
 
 bool AudioMixer::AllowReplacementPlayback() noexcept
@@ -100,6 +115,14 @@ double AudioMixer::UnmutedLevel() const
 
 void AudioMixer::SetUnmutedLevel(double level)
 {
+	// MIDI velocity follows fader travel: 0..1 below unity and 1..4 above.
+	// Keep this calculation off the per-note delivery path.
+	const auto decibels = level > 0.0 ? 20.0 * std::log10(level) : GuiSliderParams::RackMinDecibels;
+	const auto velocityScale = decibels <= 0.0
+		? std::clamp((decibels - GuiSliderParams::RackMinDecibels) /
+			-GuiSliderParams::RackMinDecibels, 0.0, 1.0)
+		: 1.0 + 3.0 * std::clamp(decibels / GuiSliderParams::RackMaxDecibels, 0.0, 1.0);
+	_unmutedVelocityScale.store(static_cast<float>(velocityScale), std::memory_order_release);
 	_unmutedFadeTarget.store(level, std::memory_order_release);
 }
 

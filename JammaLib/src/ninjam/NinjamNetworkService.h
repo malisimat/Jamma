@@ -36,6 +36,17 @@ namespace ninjam
 			const std::optional<engine::QuantisationTiming>& localTiming);
 
 		NinjamTimingUpdate ResetTempoSyncOnDisconnect();
+		NinjamTimingUpdate BeginLocalTiming();
+        void BindLocalTimingVersion(std::uint64_t version);
+        NinjamTimingUpdate RollbackLocalTiming(std::uint64_t version,const std::optional<engine::QuantisationTiming>& localTiming,
+            bool hasLocalContent,utils::Timer& clock,std::chrono::steady_clock::time_point now=std::chrono::steady_clock::now());
+		NinjamTimingUpdate PushActivatedLocalTempo(const engine::QuantisationTiming& timing);
+		NinjamTimingUpdate RequestSyncToServer();
+		NinjamTimingUpdate SetLocalPlaybackRate(double rate);
+        NinjamTimingUpdate RejectUnsupportedFollow(std::uint64_t version, std::uint64_t epoch);
+		NinjamTimingUpdate RequestServerTempo(const engine::QuantisationTiming& timing, std::uint64_t rateRevision);
+		NinjamLocalTempoState LocalTempoState() const noexcept;
+		NinjamLocalFollowPolicy FollowPolicy() const noexcept;
 		NinjamTimingUpdate ObserveSessionStatus(const NinjamSessionTimingStatus& status,
 			const std::optional<engine::QuantisationTiming>& localTiming);
 

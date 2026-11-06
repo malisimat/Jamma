@@ -6,6 +6,7 @@
 #include "audio/AudioHost.h"
 #include "engine/Station.h"
 #include "engine/PerformanceGroupService.h"
+#include "engine/PerformanceGroupController.h"
 #include "gui/GuiHud.h"
 #include "base/PublishedAudioSnapshot.h"
 #include "utils/Timer.h"
@@ -43,6 +44,9 @@ namespace audio
 		{
 			return host._audioStations.borrow();
 		}
+        static auto BorrowMute(AudioHost& host) noexcept { return host._groupMuteApplication.borrow(); }
+        static void AdoptMute(AudioHost& host, const engine::GroupMuteApplication* image) noexcept
+        { host.ApplyBorrowedGroupMuteAtAudioBoundary(image); }
 		static auto BorrowClock(AudioHost& host) noexcept
 		{
 			return host._timingClock.borrow();
@@ -1364,6 +1368,75 @@ TEST_F(RigSnapshotTest, PrependingPreservesReceiverIdentityAndDoesNotCreateTrigg
  EXPECT_EQ(3u, coordinator.Accepted()->Stations->size());
 }
 
+TEST_F(RigSnapshotTest, StationRenamePromotesOnlyAcknowledgedMetadataAndPreservesIdentity)
+{
+	auto a = RuntimeStation("A"), b = RuntimeStation("B");
+	auto rig = EmptyRig();
+	rig.Triggers = {TriggerDescriptor("first", "A"), TriggerDescriptor("missing", "Reserved")};
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(rig, {StationDescriptor("A"), StationDescriptor("B")}, {a, b}, 0u, {}, {}, {}));
+	const auto old = coordinator.Accepted();
+	using Result = engine::RigCoordinator::EditResult;
+	for (const auto name : {"B", "Reserved", "", " \t", "bad\nname"})
+		EXPECT_EQ(Result::ValidationFailed, coordinator.SubmitStationRename(a, old->Revision, name));
+	EXPECT_EQ(Result::ValidationFailed, coordinator.SubmitStationRename(a, old->Revision + 1u, "Keys"));
+	ASSERT_EQ(Result::Pending, coordinator.SubmitStationRename(a, old->Revision, "Keys"));
+	auto candidate = coordinator.Staged();
+	EXPECT_EQ("A", a->Name());
+	EXPECT_FALSE(candidate->MembershipChange);
+	EXPECT_EQ(old->TopologyRevision, candidate->TopologyRevision);
+	EXPECT_EQ(old->Triggers[0].Instance, candidate->Triggers[0].Instance);
+	EXPECT_EQ(a, candidate->Triggers[0].BoundReceiver);
+	EXPECT_TRUE(candidate->TriggerRouteUpdates.empty());
+	EXPECT_EQ("Keys", candidate->Rig.Triggers[0].StationTarget);
+	EXPECT_EQ("Reserved", candidate->Rig.Triggers[1].StationTarget);
+	EXPECT_EQ(Result::TransitionRejected, coordinator.CompleteTransition(candidate->Revision, false, {}));
+	EXPECT_EQ("A", a->Name());
+	ASSERT_EQ(Result::Pending, coordinator.SubmitStationRename(a, old->Revision, "Keys"));
+	candidate = coordinator.Staged();
+	ASSERT_EQ(Result::Pending, coordinator.CompleteTransition(candidate->Revision, true, {}));
+	EXPECT_FALSE(coordinator.PromoteAcknowledged());
+	coordinator.ApplyPendingAtAudioBoundary();
+	ASSERT_TRUE(coordinator.AcknowledgeInput(candidate->Revision));
+	ASSERT_TRUE(coordinator.PromoteAcknowledged());
+	EXPECT_EQ("Keys", a->Name());
+	EXPECT_EQ(old->Triggers[0].Instance, coordinator.Accepted()->Triggers[0].Instance);
+	auto next = coordinator.Accepted()->Rig;
+	const auto beforeRename = coordinator.Accepted();
+	const auto retained = beforeRename->Triggers[0].Instance;
+	retained->RestoreTakes({ { engine::TriggerTake::SOURCE_ADC, "source", "target", a } });
+	next.Triggers[0].Name = "Renamed trigger";
+	ASSERT_EQ(Result::Pending, coordinator.SubmitCandidate(next));
+	EXPECT_EQ(a, coordinator.Staged()->Triggers[0].BoundReceiver);
+	candidate = coordinator.Staged();
+	EXPECT_EQ(retained, candidate->Triggers[0].Instance);
+	EXPECT_TRUE(candidate->TriggerRouteUpdates.empty());
+	int writes = 0;
+	ASSERT_EQ(Result::Pending, coordinator.CompleteTransition(candidate->Revision, true,
+		[&writes](const io::RigFile&) { ++writes; return true; }));
+	coordinator.ApplyPendingAtAudioBoundary();
+	ASSERT_TRUE(coordinator.AcknowledgeInput(candidate->Revision));
+	ASSERT_TRUE(coordinator.PromoteAcknowledged());
+	const auto renamed = coordinator.Accepted();
+	EXPECT_EQ(0, writes);
+	EXPECT_EQ(retained, renamed->Triggers[0].Instance);
+	EXPECT_EQ(beforeRename->Triggers[0].Id, renamed->Triggers[0].Id);
+	EXPECT_EQ("Renamed trigger", retained->Name());
+	EXPECT_EQ(beforeRename->Rig.Triggers[0].ControlBindings, renamed->Rig.Triggers[0].ControlBindings);
+	EXPECT_EQ(beforeRename->Rig.Triggers[0].CaptureInputs, renamed->Rig.Triggers[0].CaptureInputs);
+	const auto history = retained->GetTakes();
+	ASSERT_EQ(1u, history.size());
+	EXPECT_EQ("source", history[0].SourceTakeId);
+	EXPECT_EQ("target", history[0].TargetTakeId);
+	EXPECT_EQ(a, history[0].Receiver);
+	std::stringstream saved;
+	ASSERT_TRUE(io::RigFile::ToJsonStream(renamed->Rig, saved));
+	const auto reloaded = io::RigFile::FromStream(std::move(saved));
+	ASSERT_TRUE(reloaded);
+	EXPECT_EQ(renamed->Rig.Triggers, reloaded->Triggers);
+	EXPECT_EQ("Keys", reloaded->Triggers[0].StationTarget);
+}
+
 TEST_F(RigSnapshotTest, RemovalExplicitlyUnbindsAndNeverRedirectsToIndexOccupant)
 {
  auto a = RuntimeStation("A"), b = RuntimeStation("B");
@@ -1527,9 +1600,10 @@ TEST_F(RigSnapshotTest, DisabledFinalBinConsumesPressAndRelease)
  utils::Size2d viewport{800u, 600u};
  controls.Update({station}, view, viewport, true, true, false, true);
  auto anchor = station->TopCapModelPosition(); anchor.Y += 65.0f;
- const auto point = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
- ASSERT_TRUE(point);
- actions::TouchAction action; action.Position = {static_cast<int>(point->x), static_cast<int>(point->y)}; action.Index = 0;
+ const auto projected = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
+ ASSERT_TRUE(projected);
+ const auto bin = station->GetGuiRack()->StationLabel()->BinPosition({static_cast<int>(projected->x) - 24, static_cast<int>(projected->y) - 24});
+ actions::TouchAction action; action.Position = {bin.X + 24, bin.Y + 24}; action.Index = 0;
  action.State = actions::TouchAction::TOUCH_DOWN;
  unsigned activations = 0u;
  EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));
@@ -1546,9 +1620,10 @@ TEST_F(RigSnapshotTest, ReleasingCtrlCancelsBinAndConsumesItsRelease)
  utils::Size2d viewport{800u, 600u};
  controls.Update({station, b}, view, viewport, true, true, false, true);
  auto anchor = station->TopCapModelPosition(); anchor.Y += 65.0f;
- const auto point = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
- ASSERT_TRUE(point);
- actions::TouchAction action; action.Position = {static_cast<int>(point->x), static_cast<int>(point->y)}; action.Index = 0;
+ const auto projected = gui::CableInteraction::ProjectAnchor(view * glm::vec4(anchor.X, anchor.Y, anchor.Z, 1.0f), viewport);
+ ASSERT_TRUE(projected);
+ const auto bin = station->GetGuiRack()->StationLabel()->BinPosition({static_cast<int>(projected->x) - 24, static_cast<int>(projected->y) - 24});
+ actions::TouchAction action; action.Position = {bin.X + 24, bin.Y + 24}; action.Index = 0;
  unsigned activations = 0u;
  action.State = actions::TouchAction::TOUCH_DOWN;
  EXPECT_TRUE(controls.Touch(action, [&](auto) { ++activations; }));
@@ -1562,7 +1637,10 @@ TEST_F(RigSnapshotTest, ReleasingCtrlCancelsBinAndConsumesItsRelease)
 TEST_F(RigSnapshotTest, DetachingDeletedMasterPreservesTransportAndGrid)
 {
  auto station = RuntimeStation("Master");
+ station->SetSampleRate(48000.0f);
  auto take = station->AddTake();
+ take->Record({},station->Name());
+ ASSERT_EQ(engine::LoopTake::STATE_RECORDING,take->TakeState());
  engine::LoopParams params; params.Size = {80u, 80u};
  audio::WireMixBehaviourParams wire; wire.Channels = {0u};
  auto loop = std::make_shared<engine::Loop>(params, engine::Loop::GetMixerParams(params.Size, wire));
@@ -1572,7 +1650,10 @@ TEST_F(RigSnapshotTest, DetachingDeletedMasterPreservesTransportAndGrid)
  request.stride = 1u; request.fadeCurrent = 0.0f; request.fadeNew = 1.0f; request.source = base::Audible::AUDIOSOURCE_ADC;
  loop->OnBlockWrite(request, 0); loop->EndWrite(request.numSamps, true);
  loop->Play(constants::MaxLoopFadeSamps, 48000u, false);
- take->AddLoop(loop); take->CommitChanges(); station->CommitChanges();
+ take->AddLoop(loop); take->CommitChanges();
+ take->Play(constants::MaxLoopFadeSamps,48000u,0u); station->CommitChanges();
+ ASSERT_EQ(engine::LoopTake::STATE_PLAYING,take->TakeState());
+ ASSERT_TRUE(take->HasCompletedTimingMaterial()); ASSERT_TRUE(loop->CanUseAsTimingReference());
  engine::Quantiser quantiser;
  auto clock = std::make_shared<utils::Timer>(); quantiser.SetClock(clock);
  ASSERT_TRUE(quantiser.TrySetMasterFromHover(loop, base::DEPTH_LOOP, {station}, 48000u, io::UserConfig{}, true));
@@ -1629,4 +1710,380 @@ TEST_F(RigSnapshotTest, PredelayEditRequiresTriggerReplacementAndAudioAcceptance
 		coordinator.CompleteTransition(staged->Revision, false, {}));
 	EXPECT_EQ(previous, coordinator.Accepted()->Triggers.front().Instance);
 	EXPECT_DOUBLE_EQ(0.0, coordinator.Accepted()->Rig.Triggers.front().PreDelayMs);
+}
+
+
+TEST_F(RigSnapshotTest, LearnedPedalPreservesImportedRowsAndUsesAcknowledgedAtomicRigTransition)
+{
+    auto rig = EmptyRig(); auto descriptor = TriggerDescriptor("learn-target","Station");
+    for (auto key = 65u; key < 71u; ++key) descriptor.ControlBindings.Activate.push_back(KeyboardButton(key));
+    descriptor.ControlBindings.Ditch = {KeyboardButton(90u)};
+    descriptor.CaptureInputs.Audio = {0u}; rig.Triggers.push_back(descriptor);
+    auto edited = descriptor.ControlBindings.Activate; edited.back() = KeyboardButton(75u);
+    std::string error;
+    const auto candidate = io::TriggerBindingLearn::ReplacePedal(rig,descriptor.Id,io::RigFile::Control::Activate,edited,error);
+    ASSERT_TRUE(candidate) << error; EXPECT_EQ(6u,candidate->Triggers[0].ControlBindings.Activate.size());
+    EXPECT_EQ(descriptor.ControlBindings.Ditch,candidate->Triggers[0].ControlBindings.Ditch);
+    EXPECT_EQ(descriptor.Name,candidate->Triggers[0].Name); EXPECT_EQ(descriptor.CaptureInputs,candidate->Triggers[0].CaptureInputs);
+    auto conflict = edited; conflict.push_back(KeyboardButton(90u));
+    EXPECT_FALSE(io::TriggerBindingLearn::ReplacePedal(rig,descriptor.Id,io::RigFile::Control::Activate,conflict,error));
+    EXPECT_FALSE(error.empty());
+    auto midiRig = rig; midiRig.User.Midi.Devices.push_back({"keys",true,"learn-keys"});
+    std::vector<io::RigFile::Binding> wildcard;
+    for (auto note = 60u; note < 65u; ++note)
+    {
+        auto binding = io::TriggerBindingLearn::Midi("learn-keys",midi::MidiEvent::MakeNoteOn(0u,0u,static_cast<std::uint8_t>(note),100u)).value();
+        binding.Press.Channel.reset(); binding.Release.Channel.reset(); wildcard.push_back(binding);
+    }
+    EXPECT_FALSE(io::TriggerBindingLearn::ReplacePedal(midiRig,descriptor.Id,io::RigFile::Control::Activate,wildcard,error));
+    wildcard.pop_back(); EXPECT_TRUE(io::TriggerBindingLearn::ReplacePedal(midiRig,descriptor.Id,io::RigFile::Control::Activate,wildcard,error));
+    EXPECT_FALSE(io::TriggerBindingLearn::ReplacePedal(rig,"deleted",io::RigFile::Control::Activate,edited,error));
+    auto station = RuntimeStation("Station"); engine::RigCoordinator coordinator;
+    ASSERT_TRUE(coordinator.BuildInitial(rig,{StationDescriptor("Station")},{station},1u,{},engine::TriggerParams(),[](const auto&) { return true; }));
+    const auto original = coordinator.Accepted();
+    ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,coordinator.SubmitCandidate(*candidate));
+    EXPECT_EQ(engine::RigCoordinator::EditResult::EditsDisabled,coordinator.SubmitCandidate(rig));
+    const auto revision = coordinator.Staged()->Revision;
+    ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,coordinator.CompleteTransition(revision,true,[](const auto&) { ADD_FAILURE() << "Learning must never autosave"; return false; }));
+    EXPECT_EQ(original,coordinator.Accepted()); coordinator.ApplyPendingAtAudioBoundary();
+    EXPECT_EQ(original,coordinator.Accepted()); ASSERT_TRUE(coordinator.AcknowledgeInput(revision)); ASSERT_TRUE(coordinator.PromoteAcknowledged());
+    EXPECT_EQ(edited,coordinator.Accepted()->Rig.Triggers[0].ControlBindings.Activate);
+    EXPECT_EQ(descriptor.ControlBindings.Ditch,coordinator.Accepted()->Rig.Triggers[0].ControlBindings.Ditch);
+    EXPECT_TRUE(io::TriggerBindingLearn::ReplacePedal(coordinator.Accepted()->Rig,descriptor.Id,io::RigFile::Control::Activate,{},error));
+}
+
+TEST(RigDefaultSaveTest, OrdinaryOverwriteDoesNotChangeDefaultsAndFailureKeepsPathAndCapturedRevision)
+{
+    const std::wstring directory = L"C:/isolated-jamma";
+    RigDefaultSave owner(directory,L"defaults.json",{},{});
+    io::InitFile defaults{}; defaults.Rig = directory + L"/current.rig";
+    defaults.RigOrigin = "user"; defaults.RigLoadType = io::InitFile::LOAD_SPECIFIC;
+    owner.InitializeCurrentPath(defaults,true,4u); EXPECT_FALSE(owner.Dirty(4u)); EXPECT_TRUE(owner.Dirty(5u));
+    io::RigFile rig; unsigned int defaultsWrites = 0u;
+    auto result = RigDefaultSave::WriteRequest(rig,directory+L"/another.rig",5u,false,defaults,L"defaults.json",
+        [](const auto&,const auto&) { return false; },[&](const auto&,const auto&) { ++defaultsWrites; return true; });
+    owner.AcceptSuccessfulWrite(*result); EXPECT_EQ(defaults.Rig,owner.CurrentPath()); EXPECT_EQ(4u,owner.SavedRevision());
+    result = RigDefaultSave::WriteRequest(rig,directory+L"/another.rig",5u,false,defaults,L"defaults.json",
+        [](const auto&,const auto&) { return true; },[&](const auto&,const auto&) { ++defaultsWrites; return true; });
+    owner.AcceptSuccessfulWrite(*result); EXPECT_EQ(directory+L"/another.rig",owner.CurrentPath());
+    EXPECT_EQ(5u,owner.SavedRevision()); EXPECT_FALSE(owner.Dirty(5u)); EXPECT_TRUE(owner.Dirty(6u)); EXPECT_EQ(0u,defaultsWrites);
+    owner.InvalidateSavedRevision(); EXPECT_TRUE(owner.Dirty(1u)); EXPECT_FALSE(owner.CurrentPath().empty());
+    RigDefaultSave generated(directory,L"defaults.json",{},{}); generated.InitializeCurrentPath(defaults,false,1u);
+    EXPECT_TRUE(generated.CurrentPath().empty()); EXPECT_TRUE(generated.Dirty(1u));
+}
+
+TEST_F(RigSnapshotTest, LoadedRigPathFollowsItsAcknowledgedTransitionAndSurvivesAvailabilityRefresh)
+{
+	for (const bool acceptLoad : {false, true})
+		for (const auto* loadedPath : {L"C:/isolated-jamma/B.rig", L"D:/isolated-rigs/B.rig"})
+	{
+		SCOPED_TRACE(acceptLoad);
+		SCOPED_TRACE(loadedPath);
+		auto initial = EmptyRig();
+		initial.Triggers = {TriggerDescriptor("Initial A", std::nullopt)};
+		engine::RigCoordinator coordinator;
+		ASSERT_TRUE(coordinator.BuildInitial(initial, {}, {}, 0u, {}, engine::TriggerParams(), {}));
+		audio::AudioHost host(io::UserConfig{});
+		host.PublishPendingRigSnapshot(coordinator.Accepted());
+		audio::RigAudioBoundaryTestAccess::ApplyPending(host);
+		const std::wstring directory = L"C:/isolated-jamma";
+		io::InitFile defaults{};
+		defaults.Rig = directory + L"/A.rig";
+		defaults.RigLoadType = io::InitFile::LOAD_SPECIFIC;
+		RigDefaultSave owner(directory, L"defaults.json", {}, {});
+		owner.InitializeCurrentPath(defaults, true, coordinator.Accepted()->Revision);
+		RigDefaultSave replacingOwner(directory, L"defaults.json", {}, {});
+		replacingOwner.InitializeCurrentPath(defaults, true, coordinator.Accepted()->Revision);
+		constexpr auto SceneId = 11u;
+		auto loaded = initial;
+		loaded.Triggers.front().Name = "Loaded B";
+		engine::RigCoordinator::EditReceiptPtr receipt;
+		ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(loaded, &receipt));
+		ASSERT_TRUE(receipt);
+		ASSERT_EQ(coordinator.Staged()->Revision, receipt->Revision);
+		owner.TrackLoadedPath(loadedPath, SceneId, receipt);
+		replacingOwner.TrackLoadedPath(loadedPath, SceneId, receipt);
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		EXPECT_EQ(defaults.Rig, owner.CurrentPath());
+		ASSERT_EQ(acceptLoad ? engine::RigCoordinator::EditResult::Pending : engine::RigCoordinator::EditResult::TransitionRejected,
+			coordinator.CompleteTransition(receipt->Revision, acceptLoad, {}));
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		if (!acceptLoad)
+		{
+			// A later unrelated acceptance must never make rejected B current.
+			EXPECT_EQ(engine::RigCoordinator::EditOutcome::Rejected, receipt->Outcome.load());
+			auto unrelated = initial;
+			unrelated.Triggers.front().Name = "Unrelated C";
+			ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(unrelated));
+			ASSERT_GT(coordinator.Staged()->Revision, receipt->Revision);
+			ASSERT_EQ(engine::RigCoordinator::EditResult::Pending,
+				coordinator.CompleteTransition(coordinator.Staged()->Revision, true, {}));
+		}
+		const auto pending = coordinator.Pending();
+		ASSERT_TRUE(pending);
+		EXPECT_FALSE(coordinator.AcknowledgeInput(pending->Revision));
+		host.PublishPendingRigSnapshot(pending);
+		audio::RigAudioBoundaryTestAccess::ApplyPending(host);
+		ASSERT_TRUE(coordinator.ObserveAudioAcknowledgement(host.AppliedRigRevision()));
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		EXPECT_EQ(defaults.Rig, owner.CurrentPath());
+		ASSERT_TRUE(coordinator.AcknowledgeInput(pending->Revision));
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		ASSERT_TRUE(coordinator.PromoteAcknowledged());
+		ASSERT_TRUE(coordinator.RefreshRuntimeAvailability(0u, {}));
+		ASSERT_GT(coordinator.Accepted()->Revision, receipt->Revision);
+		EXPECT_EQ(acceptLoad, owner.PollLoadedPath(SceneId));
+		const std::wstring expectedPath = acceptLoad ? loadedPath : defaults.Rig;
+		EXPECT_EQ(expectedPath, owner.CurrentPath());
+		EXPECT_FALSE(owner.NeedsSaveDialog(engine::Scene::RigSaveMode::Save));
+		if (acceptLoad) EXPECT_EQ(receipt->Revision, owner.SavedRevision());
+		EXPECT_EQ(directory + L"/A.rig", defaults.Rig);
+		unsigned int defaultWrites = 0u;
+		std::wstring writtenPath;
+		const auto saved = RigDefaultSave::WriteRequest(coordinator.Accepted()->Rig, owner.CurrentPath(),
+			coordinator.Accepted()->Revision, false, defaults, L"defaults.json",
+			[&](const auto& path, const auto&) { writtenPath = path; return true; },
+			[&](const auto&, const auto&) { ++defaultWrites; return true; });
+		owner.AcceptSuccessfulWrite(*saved);
+		EXPECT_EQ(expectedPath, writtenPath);
+		const auto failed = RigDefaultSave::WriteRequest(coordinator.Accepted()->Rig, directory + L"/failed.rig",
+			coordinator.Accepted()->Revision, false, defaults, L"defaults.json",
+			[](const auto&, const auto&) { return false; },
+			[&](const auto&, const auto&) { ++defaultWrites; return true; });
+		owner.AcceptSuccessfulWrite(*failed);
+		EXPECT_EQ(expectedPath, owner.CurrentPath());
+		EXPECT_EQ(0u, defaultWrites);
+		// Shutdown rejects an unfinished load; a completed load remains accepted.
+		engine::RigCoordinator::EditReceiptPtr unfinished;
+		ASSERT_EQ(engine::RigCoordinator::EditResult::Pending, coordinator.SubmitCandidate(initial, &unfinished));
+		owner.TrackLoadedPath(directory + L"/unfinished.rig", SceneId, unfinished);
+		coordinator.Shutdown();
+		coordinator.ReleaseAfterReadersStopped();
+		EXPECT_FALSE(owner.PollLoadedPath(SceneId));
+		EXPECT_EQ(expectedPath, owner.CurrentPath());
+		// Main consumes the outgoing receipt before invalidating revisions for a
+		// replacement Scene. Its accepted rig keeps the accepted document path.
+		EXPECT_EQ(acceptLoad, replacingOwner.PollLoadedPath(SceneId));
+		replacingOwner.InvalidateSavedRevision();
+		EXPECT_EQ(expectedPath, replacingOwner.CurrentPath());
+		EXPECT_EQ(0u, replacingOwner.SavedRevision());
+	}
+}
+
+struct RigDefaultSaveTestAccess
+{
+	static void Publish(RigDefaultSave& owner, std::shared_ptr<const RigDefaultSave::Result> result)
+	{
+		owner._busy = true;
+		owner._result.store(std::move(result), std::memory_order_release);
+	}
+};
+
+class SessionSaveCompletionControl final : public engine::SessionControl
+{
+public:
+	void Complete(bool success, const std::wstring& path, bool asDefault)
+	{
+		CompleteSessionSave(success, path, "Save cancelled or destination unavailable", L"C:/isolated-jamma/export", asDefault);
+	}
+	const std::wstring& SaveFolder() const { return SessionSaveFolder(); }
+};
+
+TEST(SessionSaveCompletion, WrittenNumberedJamRemainsCurrentWhenDefaultUpdateFails)
+{
+	SessionSaveCompletionControl scene;
+	const std::wstring previous = L"C:/isolated-jamma/previous.jam";
+	const std::wstring written = L"C:/isolated-jamma/export/session-0002.jam";
+	scene.SetCurrentJamPath(previous);
+	unsigned defaultsWrites = 0u;
+	scene.SetDefaultJamSaver(previous, [&](const auto& path) {
+		++defaultsWrites;
+		EXPECT_EQ(written, path);
+		// The destination belongs to the successful manifest write already.
+		EXPECT_EQ(written, scene.CurrentJamPath());
+		return false;
+	});
+	scene.Complete(true, written, true);
+	EXPECT_EQ(1u, defaultsWrites);
+	EXPECT_EQ(written, scene.CurrentJamPath());
+	EXPECT_EQ(L"C:/isolated-jamma/export", scene.SaveFolder());
+}
+
+TEST(SessionSaveCompletion, OrdinarySaveChangesDestinationWithoutChangingDefaults)
+{
+	SessionSaveCompletionControl scene;
+	unsigned defaultsWrites = 0u;
+	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&) { ++defaultsWrites; return true; });
+	EXPECT_TRUE(scene.CurrentJamPath().empty());
+	scene.Complete(true, L"first-numbered.jam", false);
+	EXPECT_EQ(L"first-numbered.jam", scene.CurrentJamPath());
+	scene.Complete(true, L"next-numbered.jam", false);
+	EXPECT_EQ(L"next-numbered.jam", scene.CurrentJamPath());
+	EXPECT_EQ(0u, defaultsWrites);
+}
+
+TEST(SessionSaveCompletion, FailedOrCancelledSaveRetainsLastCommittedDestination)
+{
+	SessionSaveCompletionControl scene;
+	scene.SetCurrentJamPath(L"previous.jam");
+	scene.SetSessionSaveFolder(L"previous-folder");
+	unsigned defaultsWrites = 0u;
+	scene.SetDefaultJamSaver(L"startup.jam", [&](const auto&) { ++defaultsWrites; return true; });
+	for (const auto* destination : {L"", L"denied.jam"})
+	{
+		scene.Complete(false, destination, true);
+		EXPECT_EQ(L"previous.jam", scene.CurrentJamPath());
+		EXPECT_EQ(L"previous-folder", scene.SaveFolder());
+	}
+	EXPECT_EQ(0u, defaultsWrites);
+}
+
+TEST_F(RigSnapshotTest, RigCompletionRejectsDestroyedSceneEvenWhenReplacementRevisionMatches)
+{
+	auto rig = EmptyRig(); rig.User.Midi.Devices.clear();
+	io::JamFile jam; jam.Stations = {StationDescriptor("Save completion")};
+	const engine::SceneParams params({ "" }, {}, {640u, 480u});
+	auto original = engine::Scene::FromFile(params, jam, rig, L"", {});
+	ASSERT_TRUE(original);
+	const auto captured = (*original)->CaptureCommittedRigVersion();
+	ASSERT_TRUE(captured);
+	EXPECT_EQ((*original)->Identity(), captured->SceneId);
+	const std::wstring directory = L"C:/isolated-jamma";
+	RigDefaultSave owner(directory, L"defaults.json", {}, {});
+	io::InitFile defaults{}; defaults.Rig = directory + L"/current.rig";
+	defaults.RigLoadType = io::InitFile::LOAD_SPECIFIC; defaults.RigOrigin = "user";
+	owner.InitializeCurrentPath(defaults, true, captured->Revision);
+	auto requestedDefaults = defaults; requestedDefaults.Rig = directory + L"/old-scene.rig";
+	const auto result = RigDefaultSave::WriteRequest(captured->Rig, directory + L"/old-scene.rig",
+		captured->Revision, true, requestedDefaults, L"defaults.json",
+		[](const auto&, const auto&) { return true; }, [](const auto&, const auto&) { return true; }, captured->SceneId);
+	const std::weak_ptr<engine::Scene> originalLifetime = *original;
+	(*original)->Shutdown(); original.reset();
+	EXPECT_TRUE(originalLifetime.expired());
+	auto replacement = engine::Scene::FromFile(params, jam, rig, L"", {});
+	ASSERT_TRUE(replacement);
+	const auto replacementSave = (*replacement)->BeginExplicitRigSave();
+	ASSERT_TRUE(replacementSave);
+	ASSERT_EQ(captured->Revision, replacementSave->Revision);
+	ASSERT_NE(captured->SceneId, replacementSave->SceneId);
+	owner.InvalidateSavedRevision();
+	RigDefaultSaveTestAccess::Publish(owner, result);
+	EXPECT_FALSE(owner.Poll(**replacement, nullptr, defaults, false));
+	EXPECT_FALSE(owner.Busy());
+	EXPECT_EQ(directory + L"/current.rig", defaults.Rig);
+	EXPECT_EQ(directory + L"/current.rig", owner.CurrentPath());
+	EXPECT_EQ(0u, owner.SavedRevision());
+	EXPECT_TRUE(owner.Dirty(replacementSave->Revision));
+	// Stale completion must not clear the replacement's own save admission.
+	EXPECT_FALSE((*replacement)->BeginExplicitRigSave());
+	(*replacement)->FinishExplicitRigSave();
+	(*replacement)->Shutdown();
+}
+
+TEST_F(RigSnapshotTest, SuccessfulRigWriteKeepsCapturedRevisionDespiteDefaultUpdateFailure)
+{
+	auto rig = EmptyRig(); rig.User.Midi.Devices.clear();
+	io::JamFile jam; jam.Stations = {StationDescriptor("Save completion")};
+	auto created = engine::Scene::FromFile(engine::SceneParams({ "" }, {}, {640u, 480u}), jam, rig, L"", {});
+	ASSERT_TRUE(created);
+	const auto captured = (*created)->BeginExplicitRigSave();
+	ASSERT_TRUE(captured);
+	const std::wstring directory = L"C:/isolated-jamma";
+	RigDefaultSave owner(directory, L"defaults.json", {}, {});
+	io::InitFile defaults{}; defaults.Rig = L"previous-startup.rig";
+	const auto result = RigDefaultSave::WriteRequest(captured->Rig, directory + L"/written.rig",
+		captured->Revision, true, defaults, L"defaults.json",
+		[](const auto&, const auto&) { return true; }, [](const auto&, const auto&) { return false; }, captured->SceneId);
+	RigDefaultSaveTestAccess::Publish(owner, result);
+	EXPECT_FALSE(owner.Poll(**created, nullptr, defaults, false));
+	EXPECT_EQ(L"previous-startup.rig", defaults.Rig);
+	EXPECT_EQ(directory + L"/written.rig", owner.CurrentPath());
+	EXPECT_EQ(captured->Revision, owner.SavedRevision());
+	EXPECT_FALSE(owner.Dirty(captured->Revision));
+	EXPECT_TRUE(owner.Dirty(captured->Revision + 1u));
+	EXPECT_TRUE((*created)->BeginExplicitRigSave());
+	(*created)->FinishExplicitRigSave();
+	(*created)->Shutdown();
+}
+
+TEST_F(RigSnapshotTest, SeamWindowCanChangeWithoutAcceptingOtherLifecycleSettings)
+{
+	using Result=engine::RigCoordinator::EditResult;
+	auto station=RuntimeStation("Station");
+	auto initial=EmptyRig();
+	engine::RigCoordinator coordinator;
+	ASSERT_TRUE(coordinator.BuildInitial(initial,{StationDescriptor("Station")},{station},0u,{},
+		engine::TriggerParams(),[](const io::RigFile&){return true;}));
+	auto candidate=initial; candidate.User.Audio.SampleRate+=1u;
+	EXPECT_EQ(Result::ReinitialisationRequired,coordinator.SubmitCandidate(candidate));
+	candidate=initial; candidate.User.Loop.MidiSeamMergeWindowMs=0u;
+	ASSERT_EQ(Result::Pending,coordinator.SubmitCandidate(candidate));
+	ASSERT_TRUE(coordinator.Staged());
+	EXPECT_EQ(0u,coordinator.Staged()->Rig.User.Loop.MidiSeamMergeWindowMs);
+}
+
+TEST(PerformanceGroupBoundary, AppliedMarqueeRestorationSurvivesFinalNullAndNewTopology)
+{
+    engine::StationParams params; params.Id="survivor"; params.Size={160u,320u};
+    auto survivor=std::make_shared<engine::Station>(params,engine::Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}));
+    auto removed=survivor->AddTake(); auto retained=survivor->AddTake();
+    auto departedParams=params; departedParams.Id="departed";
+    auto departed=std::make_shared<engine::Station>(departedParams,engine::Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}));
+    audio::AudioHost host(io::UserConfig{}); auto clock=std::make_shared<utils::Timer>(); host.SetTimingClock(clock);
+    audio::RigAudioBoundaryTestAccess::ConfigureCallback(host,clock);
+    auto rig=std::make_shared<engine::RigSnapshot>(); rig->Revision=1u; rig->Graph.Revision=1u; rig->TopologyRevision=1u;
+    rig->Stations=std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(std::vector{survivor,departed});
+    host.SetStations(rig->Stations); host.PublishPendingRigSnapshot(rig);
+    engine::PerformanceGroupController controller;
+    const auto publish=[&](std::shared_ptr<const engine::GroupMuteApplication> image) {
+        auto stamped=std::make_shared<engine::GroupMuteApplication>(*image); stamped->TopologyRevision=rig->TopologyRevision;
+        host.PublishGroupMuteApplication(std::move(stamped));
+    };
+    ASSERT_TRUE(controller.BeginMuteMarquee({survivor,departed}));
+    ASSERT_TRUE(controller.PreviewMuteMarquee(std::array{engine::GroupTargetId{engine::GroupTargetKind::Station,survivor->Id(),{},{}},engine::GroupTargetId{engine::GroupTargetKind::Station,departed->Id(),{},{}}},{survivor,departed},publish));
+    float output[8]{}; audio::RigAudioBoundaryTestAccess::RunBlock(host,output); ASSERT_TRUE(survivor->RetainedMuted());
+    ASSERT_TRUE(controller.CancelMuteMarquee({survivor,departed},publish));
+    auto oldRestore=audio::RigAudioBoundaryTestAccess::BorrowMute(host); ASSERT_TRUE(oldRestore);
+    const auto previewReceipt=host.GroupMuteReceipt();
+    ASSERT_TRUE(survivor->DitchTake(removed)); survivor->CommitChanges();
+    const bool removedRaw = (removed->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED) != 0;
+    host.PublishGroupMuteApplication({});
+    // Use a new Station owner with the same saved ID: identity reuse must not receive the old baseline.
+    auto replacement=std::make_shared<engine::Station>(departedParams,engine::Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}));
+    replacement->SetRetainedMuted(true);
+    rig=std::make_shared<engine::RigSnapshot>(); rig->Revision=2u; rig->Graph.Revision=2u; rig->TopologyRevision=2u;
+    rig->Stations=std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>(std::vector{survivor,replacement});
+    host.SetStations(rig->Stations); host.PublishPendingRigSnapshot(rig);
+    auto added=survivor->AddTake();
+    audio::RigAudioBoundaryTestAccess::RunBlock(host,output); // New topology and final null are adopted first.
+    audio::RigAudioBoundaryTestAccess::AdoptMute(host,oldRestore.get());
+    EXPECT_TRUE(survivor->RetainedMuted()); EXPECT_EQ(previewReceipt,host.GroupMuteReceipt());
+    controller.RepublishForTopology({survivor,replacement},publish);
+    audio::RigAudioBoundaryTestAccess::RunBlock(host,output);
+    EXPECT_FALSE(survivor->RetainedMuted()); EXPECT_FALSE(retained->IsMuted()); EXPECT_FALSE(added->IsMuted());
+    EXPECT_TRUE(departed->RetainedMuted()); EXPECT_TRUE(replacement->RetainedMuted()); EXPECT_FALSE(controller.MuteMarqueeActive());
+    EXPECT_EQ(removedRaw,(removed->GetTweakState() & base::Tweakable::TWEAKSTATE_MUTED) != 0);
+    const auto restoredReceipt=host.GroupMuteReceipt();
+    audio::RigAudioBoundaryTestAccess::AdoptMute(host,oldRestore.get());
+    EXPECT_FALSE(survivor->RetainedMuted()); EXPECT_EQ(restoredReceipt,host.GroupMuteReceipt());
+}
+
+TEST(PerformanceGroupBoundary, CapacityGrowthRestoresBoundedBaselineThroughActualHost)
+{
+    engine::StationParams params; params.Id="capacity"; params.Size={160u,320u};
+    auto station=std::make_shared<engine::Station>(params,engine::Station::GetMixerParams(params.Size,audio::MergeMixBehaviourParams{}));
+    auto take=station->AddTake();
+    audio::AudioHost host(io::UserConfig{}); auto clock=std::make_shared<utils::Timer>(); host.SetTimingClock(clock);
+    host.SetStations(std::make_shared<const std::vector<std::shared_ptr<engine::Station>>>());
+    audio::RigAudioBoundaryTestAccess::ConfigureCallback(host,clock);
+    engine::PerformanceGroupController controller; const auto publish=[&](auto image){host.PublishGroupMuteApplication(std::move(image));};
+    ASSERT_TRUE(controller.BeginMuteMarquee({station}));
+    ASSERT_TRUE(controller.PreviewMuteMarquee(std::array{engine::GroupTargetId{engine::GroupTargetKind::Station,station->Id(),{},{}}},{station},publish));
+    float output[8]{}; audio::RigAudioBoundaryTestAccess::RunBlock(host,output); ASSERT_TRUE(take->IsMuted());
+    // Adversarial bounded view exercises the same capacity branch without allocating 32769 heavyweight owners.
+    const engine::PerformanceGroupService::Stations overCapacity(engine::GroupMuteApplication::MaxTargets+1u,station);
+    ASSERT_TRUE(controller.CancelMuteMarquee(overCapacity,publish));
+    audio::RigAudioBoundaryTestAccess::RunBlock(host,output);
+    EXPECT_FALSE(station->RetainedMuted()); EXPECT_FALSE(take->IsMuted()); EXPECT_FALSE(controller.MuteMarqueeActive());
+    EXPECT_FALSE(controller.Error().empty());
 }

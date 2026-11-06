@@ -4,6 +4,7 @@
 #include "../actions/KeyAction.h"
 #include <array>
 #include <functional>
+#include <span>
 
 namespace engine
 {
@@ -32,9 +33,18 @@ namespace engine
         bool Execute(bool selection, GroupCommand command, std::size_t slot,
             const PerformanceGroupService::Stations& stations, GroupTargetKind depth, const Publish& publish);
         bool SetAllMuted(bool muted, const PerformanceGroupService::Stations& stations, const Publish& publish);
+		bool BeginMuteMarquee(const PerformanceGroupService::Stations& stations);
+		bool PreviewMuteMarquee(std::span<const GroupTargetId> targets, const PerformanceGroupService::Stations& stations, const Publish& publish);
+		void CommitMuteMarquee() { _marqueeBaseline.reset(); }
+		bool CancelMuteMarquee(const PerformanceGroupService::Stations& stations, const Publish& publish);
+		bool MuteMarqueeActive() const noexcept { return _marqueeBaseline != nullptr; }
+		bool SetTargetMuted(const GroupTargetId& target, bool muted, const PerformanceGroupService::Stations& stations, const Publish& publish);
+		bool DesiredMuted(const GroupTargetId& target, const PerformanceGroupService::Stations& stations) const;
+		void PrepareForTopology(const PerformanceGroupService::Stations& stations) { CancelMuteMarquee(stations, {}); }
+		void RepublishForTopology(const PerformanceGroupService::Stations& stations, const Publish& publish);
         const std::string& Error() const noexcept { return _error; }
         void Acknowledge(std::uint64_t version) { if (_pendingMute && _pendingMute->Version <= version) _pendingMute.reset(); }
-        void CancelPending() { _pendingMute.reset(); }
+        void CancelPending() { _marqueeBaseline.reset(); _pendingMute.reset(); }
     private:
         PerformanceGroups _groups;
         std::array<bool, 256> _held{};
@@ -42,5 +52,8 @@ namespace engine
         std::uint64_t _version = 0u;
         std::string _error;
         std::shared_ptr<const GroupMuteApplication> _pendingMute;
+		std::shared_ptr<const GroupMuteApplication> _marqueeBaseline;
+		bool _PublishDesired(std::shared_ptr<GroupMuteApplication> application, const Publish& publish);
+		static bool _SameRawState(const GroupMuteApplication& left, const GroupMuteApplication& right);
     };
 }

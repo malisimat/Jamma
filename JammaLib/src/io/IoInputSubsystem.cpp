@@ -245,7 +245,7 @@ namespace io
 		return result;
 	}
 
-	IoInputSubsystem::PumpResult IoInputSubsystem::PumpSerial(std::vector<std::shared_ptr<Station>>& stations,
+	IoInputSubsystem::PumpResult IoInputSubsystem::PumpSerial(const std::vector<std::shared_ptr<Station>>& stations,
 		const audio::AudioStreamParams& streamParams,
 		std::mutex& audioMutex)
 	{

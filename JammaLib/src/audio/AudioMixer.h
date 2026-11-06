@@ -233,6 +233,8 @@ namespace audio
 		virtual bool Mute() override;
 		virtual bool UnMute() override;
 		bool IsMuted() const override;
+		// Bound off callback before recorded-take mixer publication; live mixers omit it.
+		void SetStationMuteControl(const std::shared_ptr<const std::atomic<bool>>& control) noexcept;
 		bool IsCaptureSourceMuted() const noexcept {
 			return _captureSourceMuteControl &&
 				(_captureSourceMuteControl->IsTransientMuted() ||
@@ -246,6 +248,7 @@ namespace audio
 
 		double Level() const;
 		double UnmutedLevel() const;
+		float UnmutedVelocityScale() const noexcept { return _unmutedVelocityScale.load(std::memory_order_acquire); }
 		void SetUnmutedLevel(double level);
 		BehaviourParams GetBehaviourParams() const
 			{ return _behaviour ? _behaviour->GetParams() : BehaviourParams{}; }
@@ -277,10 +280,12 @@ namespace audio
 		static const utils::Size2d _DragSize;
 
 		std::atomic<double> _unmutedFadeTarget;
+		std::atomic<float> _unmutedVelocityScale{1.0f};
 		static_assert(std::atomic<double>::is_always_lock_free);
 		// Immutable after publication. Job/UI publish flags and desired level;
 		// audio alone mutates the fade, then publishes its current level per block.
 		std::shared_ptr<const CaptureSourceMuteControl> _captureSourceMuteControl;
+		std::shared_ptr<const std::atomic<bool>> _stationMuteControl;
 		std::atomic<std::uint64_t> _replacementAuditionRevision{0u};
 		double _appliedFadeTarget = DefaultLevel; // Audio owner only after publication.
 		std::atomic<double> _publishedFadeLevel{ DefaultLevel };

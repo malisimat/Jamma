@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 #include "gui/GuiRack.h"
+#include "gui/GuiVstRack.h"
 
 using base::ActionReceiver;
 using gui::GuiRack;
@@ -58,6 +59,332 @@ TEST(GuiRack, CompactConstructionAndResizeKeepScaleAnchorsDistinct)
 	EXPECT_GE(rack.GetChannelSlider(0)->GetSize().Height, 47u);
 }
 
+class MidiSelectionTestRack : public GuiRack
+{
+public:
+	using GuiRack::GuiRack;
+	using base::GuiElement::OnAction;
+	using GuiRack::OnAction;
+	std::shared_ptr<gui::GuiButton> SelectionButton(unsigned int index)
+	{
+		return FindButton(std::static_pointer_cast<base::GuiElement>(shared_from_this()), index == 0u ? "None" : "All");
+	}
+	static std::shared_ptr<gui::GuiButton> FindButton(const std::shared_ptr<base::GuiElement>& element, const std::string& text)
+	{
+		if (auto button = std::dynamic_pointer_cast<gui::GuiButton>(element); button && button->Text() == text) return button;
+		for (unsigned int i = 0; i < 256u; ++i)
+		{
+			const auto child = element->TryGetChild(static_cast<unsigned char>(i));
+			if (!child) continue;
+			if (auto button = FindButton(child, text)) return button;
+		}
+		return {};
+	}
+};
+
+TEST(GuiRack, MidiSelectionButtonClicksPublishEmptyAndCompleteChannelSets)
+{
+	auto params = MakeRackParams();
+	params.EnableVstRack = true;
+	params.EnableVstRackMidiRouting = true;
+	std::vector<int> selected{2, 7};
+	params.AllowedMidiChannels = selected;
+	params.OnAllowedMidiChannelsChanged = [&](const auto& channels) { selected = channels; };
+	auto rack = std::make_shared<MidiSelectionTestRack>(params);
+	rack->Init();
+	rack->SetRackState(GuiRackParams::RACK_CHANNELS, true);
+	rack->VstRack()->SetChannelsCollapsed(false);
+	const auto click = [&](unsigned int index)
+	{
+		const auto button = rack->SelectionButton(index);
+		ASSERT_NE(nullptr, button);
+		actions::TouchAction down;
+		down.Index = 0; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+		down.State = actions::TouchAction::TOUCH_DOWN;
+		down.Position = button->GlobalPosition() - rack->GlobalPosition() + utils::Position2d{10, 10};
+		EXPECT_TRUE(rack->OnAction(down).IsEaten);
+		auto up = down; up.State = actions::TouchAction::TOUCH_UP;
+		rack->OnAction(up);
+	};
+	ASSERT_NE(nullptr, rack->SelectionButton(0));
+	ASSERT_NE(nullptr, rack->SelectionButton(1));
+	EXPECT_EQ("None", rack->SelectionButton(0)->Text());
+	EXPECT_EQ("All", rack->SelectionButton(1)->Text());
+	click(0);
+	EXPECT_TRUE(selected.empty());
+	click(1);
+	EXPECT_EQ((std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}), selected);
+}
+
+TEST(GuiRack, RacksWithoutMidiRoutingHaveNoUnconnectedChannelControls)
+{
+	auto params = MakeRackParams();
+	params.EnableVstRack = true;
+	params.EnableVstControl = true;
+	auto rack = std::make_shared<MidiSelectionTestRack>(params);
+	rack->Init();
+	for (const auto state : {GuiRackParams::RACK_MASTER, GuiRackParams::RACK_CHANNELS, GuiRackParams::RACK_ROUTER})
+	{
+		rack->SetRackState(state, true);
+		EXPECT_EQ(nullptr, rack->SelectionButton(0));
+		EXPECT_EQ(nullptr, rack->SelectionButton(1));
+		EXPECT_EQ(nullptr, MidiSelectionTestRack::FindButton(rack, "1"));
+		EXPECT_FALSE(rack->VstRack()->ChannelsExpander()->IsVisible());
+		std::vector<gui::CableInteraction::Endpoint> endpoints;
+		std::vector<gui::CableInteraction::Cable> cables;
+		rack->VstRack()->BuildInteractionGeometry(endpoints, cables);
+		EXPECT_TRUE(endpoints.empty());
+		EXPECT_TRUE(cables.empty());
+	}
+}
+
+TEST(GuiRack, RestoredSlotsReplaceMissingCableRowsAndRetainFailedSlots)
+{
+	auto view = std::make_shared<gui::GuiVstRack>();
+	view->Init();
+	gui::GuiVstRack::Model model;
+	model.Editable = true;
+	model.ChannelRoutes[3].PluginIds = {"serum"};
+	view->Update(model, {});
+	ASSERT_TRUE(view->SlotButton(0u));
+	EXPECT_EQ(view->SlotButton(0u)->Text(), "Missing");
+	gui::GuiVstRack::Slot slot;
+	slot.Value.Identity = "serum";
+	slot.Value.Path = L"Serum_x64.dll";
+	slot.Value.Failed = true;
+	model.TotalSlots = 1u;
+	model.Slots.push_back(slot);
+	view->Update(model, {});
+	ASSERT_TRUE(view->SlotButton(0u));
+	EXPECT_EQ(view->SlotButton(0u)->Text(), "Retry Serum_x64");
+	EXPECT_TRUE(view->SlotButton(0u)->IsEnabled());
+	EXPECT_FALSE(view->SlotButton(1u));
+}
+
+TEST(GuiRack, UnchangedSlotPresentationKeepsPressAndRefreshesCommandOwner)
+{
+	auto view = std::make_shared<gui::GuiVstRack>();
+	view->Init();
+	gui::GuiVstRack::Model model;
+	model.OwnerId = "station"; model.Revision = 7u; model.Editable = true; model.TotalSlots = 1u;
+	gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot";
+	model.Slots.push_back(slot);
+	unsigned int oldOwner = 0u, currentOwner = 0u;
+	view->Update(model, [&](auto) { ++oldOwner; });
+	const auto button = view->SlotButton(0u); ASSERT_TRUE(button);
+	actions::TouchAction action; action.Index = 0; action.Touch = actions::TouchAction::TOUCH_MOUSE;
+	const auto position = button->GlobalPosition();
+	action.Position = {position.X + static_cast<int>(button->GetSize().Width / 2u),
+		position.Y + static_cast<int>(button->GetSize().Height / 2u)};
+	action.State = actions::TouchAction::TOUCH_DOWN;
+	ASSERT_TRUE(button->OnAction(action).IsEaten);
+	view->Update(model, [&](auto) { ++currentOwner; });
+	action.State = actions::TouchAction::TOUCH_UP;
+	EXPECT_TRUE(button->OnAction(action).IsEaten);
+	EXPECT_EQ(0u, oldOwner); EXPECT_EQ(1u, currentOwner);
+	model.Slots[0].Value.Pending = true;
+	view->Update(model, {});
+	EXPECT_FALSE(view->SlotButton(0u)->IsEnabled());
+}
+
+TEST(GuiRack, SlotRowsFollowGlobalHeightWithUnchangedViewport)
+{
+	auto view = std::make_shared<gui::GuiVstRack>();
+	view->Init();
+	gui::GuiVstRack::Model model;
+	model.Editable = true; model.TotalSlots = 12u;
+	for (auto index = 0u; index < 12u; ++index)
+	{
+		gui::GuiVstRack::Slot slot; slot.Value.Identity = std::to_string(index);
+		model.Slots.push_back(std::move(slot));
+	}
+	view->Update(std::move(model), {});
+	view->SetPosition({0, 50});
+	view->SetViewport({1200u, 1000u});
+	const auto lowHeight = view->SlotScroll()->GetSize().Height;
+	view->SetPosition({0, 500});
+	view->SetViewport({1200u, 1000u});
+	EXPECT_GT(view->SlotScroll()->GetSize().Height, lowHeight);
+}
+
+TEST(GuiRack, CollapsingMidiGridClearsFooterPressWithoutChangingRoutingOrLevels)
+{
+	for (const auto footerIndex : {GuiRack::MidiDeselectAllIndex, GuiRack::MidiSelectAllIndex})
+	{
+		auto params = MakeRackParams(220, 300);
+		params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+		unsigned int filterChanges = 0u;
+		params.OnAllowedMidiChannelsChanged = [&](const auto&) { ++filterChanges; };
+		auto rack = std::make_shared<GuiRack>(params); rack->Init();
+		auto receiver = std::make_shared<MockedRackReceiver>(); rack->SetReceiver(receiver);
+		rack->SetAllowedMidiChannels({2, 5}, true); rack->AddRoute(0u, 0u);
+		rack->GetMasterSlider()->SetValue(0.25, true);
+		const auto routes = rack->Routes(); const auto view = rack->VstRack(); ASSERT_TRUE(view);
+		view->SetChannelsCollapsed(false);
+		// GuiRack::Init assigns stable command indices, not child ordinals, to the footer.
+		const auto footer = std::dynamic_pointer_cast<gui::GuiButton>(view->ChannelsPanel()->TryGetChild(static_cast<unsigned char>(footerIndex)));
+		ASSERT_TRUE(footer); EXPECT_EQ(view->ChannelsPanel(), footer->Parent());
+		EXPECT_EQ(footerIndex == GuiRack::MidiDeselectAllIndex ? "None" : "All", footer->Text());
+		actions::TouchAction down; down.Position = {10, 10}; down.State = actions::TouchAction::TOUCH_DOWN;
+		ASSERT_TRUE(footer->OnAction(down).IsEaten);
+		view->SetChannelsCollapsed(true);
+		EXPECT_EQ(base::GuiElement::STATE_NORMAL, footer->GetState());
+		EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, view->ChannelsExpander()->GetToggleState());
+		// A late direct release remains harmless even if the grid reopens first.
+		view->SetChannelsCollapsed(false);
+		down.State = actions::TouchAction::TOUCH_UP; footer->OnAction(down);
+		EXPECT_EQ(0u, filterChanges); EXPECT_EQ(routes, rack->Routes());
+		EXPECT_DOUBLE_EQ(0.25, rack->GetMasterSlider()->Value());
+		EXPECT_TRUE(view->ChannelShownActive(1u)); EXPECT_TRUE(view->ChannelShownActive(4u));
+		EXPECT_FALSE(view->ChannelShownActive(0u));
+	}
+}
+
+TEST(GuiRack, SharedSlotViewPreservesCapturedIdentityScrollAndHiddenCableEndpoints)
+{
+	auto params = MakeRackParams(220, 300);
+	int filterChanges = 0;
+	std::vector<int> lastAllowedChannels;
+	params.OnAllowedMidiChannelsChanged = [&](const auto& channels) { ++filterChanges; lastAllowedChannels = channels; };
+	params.EnableVstControl = true; params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+	auto rack = std::make_shared<GuiRack>(params); rack->SetPosition({300, 400}); rack->Init();
+	const auto view = rack->VstRack(); ASSERT_NE(nullptr, view);
+	EXPECT_TRUE(view->ChannelsCollapsed());
+	view->SetViewport({1200u, 1000u});
+	gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 4u; model.TotalSlots = 12u;
+	for (auto i = 0u; i < 12u; ++i)
+	{
+		gui::GuiVstRack::Slot slot; slot.Value.Identity = "slot-" + std::to_string(i);
+		slot.Value.Failed = true; model.Slots.push_back(std::move(slot));
+	}
+	model.ChannelRoutes[2] = {{"slot-0", "missing-slot"}};
+	std::vector<gui::GuiVstRack::Command> commands;
+	const auto submit = [&](auto command) { commands.push_back(std::move(command)); };
+	view->Update(model, submit);
+	auto expander = view->ChannelsExpander(); ASSERT_NE(nullptr, expander);
+	ASSERT_TRUE(expander->RequestFocus());
+	actions::KeyAction key; key.KeyChar = 13u; key.KeyActionType = actions::KeyAction::KEY_UP;
+	EXPECT_TRUE(view->OnAction(key).IsEaten);
+	EXPECT_FALSE(view->ChannelsCollapsed());
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_ON, expander->GetToggleState());
+	key.KeyChar = 32u;
+	EXPECT_TRUE(view->OnAction(key).IsEaten);
+	EXPECT_TRUE(view->ChannelsCollapsed());
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, expander->GetToggleState());
+	EXPECT_FALSE(view->ChannelShownActive(2u)); // Cable identity does not override enabled state.
+	EXPECT_FALSE(view->ChannelShownActive(3u));
+	rack->SetAllowedMidiChannels({1}, true);
+	EXPECT_TRUE(view->ChannelShownActive(0u));
+	EXPECT_FALSE(view->ChannelShownActive(2u));
+	rack->SetAllowedMidiChannels({}, true);
+	EXPECT_FALSE(view->ChannelShownActive(0u));
+	EXPECT_FALSE(view->ChannelShownActive(2u));
+	EXPECT_EQ(0, filterChanges);
+	EXPECT_TRUE(commands.empty());
+	ASSERT_GT(view->SlotScroll()->MaxScrollOffset(), 0);
+	view->SlotScroll()->SetScrollOffset(80);
+	const auto slot = view->SlotButton(0u); ASSERT_NE(nullptr, slot);
+	EXPECT_NE(nullptr, slot->Parent()); EXPECT_NE(nullptr, slot->Parent()->Parent());
+	actions::TouchAction down; down.Index = 0; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+	down.State = actions::TouchAction::TOUCH_DOWN; down.Position = {20, 15}; down.Modifiers = base::Action::MODIFIER_ALT;
+	slot->OnAction(down);
+	model.Revision = 5u; view->Update(model, submit);
+	EXPECT_EQ(80, view->SlotScroll()->ScrollOffset());
+	auto up = down; up.State = actions::TouchAction::TOUCH_UP; up.Modifiers = base::Action::MODIFIER_NONE;
+	slot->OnAction(up);
+	EXPECT_TRUE(commands.empty()); // A revision change cancels the captured slot gesture.
+	std::vector<gui::CableInteraction::Endpoint> endpoints; std::vector<gui::CableInteraction::Cable> cables;
+	view->BuildInteractionGeometry(endpoints, cables); ASSERT_EQ(2u, cables.size());
+	EXPECT_TRUE(cables[0].Start.Continuation);
+	EXPECT_EQ(2u, cables[0].Start.MidiChannel); EXPECT_EQ("slot-0", cables[0].Finish.PluginId);
+	view->SetChannelsCollapsed(false);
+	EXPECT_FALSE(view->ChannelsCollapsed());
+	const auto commandCount = commands.size();
+	view->SetChannelsCollapsed(true); endpoints.clear(); cables.clear(); view->BuildInteractionGeometry(endpoints, cables);
+	EXPECT_EQ(80, view->SlotScroll()->ScrollOffset()); EXPECT_EQ(commandCount, commands.size());
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, expander->GetToggleState());
+	ASSERT_EQ(2u, cables.size()); EXPECT_TRUE(cables[0].Start.Continuation);
+	EXPECT_EQ(2u, cables[0].Start.MidiChannel); EXPECT_EQ("missing-slot", cables[1].Finish.PluginId);
+	EXPECT_FALSE(cables[1].Finish.Available);
+	EXPECT_EQ(gui::GuiRackParams::RACK_MASTER, rack->GetRackState());
+	// A presentation without Station channels still uses the same slot owner.
+	auto plain = std::make_shared<gui::GuiVstRack>(); plain->Init(); plain->Update(model, submit);
+	endpoints.clear(); cables.clear(); plain->BuildInteractionGeometry(endpoints, cables);
+	EXPECT_TRUE(endpoints.empty()); EXPECT_TRUE(cables.empty());
+	// The station owns route clearing when a channel is disabled.
+	auto receiver = std::make_shared<MockedRackReceiver>(); rack->SetReceiver(receiver);
+	GuiAction cabledClick; cabledClick.ElementType = GuiAction::ACTIONELEMENT_TOGGLE;
+	cabledClick.Index = GuiRack::MidiChannelToggleBaseIndex + 2u;
+	cabledClick.Data = GuiAction::GuiInt{0};
+	rack->OnAction(cabledClick);
+	EXPECT_TRUE(commands.empty());
+	EXPECT_EQ((std::vector<int>{3}), lastAllowedChannels);
+	EXPECT_EQ(1, filterChanges);
+	EXPECT_TRUE(view->ChannelShownActive(2u));
+	rack->OnAction(cabledClick);
+	EXPECT_TRUE(commands.empty());
+	EXPECT_EQ(2, filterChanges);
+	EXPECT_TRUE(lastAllowedChannels.empty());
+	EXPECT_FALSE(view->ChannelShownActive(2u)); // Retained repair geometry does not light a disabled channel.
+	model.ChannelRoutes[2] = {};
+	model.Revision = 6u; view->Update(model, submit);
+	EXPECT_FALSE(view->ChannelShownActive(2u));
+	rack->OnAction(cabledClick);
+	EXPECT_EQ((std::vector<int>{3}), lastAllowedChannels);
+	EXPECT_EQ(3, filterChanges);
+	EXPECT_TRUE(view->ChannelShownActive(2u));
+	EXPECT_TRUE(commands.empty());
+	model.TotalSlots = 1u; model.Slots.resize(1u); view->Update(model, submit);
+	const auto append = view->AppendButton(); ASSERT_TRUE(append); EXPECT_EQ(view, append->Parent());
+	unsigned int visibleFooterButtons = 0u;
+	for (unsigned int index = 0u; const auto child = view->TryGetChild(static_cast<unsigned char>(index)); ++index)
+		if (std::dynamic_pointer_cast<gui::GuiButton>(child) &&
+			!std::dynamic_pointer_cast<gui::GuiToggle>(child) && child->IsVisible()) ++visibleFooterButtons;
+	EXPECT_EQ(1u, visibleFooterButtons);
+	down.Position = {static_cast<int>(append->GetSize().Width / 2u), static_cast<int>(append->GetSize().Height / 2u)};
+	down.Modifiers = base::Action::MODIFIER_NONE;
+	append->OnAction(down); up = down; up.State = actions::TouchAction::TOUCH_UP; append->OnAction(up);
+	ASSERT_EQ(1u, commands.size()); EXPECT_EQ(gui::GuiVstRack::Command::Kind::Append, commands.back().Operation);
+	EXPECT_EQ(model.Revision, commands.back().Revision);
+	plain->DetachGuiOwnershipForRetirement(); rack->DetachGuiOwnershipForRetirement();
+}
+
+TEST(GuiRack, DraggingFromChannelButtonStartsCableAndKeepsItLit)
+{
+	auto params = MakeRackParams(220, 300);
+	params.EnableVstControl = true; params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+	auto rack = std::make_shared<GuiRack>(params); rack->SetPosition({300, 400}); rack->Init();
+	auto view = rack->VstRack(); ASSERT_NE(nullptr, view);
+	gui::GuiVstRack::Model model; model.Editable = true; model.Revision = 1u;
+	view->Update(model, [](auto) {});
+	view->SetChannelsCollapsed(false);
+	std::vector<gui::CableInteraction::Endpoint> endpoints;
+	std::vector<gui::CableInteraction::Cable> cables;
+	view->BuildInteractionGeometry(endpoints, cables); ASSERT_EQ(16u, endpoints.size());
+	const auto point = endpoints[0].Position + utils::Position2d{-20, 0};
+	auto toggle = std::dynamic_pointer_cast<gui::GuiToggle>(view->FindTopmostDescendant(point));
+	ASSERT_NE(nullptr, toggle);
+	actions::TouchAction down; down.Index = 0; down.Touch = actions::TouchAction::TOUCH_MOUSE;
+	down.State = actions::TouchAction::TOUCH_DOWN; down.Position = point;
+	const auto pressed = view->OnAction(down);
+	EXPECT_EQ(view, pressed.ActiveElement.lock());
+	EXPECT_FALSE(view->HasCableDrag());
+	EXPECT_EQ(base::GuiElement::STATE_DOWN, toggle->GetState());
+	actions::TouchMoveAction move; move.Index = 0; move.Touch = actions::TouchAction::TOUCH_MOUSE;
+	move.MouseButtonsDown = 1u; move.Position = point + utils::Position2d{-6, 0};
+	view->OnAction(move);
+	EXPECT_TRUE(view->HasCableDrag());
+	EXPECT_EQ(base::GuiElement::STATE_DOWN, toggle->GetState());
+	auto up = down; up.State = actions::TouchAction::TOUCH_UP; up.Position = move.Position;
+	view->OnAction(up);
+	EXPECT_FALSE(view->HasCableDrag());
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_OFF, toggle->GetToggleState());
+	view->OnAction(down);
+	up.Position = point;
+	view->OnAction(up);
+	EXPECT_EQ(gui::GuiToggleParams::TOGGLE_ON, toggle->GetToggleState());
+}
+
 TEST(GuiRack, OptionalVstControlReservesOnlyMasterSliderSpace)
 {
 	auto params = MakeRackParams(200, 300);
@@ -74,6 +401,21 @@ TEST(GuiRack, OptionalVstControlReservesOnlyMasterSliderSpace)
 	EXPECT_GE(rack->GetMasterSlider()->GetSize().Height, 47u);
 	EXPECT_GE(rack->GetMasterSlider()->GetSize().Width, 64u);
 	EXPECT_LE(rack->GetMasterSlider()->Position().Y + static_cast<int>(rack->GetMasterSlider()->GetSize().Height), static_cast<int>(rack->GetSize().Height));
+
+	params.EnableStationLabel = true;
+	auto stationRack = std::make_shared<GuiRack>(params);
+	stationRack->Init();
+	const auto slider = stationRack->GetMasterSlider();
+	const auto label = stationRack->StationLabel();
+	ASSERT_NE(nullptr, label);
+	EXPECT_EQ(gui::GuiStationLabel::LabelWidth + gui::GuiStationLabel::ButtonGap + gui::GuiStationLabel::ButtonWidth, label->GetSize().Width);
+	EXPECT_NEAR(label->Position().X + gui::GuiStationLabel::LabelWidth / 2.0,
+		slider->Position().X + slider->GetSize().Width / 2.0, 1.0);
+	EXPECT_GT(label->Position().Y, slider->Position().Y + static_cast<int>(slider->GetSize().Height));
+	EXPECT_LE(stationRack->GetVstControl()->Position().Y + static_cast<int>(stationRack->GetVstControl()->GetSize().Height), slider->Position().Y);
+	const auto bin = label->BinPosition({100, 0});
+	EXPECT_EQ(100, bin.X);
+	EXPECT_GE(bin.Y, label->GlobalPosition().Y + 34);
 }
 
 TEST(GuiRack, VstControlIsAbsentUnlessRequested)
@@ -462,29 +804,22 @@ TEST(GuiRack, AddRouteThenClear) {
 
 	rack->AddRoute(0, 0);
 	rack->AddRoute(1, 1);
+	EXPECT_EQ((std::vector<std::pair<unsigned int, unsigned int>>{ {0u, 0u}, {1u, 1u} }), rack->Routes());
+	rack->AddRoute(0, 0);
+	EXPECT_EQ(2u, rack->Routes().size());
 
-	// Routes are delegated to the inner router; clearing should not throw
 	rack->ClearRoutes();
-}
-
-TEST(GuiRack, AddRouteOutOfRange) {
-	// Adding a route with channels that exceed current channel count
-	// should not crash (GuiRouter just stores the pair)
-	auto params = MakeRackParams();
-	params.NumInputChannels = 1;
-	params.NumOutputChannels = 1;
-	auto rack = std::make_shared<GuiRack>(params);
-
-	rack->AddRoute(99, 99);
-	rack->ClearRoutes();
+	EXPECT_TRUE(rack->Routes().empty());
 }
 
 TEST(GuiRack, ClearRoutesOnEmptyRouter) {
 	auto params = MakeRackParams();
 	auto rack = std::make_shared<GuiRack>(params);
 
-	// ClearRoutes on empty should not crash
+	EXPECT_TRUE(rack->Routes().empty());
 	rack->ClearRoutes();
+	rack->ClearRoutes();
+	EXPECT_TRUE(rack->Routes().empty());
 }
 
 // --- Action dispatch tests ---
@@ -614,4 +949,37 @@ TEST(GuiRack, HiddenRackDoesNotProcessActions) {
 	rack->OnAction(action);
 
 	ASSERT_EQ(0, receiver->ActionCount());
+}
+
+TEST(GuiRack, MidiPressAndAppendCannotCrossRevisionOrOwnerChanges)
+{
+ for (const bool ownerChange : {false, true})
+ {
+  auto params = MakeRackParams(220, 300);
+  params.EnableVstRack = true; params.EnableVstRackMidiRouting = true;
+  unsigned int filterChanges = 0u, commands = 0u;
+  params.OnAllowedMidiChannelsChanged = [&](const auto&) { ++filterChanges; };
+  auto rack = std::make_shared<GuiRack>(params); rack->Init();
+  const auto view = rack->VstRack();
+  gui::GuiVstRack::Model model; model.OwnerId = "take";
+  model.OwnerScope = vst::RackMove::Scope::Take; model.Revision = 1u; model.Editable = true;
+  const auto submit = [&](auto) { ++commands; };
+  view->Update(model, submit); view->SetChannelsCollapsed(false);
+  for (const auto index : {GuiRack::MidiChannelToggleBaseIndex, GuiRack::MidiSelectAllIndex, GuiRack::MidiDeselectAllIndex})
+  {
+   const auto button = view->ChannelsPanel()->TryGetChild(static_cast<unsigned char>(index == GuiRack::MidiChannelToggleBaseIndex ? 0u : index)); ASSERT_TRUE(button);
+   actions::TouchAction action; action.Position = {10, 10}; action.State = actions::TouchAction::TOUCH_DOWN;
+   ASSERT_TRUE(button->OnAction(action).IsEaten);
+   if (ownerChange) model.OwnerId += "-next"; else ++model.Revision;
+   view->Update(model, submit);
+   action.State = actions::TouchAction::TOUCH_UP; button->OnAction(action);
+  }
+  const auto append = view->AppendButton(); ASSERT_TRUE(append);
+  actions::TouchAction action; action.Position = {10, 10}; action.State = actions::TouchAction::TOUCH_DOWN;
+  ASSERT_TRUE(append->OnAction(action).IsEaten);
+  if (ownerChange) model.OwnerId += "-next"; else ++model.Revision;
+  view->Update(model, submit);
+  action.State = actions::TouchAction::TOUCH_UP; append->OnAction(action);
+  EXPECT_EQ(0u, filterChanges); EXPECT_EQ(0u, commands);
+ }
 }

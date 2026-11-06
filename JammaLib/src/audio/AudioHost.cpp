@@ -3,6 +3,7 @@
 // while Station/LoopTake/Loop retain entity-specific geometry and phase.
 #include "stdafx.h"
 #include "AudioHost.h"
+#include "LocalMetronomeTiming.h"
 #include <limits>
 #include "../engine/RigSnapshot.h"
 #include "../engine/PerformanceGroupService.h"
@@ -52,6 +53,70 @@ namespace audio
 		return std::nullopt;
 	}
 
+    std::optional<AudioHost::LocalMasterReference> AudioHost::LocalMasterReferenceForSaveAfterReadersStopped() const noexcept
+    {
+        if (_activeNinjamFollowPolicy == ninjam::NinjamLocalFollowPolicy::NoSync || !_localMasterReference.Length)
+            return std::nullopt;
+        return _localMasterReference;
+    }
+
+    void AudioHost::InitialisePlaybackRate(double rate) noexcept
+    {
+        _playbackRate.Jump(PlaybackRate::IsValid(rate) ? rate : 1.0);
+        _playbackRateHistory.Clear();
+        _playbackControlPending = false;
+        _playbackAuthoritySuspended = false;
+        _localMasterReference = {};
+        _retainedNinjamSourceLengthSamps = 0u;
+        _lastAppliedTimingReceiptSequence.store(0u, std::memory_order_release);
+        _unsupportedRemoteRate = false;
+        PublishPlaybackRateReceipt();
+    }
+
+    void AudioHost::PublishPlaybackRateReceipt(const utils::Timer* clock, unsigned sampleRate) noexcept
+    {
+        _rateReceiptSequence.fetch_add(1u, std::memory_order_seq_cst);
+        _rateReceiptTarget.store(_playbackControlPending ? _pendingPlaybackTarget : _playbackRate.Target(), std::memory_order_seq_cst);
+        _rateReceiptApplied.store(_playbackRate.Current(), std::memory_order_seq_cst);
+        _rateReceiptRevision.store(_playbackRate.Revision(), std::memory_order_seq_cst);
+        _rateReceiptFollowing.store(!_playbackAuthoritySuspended && _activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync, std::memory_order_seq_cst);
+        _rateReceiptUnsupported.store(_unsupportedRemoteRate, std::memory_order_seq_cst);
+        _rateReceiptAligning.store(_playbackAligning, std::memory_order_seq_cst);
+        _rateReceiptPending.store(_playbackControlPending, std::memory_order_seq_cst);
+        _rateReceiptAuthorityVersion.store(_appliedNinjamTiming.Version, std::memory_order_seq_cst);
+        _rateReceiptEpoch.store(_appliedNinjamTiming.SessionEpoch, std::memory_order_seq_cst);
+        const auto length = clock ? clock->SeedSourceLength() : 0u;
+        const auto bpi = clock ? clock->MasterBeatsPerInterval() : 0u;
+        const auto reference = clock ? clock->MasterRecordingPlaybackRate() : 1.0;
+        const bool following = _activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync;
+        const auto tempo = length && bpi && sampleRate && reference > 0.0
+            ? 60.0 * sampleRate * bpi / length * (following ? 1.0 : _playbackRate.Current() / reference) : 0.0;
+        _rateReceiptMasterLength.store(length, std::memory_order_seq_cst);
+        _rateReceiptGrain.store(clock ? clock->QuantiseSamps() : 0u, std::memory_order_seq_cst);
+        _rateReceiptFullBpi.store(bpi, std::memory_order_seq_cst);
+        _rateReceiptTempo.store(tempo, std::memory_order_seq_cst);
+        _rateReceiptMasterRevision.store(_localMasterActivatedVersion.load(std::memory_order_acquire), std::memory_order_seq_cst);
+        _rateReceiptSequence.fetch_add(1u, std::memory_order_seq_cst);
+    }
+
+    std::optional<AudioHost::PlaybackRateReceipt> AudioHost::ObservePlaybackRate() const noexcept
+    {
+        for (unsigned int attempt = 0u; attempt < 4u; ++attempt)
+        {
+            const auto before = _rateReceiptSequence.load(std::memory_order_seq_cst);
+            if (before & 1u) continue;
+            const PlaybackRateReceipt value{_rateReceiptTarget.load(std::memory_order_seq_cst),
+                _rateReceiptApplied.load(std::memory_order_seq_cst), _rateReceiptRevision.load(std::memory_order_seq_cst),
+                _rateReceiptFollowing.load(std::memory_order_seq_cst), _rateReceiptUnsupported.load(std::memory_order_seq_cst), _rateReceiptAligning.load(std::memory_order_seq_cst),
+                _rateReceiptAuthorityVersion.load(std::memory_order_seq_cst), _rateReceiptEpoch.load(std::memory_order_seq_cst),
+                _rateReceiptMasterLength.load(std::memory_order_seq_cst), _rateReceiptGrain.load(std::memory_order_seq_cst),
+                _rateReceiptFullBpi.load(std::memory_order_seq_cst), _rateReceiptTempo.load(std::memory_order_seq_cst),
+                _rateReceiptMasterRevision.load(std::memory_order_seq_cst), _rateReceiptPending.load(std::memory_order_seq_cst)};
+            if (before == _rateReceiptSequence.load(std::memory_order_seq_cst)) return value;
+        }
+        return std::nullopt;
+    }
+
 	void AudioHost::PublishLocalTransportOffsetLoopFrac(double normalizedLoopFrac) noexcept
 	{
 		_localTransportOffsetLoopFracMailbox.Publish(normalizedLoopFrac);
@@ -60,12 +125,14 @@ namespace audio
 	std::uint64_t AudioHost::LocalMasterTimingMailbox::Publish(
 		const LocalMasterTimingRequest& request) noexcept
 	{
-		const auto writing = _sequence.fetch_add(1u, std::memory_order_seq_cst) + 1u;
+		if (!CanPublish()) return 0u;
+        const auto writing = _sequence.fetch_add(1u, std::memory_order_seq_cst) + 1u;
 		_seedSamps.store(request.SeedSamps, std::memory_order_seq_cst);
 		_masterLengthSamps.store(request.MasterLengthSamps, std::memory_order_seq_cst);
 		_type.store(request.Type, std::memory_order_seq_cst);
 		_targetTake.store(request.TargetTake, std::memory_order_seq_cst);
 		_targetLoop.store(request.TargetLoop, std::memory_order_seq_cst);
+        _beatsPerInterval.store(request.BeatsPerInterval, std::memory_order_seq_cst);
 		_sequence.store(writing + 1u, std::memory_order_seq_cst);
 		return writing + 1u;
 	}
@@ -85,6 +152,7 @@ namespace audio
 			request.Type = _type.load(std::memory_order_seq_cst);
 			request.TargetTake = _targetTake.load(std::memory_order_seq_cst);
 			request.TargetLoop = _targetLoop.load(std::memory_order_seq_cst);
+            request.BeatsPerInterval = _beatsPerInterval.load(std::memory_order_seq_cst);
 			if (before == _sequence.load(std::memory_order_seq_cst))
 			{
 				return request;
@@ -95,11 +163,27 @@ namespace audio
 
 	std::uint64_t AudioHost::PublishLocalMasterTiming(unsigned int seedSamps,
 		std::uint32_t masterLengthSamps, utils::Timer::QuantisationType type,
-		const engine::LoopTake* targetTake, const engine::Loop* targetLoop) noexcept
+		const engine::LoopTake* targetTake, const engine::Loop* targetLoop, unsigned int beatsPerInterval) noexcept
 	{
-		return _localMasterTimingMailbox.Publish({ 0u, seedSamps, masterLengthSamps,
-			type, targetTake, targetLoop });
+		const auto version = _localMasterTimingMailbox.Publish({0u,seedSamps,masterLengthSamps,type,targetTake,targetLoop,beatsPerInterval});
+        if(version) _localMasterActivationGate.store(version << 2u,std::memory_order_seq_cst);
+        return version;
 	}
+
+    bool AudioHost::TryClaimLocalMasterActivation(std::uint64_t version) noexcept
+    {
+        auto expected=version << 2u;
+        return _localMasterActivationGate.compare_exchange_strong(expected,(version << 2u)|1u,std::memory_order_seq_cst);
+    }
+
+    bool AudioHost::CancelLocalMasterTiming(std::uint64_t version) noexcept
+    {
+        auto expected=version << 2u;
+        if (!_localMasterActivationGate.compare_exchange_strong(expected,(version << 2u)|3u,std::memory_order_seq_cst))
+            return expected == ((version << 2u)|3u);
+        _localMasterCancelledVersion.store(version,std::memory_order_seq_cst);
+        return true;
+    }
 
 	std::optional<AudioHost::LocalMasterTimingReceipt>
 	AudioHost::LastPreparedLocalMasterTiming() const noexcept
@@ -117,6 +201,17 @@ namespace audio
 				return receipt.Version == 0u ? std::nullopt : std::optional{ receipt };
 		}
 		return std::nullopt;
+	}
+
+	void AudioHost::AdoptLocalSourceMasterAtAudioBoundary(
+		const std::vector<std::shared_ptr<engine::Station>>& stations, unsigned long length) noexcept
+	{
+		_retainedNinjamSourceLengthSamps = length;
+		_syncPhaseMap = {};
+		_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+		_captureMappedSourceAnchorsAfterOffset = false;
+		for (const auto& station : stations)
+			if (station && !station->IsRemote()) station->ResetTimingEpoch();
 	}
 
 	void AudioHost::ApplyLocalMasterTimingAtAudioBoundary(
@@ -165,6 +260,19 @@ namespace audio
 					prepared.TargetLoop, prepared.MasterLengthSamps))
 				targetPublished = true;
 		if (!targetPublished) return;
+		if (_playbackAuthoritySuspended) return;
+        if (_rateAdmissionFrames && _playbackRateHistory.Capacity())
+        {
+            const auto deviceStart = _audioSampleCounter.load(std::memory_order_relaxed);
+            const auto candidate = _playbackRate.DescribeBlock(_rateAdmissionFrames);
+            if (!_playbackRateHistory.CanAppend(deviceStart, candidate, false)) return;
+            const bool remote = _activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync;
+            const auto remoteRate = remote && _retainedNinjamSourceLengthSamps && _appliedNinjamTiming.RemoteMasterIntervalLengthSamps
+                ? static_cast<double>(_retainedNinjamSourceLengthSamps) / _appliedNinjamTiming.RemoteMasterIntervalLengthSamps : 1.0;
+            for (const auto& station : stations)
+                if (station && !station->IsRemote()
+                    && !station->CanBeginPlaybackRateBlock(candidate, deviceStart, remote, remoteRate, false)) return;
+        }
 		// Preflight the exact published playback membership before changing any grid.
 		bool claimed = true;
 		for (const auto& station : stations)
@@ -179,19 +287,32 @@ namespace audio
 			_localMasterPreparationRetryVersion.store(prepared.Version, std::memory_order_seq_cst);
 			return;
 		}
-		const auto elapsed = timingClock->SceneSamplePos() - _preparedLocalMasterSceneSample;
-		const auto phase = static_cast<std::uint32_t>((_preparedLocalMasterPhase + elapsed)
-			% prepared.MasterLengthSamps);
+        if (!TryClaimLocalMasterActivation(prepared.Version))
+        {
+            for (const auto& station:stations) if(station && !station->IsRemote()) station->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
+            return;
+        }
+        std::uint32_t phase = _preparedLocalMasterPhase;
+        for (const auto& station : stations)
+            if (station && !station->IsRemote())
+                if (const auto current = station->MasterPhaseAtAudioBoundary(prepared.TargetTake, prepared.TargetLoop, prepared.MasterLengthSamps))
+                { phase = *current; break; }
 		for (const auto& station : stations)
 			if (station && !station->IsRemote() && !station->MembershipRemoving()) station->ActivatePreparedMidiQuantisationAtAudioBoundary();
 		timingClock->SetQuantisation(prepared.SeedSamps, prepared.Type);
 		timingClock->SetSeedSourceLength(prepared.MasterLengthSamps);
+        if (prepared.BeatsPerInterval) timingClock->SetMasterBeatsPerInterval(prepared.BeatsPerInterval);
+		timingClock->SetMasterRecordingPlaybackRate(prepared.TargetTake ? prepared.TargetTake->RecordingPlaybackRate() : _playbackRate.Current());
+		AdoptLocalSourceMasterAtAudioBoundary(stations, prepared.MasterLengthSamps);
 		timingClock->InitialiseAbsoluteSamplePos(phase);
 		for (const auto& station : stations)
 			if (station && !station->IsRemote())
 				station->ReleasePreparedMidiQuantisationClaimAtAudioBoundary();
-		_localMasterActivatedVersion.store(prepared.Version, std::memory_order_seq_cst);
-		_preparedLocalMasterTiming.Version = 0u;
+        const auto activatedVersion=prepared.Version;
+        _localMasterActivationGate.store((activatedVersion << 2u)|2u,std::memory_order_seq_cst);
+        _preparedLocalMasterTiming.Version=0u;
+        // Final receipt: after this store the owner may publish the next gate.
+        _localMasterActivatedVersion.store(activatedVersion,std::memory_order_seq_cst);
 	}
 
 	AudioHost::AudioHost(io::UserConfig userConfig) :
@@ -297,6 +418,8 @@ namespace audio
 			return false;
 		}
 		_audioDevice = std::move(*dev);
+		_backendResetObserved = false;
+		_deviceChangeUntil = {};
 		_backendLifetimeUncertain = _asioOpenReport.TeardownUncertain;
 		if (_backendLifetimeUncertain) return false;
 		const auto actual = _audioDevice->GetAudioStreamParams();
@@ -326,12 +449,19 @@ namespace audio
 		_callbackOutputChannels.store(audioStreamParams.NumOutputChannels, std::memory_order_release);
 		_callbackContext->OutputChannels.store(audioStreamParams.NumOutputChannels, std::memory_order_release);
 		_ninjamMetronome.Configure(audioStreamParams.SampleRate);
+		_playbackRate.Configure(audioStreamParams.SampleRate);
 
 		auto inLatency = (0u == audioStreamParams.InputLatency) ?
 			_userConfig.Audio.LatencyIn :
 			audioStreamParams.InputLatency;
 
 		const auto reserve = io::UserConfig::TriggerHistorySamples(audioStreamParams.SampleRate);
+        // One descriptor per callback, sized for the entire physical pre-delay window
+        // even at one-frame callbacks. Storage is prepared with callback admission closed.
+        _rateHistoryWindow = (std::max)(static_cast<std::uint64_t>(audioStreamParams.SampleRate) * 2u, static_cast<std::uint64_t>(reserve.value_or(0u)) + inLatency + constants::MaxLoopFadeSamps) + 128u;
+        _playbackRateHistory.Prepare(static_cast<std::size_t>(_rateHistoryWindow + 2u));
+        _playbackControlPending = false;
+        _playbackAuthoritySuspended = false;
 		const auto outputLatency = audioStreamParams.OutputLatency != 0u ? audioStreamParams.OutputLatency : _userConfig.Audio.LatencyOut;
 		if (!reserve || static_cast<std::uint64_t>((std::max)(inLatency,
 			constants::MaxLoopFadeSamps + reserve.value_or(0u))) + outputLatency >
@@ -353,6 +483,7 @@ namespace audio
 				{
 					station->SetupBuffers(audioStreamParams.BufSize);
 					station->SetSampleRate(static_cast<float>(audioStreamParams.SampleRate));
+                    station->ResetPlaybackRateHistoryForDevice(audioStreamParams.SampleRate);
 					station->SetNumAdcChannels(audioStreamParams.NumInputChannels);
 					if (!station->ReconfigureVstFormat(static_cast<float>(audioStreamParams.SampleRate), audioStreamParams.BufSize))
 						throw std::runtime_error("Plugin audio format transition failed");
@@ -414,6 +545,7 @@ namespace audio
 	{
 		std::scoped_lock lock(_audioMutex);
 		error.clear();
+		if (_backendResetObserved) { error = "Audio device reset is awaiting reconciliation"; return false; }
 		if (_backendLifetimeUncertain && !_audioDevice) { error = "Backend teardown is unconfirmed; restart the application to recover"; return false; }
 		state.AdmissionWasOpen = (_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) == 0u;
 		state.WasRunning = _audioDevice && _audioDevice->IsRunning();
@@ -432,6 +564,7 @@ namespace audio
 	{
 		std::scoped_lock lock(_audioMutex);
 		error.clear();
+		if (_backendResetObserved) { error = "Audio device unavailable after driver reset"; return false; }
 		if (_backendLifetimeUncertain) { error = "Backend lifetime is uncertain; audio remains suspended"; return false; }
 		if (!CallbackAdmissionIsQuiescent()) { error = "Audio callback boundary is not quiescent"; return false; }
 		if (state.WasRunning && (!_audioDevice ||
@@ -449,6 +582,74 @@ namespace audio
 		}
 		if (state.AdmissionWasOpen && !ReopenCallbackAdmission()) { error = "Callback admission remains blocked after lifecycle failure"; return false; }
 		return true;
+	}
+
+	bool AudioHost::HasOpenStream()
+	{
+		std::scoped_lock lock(_audioMutex);
+		return _audioDevice && _audioDevice->IsOpen();
+	}
+
+	bool AudioHost::ObserveBackendReset(bool deviceChange, std::chrono::steady_clock::time_point now)
+	{
+		std::scoped_lock lock(_audioMutex);
+		if (_backendResetObserved || !_audioDevice) return false;
+		const auto heartbeat = AudioCallbackHeartbeat();
+		if (deviceChange && _audioDevice->IsRunning())
+		{
+			const auto params = _audioDevice->GetAudioStreamParams();
+			const auto threeBlocksMs = params.SampleRate ?
+				(static_cast<std::uint64_t>(params.BufSize) * 3000u + params.SampleRate - 1u) / params.SampleRate : 0u;
+			_deviceStallThreshold = std::chrono::milliseconds((std::max)(std::uint64_t{500}, threeBlocksMs));
+			// OS change is only a hint. Observe callback progress for a bounded
+			// interval; do not enumerate or probe a driver while its stream is open.
+			if (_deviceChangeUntil == std::chrono::steady_clock::time_point{} || now >= _deviceChangeUntil)
+			{
+				_lastDeviceHeartbeatAt = now;
+				_lastDeviceHeartbeat = heartbeat;
+			}
+			_deviceChangeUntil = now + _deviceStallThreshold + std::chrono::seconds(2);
+		}
+		if (heartbeat != _lastDeviceHeartbeat)
+		{
+			_lastDeviceHeartbeat = heartbeat;
+			_lastDeviceHeartbeatAt = now;
+		}
+		const bool admissionOpen = (_callbackAdmission.load(std::memory_order_acquire) & _CallbackAdmissionClosed) == 0u;
+		if (!admissionOpen) _lastDeviceHeartbeatAt = now; // Engine gating is not device loss.
+		const bool stalledAfterChange = _deviceChangeUntil != std::chrono::steady_clock::time_point{} &&
+			_audioDevice->IsRunning() && admissionOpen &&
+			now - _lastDeviceHeartbeatAt >= _deviceStallThreshold;
+		if (now >= _deviceChangeUntil) _deviceChangeUntil = {};
+		if (!_audioDevice->ResetRequested() && !stalledAfterChange) return false;
+		_backendResetObserved = true;
+		_deviceChangeUntil = {};
+		CloseCallbackAdmission();
+		_callbackRecoveryBlocked.store(true, std::memory_order_release);
+		return true;
+	}
+
+	bool AudioHost::SuspendResetStream(std::string& error)
+	{
+		std::scoped_lock lock(_audioMutex);
+		CloseCallbackAdmission();
+		if (!CallbackAdmissionIsQuiescent()) { error = "Waiting for audio callback to leave the reset boundary"; return false; }
+		// Admission protects engine state even if the driver cannot confirm stop.
+		// Retain topology/capture snapshots for the existing source-loss handshake.
+		const bool stopped = !_audioDevice || _audioDevice->TryStop();
+		_publishedStreamParams.store({}, std::memory_order_release);
+		_backendLifetimeUncertain = !stopped;
+		_callbackRecoveryBlocked.store(true, std::memory_order_release);
+		if (stopped) { _audioDevice.reset(); _backendResetObserved = false; }
+		else error = "Audio backend stop failed; restart the application to recover safely";
+		return stopped;
+	}
+
+	bool AudioHost::HasMatchingRunningStream(const io::UserConfig::AudioSettings& request)
+	{
+		std::scoped_lock lock(_audioMutex);
+		return _audioDevice && _audioDevice->IsRunning() &&
+			!_callbackRecoveryBlocked.load(std::memory_order_acquire) && _userConfig.Audio == request;
 	}
 
 	bool AudioHost::Reconfigure(const io::UserConfig::AudioSettings& settings, std::string& error)
@@ -495,6 +696,8 @@ namespace audio
 		}
 		_audioDevice.reset();
 		_backendLifetimeUncertain = false;
+		_backendResetObserved = false;
+		_deviceChangeUntil = {};
 		_publishedStreamParams.store({}, std::memory_order_release);
 		const auto discovered = AudioDevice::DiscoverAsio();
 		if (discovered.EnumerationError.empty()) _asioInventory = discovered;
@@ -567,6 +770,7 @@ namespace audio
 		{
 			if (const auto clock = _timingClock.load()) { clock->Clear(); clock->ResetMusicalTransport(); }
 			_syncPhaseMap = {};
+			_retainedNinjamSourceLengthSamps = 0ul;
 			_activeNinjamFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
 			_localTransportOffsetMasterLength = 0ul;
 			_localTransportOffsetTargetSamps = 0;
@@ -746,7 +950,9 @@ std::optional<ninjam::NinjamDesiredTimingReceipt> AudioHost::LastAppliedDesiredT
 			_lastAppliedLocalSourceCorrectionSamps.load(std::memory_order_relaxed),
 			_lastAppliedSourceLengthSamps.load(std::memory_order_relaxed),
 			_lastAppliedRemoteLengthSamps.load(std::memory_order_relaxed),
-			_lastAppliedSourceCoordinateSamps.load(std::memory_order_relaxed)
+			_lastAppliedSourceCoordinateSamps.load(std::memory_order_relaxed),
+            _lastAppliedGridBpi.load(std::memory_order_relaxed), _lastAppliedGridTempo.load(std::memory_order_relaxed),
+            _lastAppliedGridOrigin.load(std::memory_order_relaxed), _lastAppliedPreserveMaster.load(std::memory_order_relaxed)
 		};
 		if (before == _lastAppliedTimingReceiptSequence.load(std::memory_order_acquire))
 			return receipt;
@@ -776,9 +982,9 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 	_mappedSourceHandledAtCommandBoundary = false;
 	if (!desiredValue.has_value() || desiredValue->Version == 0u)
 		return false;
-	const auto& desired = desiredValue.value();
+	auto desired = desiredValue.value();
 	const auto epochChanged = desired.SessionEpoch != _appliedNinjamTiming.SessionEpoch;
-	if (!epochChanged && desired.Version <= _appliedNinjamTiming.Version)
+	if (!epochChanged && desired.Version <= _appliedNinjamTiming.Version && !_playbackControlPending)
 		return false;
 	if (_appliedNinjamTiming.SessionEpoch != 0u
 		&& desired.SessionEpoch < _appliedNinjamTiming.SessionEpoch)
@@ -787,9 +993,89 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 		&& desired.Generation <= _appliedNinjamTiming.Generation)
 		return false;
 
+    if (desired.PlaybackRateRevision > _playbackRate.Revision()
+        || desired.LocalFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync) _unsupportedRemoteRate = false;
+    if (desired.LocalFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync && stations)
+    {
+        const auto sourceLength = desired.SourceMasterIntervalLengthSamps ? desired.SourceMasterIntervalLengthSamps
+            : (_retainedNinjamSourceLengthSamps ? _retainedNinjamSourceLengthSamps : timingClock ? timingClock->SeedSourceLength() : 0ul);
+        for (const auto& station : *stations)
+        {
+            if (!station || station->IsRemote()) continue;
+            const auto supported = station->CanApplyRemotePlaybackRate(desired.RemoteMasterIntervalLengthSamps, sourceLength);
+            if (!supported) return false; // Retry the complete publication after a failed lease.
+            if (!*supported)
+            {
+                _unsupportedRemoteRate = true;
+                desired.LocalFollowPolicy = ninjam::NinjamLocalFollowPolicy::NoSync;
+                desired.Intent = ninjam::NinjamDesiredTimingIntent::NoSync;
+                desired.HasRemoteTiming = false;
+                break;
+            }
+        }
+    }
+    // Reserve trajectory metadata before accepting a control. The mailbox keeps
+    // only the latest intent; a pinned capture never forces us to overwrite it.
+    if (_rateAdmissionFrames && _playbackRateHistory.Capacity())
+    {
+        auto candidate = _playbackRate.DescribeBlock(_rateAdmissionFrames);
+        candidate.TargetRate = desired.PlaybackRate;
+        candidate.Revision = desired.PlaybackRateRevision;
+        if (timingClock)
+        {
+            candidate.MasterPositionWhole = timingClock->AbsoluteSamplePos();
+            candidate.MasterPositionFraction = timingClock->MusicalFractionAtAudioBoundary();
+            candidate.MasterRecordingRate = timingClock->MasterRecordingPlaybackRate();
+            candidate.MasterLength = timingClock->SeedSourceLength();
+        }
+        const bool remote = desired.HasRemoteTiming && desired.LocalFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync;
+        candidate.RemoteIntervalLengthSamps = remote ? desired.RemoteMasterIntervalLengthSamps : 0u;
+        candidate.RemoteBpi = remote ? desired.BeatsPerInterval : 0u;
+        // A remote publication can change phase as well as slope. Its complete
+        // post-application descriptor needs a new slot even at unchanged BPM.
+        bool admitted = _playbackRateHistory.CanAppend(blockStartSample, candidate, !remote);
+        const auto sourceLength = desired.SourceMasterIntervalLengthSamps ? desired.SourceMasterIntervalLengthSamps : _retainedNinjamSourceLengthSamps;
+        const auto remoteRate = remote && sourceLength && desired.RemoteMasterIntervalLengthSamps
+            ? static_cast<double>(sourceLength) / desired.RemoteMasterIntervalLengthSamps : 1.0;
+        if (stations)
+            for (const auto& station : *stations)
+                if (station && !station->IsRemote()) admitted = station->CanBeginPlaybackRateBlock(candidate, blockStartSample, remote, remoteRate, !remote) && admitted;
+        _playbackControlPending = !admitted;
+        _pendingPlaybackTarget = desired.PlaybackRate;
+        if (!admitted)
+        {
+            // The serialized intent has already revoked remote authority. Keep
+            // its last admitted projection until history can describe the whole
+            // detach, without accepting new remote discipline or losing capture.
+            if (!remote) _playbackAuthoritySuspended = true;
+            return false;
+        }
+        _playbackAuthoritySuspended = false;
+    }
 	const auto noSync = desired.LocalFollowPolicy == ninjam::NinjamLocalFollowPolicy::NoSync
 		|| !desired.HasRemoteTiming;
-	const auto resetAuthority = epochChanged || noSync;
+    if (desired.PlaybackRateRevision > _playbackRate.Revision())
+        _playbackRate.SetTarget(desired.PlaybackRate, desired.PlaybackRateRevision);
+    if (!noSync) _playbackRate.Jump(_playbackRate.Target(), _playbackRate.Revision());
+	const auto followChanged = desired.FollowRevision != _appliedNinjamTiming.FollowRevision;
+	const auto resetAuthority = epochChanged || followChanged || noSync;
+    const bool wasFollowing = _activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync;
+    if (!noSync && !wasFollowing && timingClock)
+        _localMasterReference = { timingClock->SeedSourceLength(), timingClock->QuantiseSamps(), timingClock->MasterBeatsPerInterval(),
+            timingClock->Quantisation(), timingClock->MasterRecordingPlaybackRate() };
+    if (noSync && wasFollowing && timingClock && _localMasterReference.Length)
+    {
+        const auto previousLength = timingClock->SeedSourceLength();
+        const auto phase = previousLength ? static_cast<std::uint64_t>(timingClock->SampOffset()) * _localMasterReference.Length / previousLength : 0u;
+        const auto count = timingClock->LoopCount();
+        timingClock->SetQuantisation(_localMasterReference.Grain, _localMasterReference.Quantisation);
+        timingClock->SetSeedSourceLength(_localMasterReference.Length);
+        timingClock->SetMasterBeatsPerInterval(_localMasterReference.Bpi);
+        timingClock->SetMasterRecordingPlaybackRate(_localMasterReference.RecordingRate);
+        timingClock->InitialiseAbsoluteSamplePos(count * _localMasterReference.Length + phase);
+    }
+	if (!noSync && desired.SourceMasterIntervalLengthSamps > 0ul)
+		_retainedNinjamSourceLengthSamps = desired.SourceMasterIntervalLengthSamps;
 	if (resetAuthority)
 	{
 		if (stations)
@@ -813,7 +1099,8 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 	if (!noSync && timingClock && desired.RemoteMasterIntervalLengthSamps > 0ul
 		&& desired.HasRemotePhaseDeviceSample)
 	{
-		const auto geometryChanged = !_appliedNinjamTiming.HasRemoteTiming
+		const auto geometryChanged = !_syncPhaseMap.IsActive()
+			|| !_appliedNinjamTiming.HasRemoteTiming
 			|| desired.RemoteMasterIntervalLengthSamps != _appliedNinjamTiming.RemoteMasterIntervalLengthSamps
 			|| desired.RemoteGridStepSamps != _appliedNinjamTiming.RemoteGridStepSamps
 			|| desired.BeatsPerInterval != _appliedNinjamTiming.BeatsPerInterval
@@ -840,11 +1127,22 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 		{
 			timerCommand.Type = utils::Timer::CommandType::ReplaceTiming;
 			timerCommand.PhaseDeltaSamps = static_cast<long long>(replacement.RemoteMasterPhaseSamps);
-			if (_syncPhaseMap.SourceLengthSamps == 0ul)
+			// Before any local take exists, there is no recording ruler to preserve.
+			// Use the retained audio membership, including takes still recording.
+			const bool hasLocalContent = !stations || std::any_of(stations->begin(), stations->end(),
+				[](const auto& station)
+				{
+					return station && !station->IsRemote() && station->HasTimingContentAtAudioBoundary();
+				});
+			if (!hasLocalContent)
+				_syncPhaseMap.SourceLengthSamps = desired.RemoteMasterIntervalLengthSamps;
+			else if (_syncPhaseMap.SourceLengthSamps == 0ul)
 			{
-				_syncPhaseMap.SourceLengthSamps = previousMasterLength > 0ul
-					? previousMasterLength : desired.RemoteMasterIntervalLengthSamps;
+				_syncPhaseMap.SourceLengthSamps = _retainedNinjamSourceLengthSamps > 0ul
+					? _retainedNinjamSourceLengthSamps : previousMasterLength > 0ul
+						? previousMasterLength : desired.RemoteMasterIntervalLengthSamps;
 			}
+			_retainedNinjamSourceLengthSamps = _syncPhaseMap.SourceLengthSamps;
 			const auto sourceLength = _syncPhaseMap.SourceLengthSamps;
 			if (sourceLength > 0ul)
 			{
@@ -852,10 +1150,8 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 					? static_cast<unsigned long>(ninjam::PositiveModulo(
 						mappedSourceBefore.value(), sourceLength))
 					: static_cast<unsigned long>(previousRemotePhase) % sourceLength;
-				const auto sourceAfter = ninjam::SourcePhaseAtRemotePhase(replacement.RemoteMasterPhaseSamps,
-					sourceLength, desired.RemoteMasterIntervalLengthSamps);
-				localSourceCorrectionSamps = ninjam::SignedCircularDifference(static_cast<unsigned int>(sourceBefore),
-					static_cast<unsigned int>(sourceAfter), static_cast<unsigned int>(sourceLength));
+				localSourceCorrectionSamps = ninjam::SourceCorrectionAtRemotePhase(sourceBefore,
+					sourceLength, replacement.RemoteMasterPhaseSamps, desired.RemoteMasterIntervalLengthSamps);
 			}
 		}
 		else
@@ -876,20 +1172,20 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 			timingClock->ReanchorMusicalTransportCurrentGeometry(sceneCoordinate,
 				replacement.RemoteMasterPhaseSamps, sampleRate);
 		timingClock->ApplyCommand(timerCommand);
+        timingClock->SetMasterBeatsPerInterval(desired.BeatsPerInterval);
 		if (!geometryChanged && mappedSourceBefore.has_value())
 		{
 			const auto sourceBefore = static_cast<unsigned long>(ninjam::PositiveModulo(
 				mappedSourceBefore.value(), _syncPhaseMap.SourceLengthSamps));
-			const auto sourceAfter = ninjam::SourcePhaseAtRemotePhase(timingClock->SampOffset(),
-				_syncPhaseMap.SourceLengthSamps, _syncPhaseMap.RemoteLengthSamps);
-			localSourceCorrectionSamps = ninjam::SignedCircularDifference(static_cast<unsigned int>(sourceBefore),
-				static_cast<unsigned int>(sourceAfter), static_cast<unsigned int>(_syncPhaseMap.SourceLengthSamps));
+			localSourceCorrectionSamps = ninjam::SourceCorrectionAtRemotePhase(sourceBefore,
+				_syncPhaseMap.SourceLengthSamps, timingClock->SampOffset(), _syncPhaseMap.RemoteLengthSamps);
 		}
 
 		if (stations)
 			for (const auto& station : *stations)
-				if (station && !station->IsRemote()) station->ApplyAcceptedTimingCorrection(
-					localSourceCorrectionSamps, desired.Generation, geometryChanged || !hadSyncPhaseMap);
+				if (station && !station->IsRemote()) station->ApplyRemoteTiming({ sceneCoordinate,
+					desired.RemoteMasterIntervalLengthSamps, timingClock->SampOffset(), previousMasterLength,
+					previousRemotePhase, desired.Generation, localSourceCorrectionSamps, geometryChanged || !hadSyncPhaseMap });
 
 		if (geometryChanged)
 			_syncPhaseMap.RemoteLengthSamps = desired.RemoteMasterIntervalLengthSamps;
@@ -915,6 +1211,10 @@ bool AudioHost::ApplyDesiredTimingAtAudioBoundary(std::uint64_t blockStartSample
 	_lastAppliedSourceLengthSamps.store(_syncPhaseMap.SourceLengthSamps, std::memory_order_relaxed);
 	_lastAppliedRemoteLengthSamps.store(_syncPhaseMap.RemoteLengthSamps, std::memory_order_relaxed);
 	_lastAppliedSourceCoordinateSamps.store(_syncPhaseMap.SourceCoordinateAtOrigin, std::memory_order_relaxed);
+    _lastAppliedGridBpi.store(desired.BeatsPerInterval, std::memory_order_relaxed);
+    _lastAppliedGridTempo.store(desired.TempoBpm, std::memory_order_relaxed);
+    _lastAppliedGridOrigin.store(desired.GridOriginSamps, std::memory_order_relaxed);
+    _lastAppliedPreserveMaster.store(desired.PreserveRecordedMaster, std::memory_order_relaxed);
 	_lastAppliedTimingReceiptSequence.store(writingReceipt + 1u, std::memory_order_release);
 	return true;
 }
@@ -929,7 +1229,7 @@ std::optional<std::int64_t> AudioHost::RestoreMappedSourceAtScene(
 	if (stations)
 		for (const auto& station : *stations)
 			if (station && !station->IsRemote())
-				station->RestoreMappedSourceCoordinate(sourceCoordinate);
+				station->RestoreMappedSourceCoordinate(sourceCoordinate, sceneCoordinateSamps);
 	return sourceCoordinate;
 }
 
@@ -940,7 +1240,7 @@ void AudioHost::CaptureMappedSourceAnchorsAfterOffset(
 		return;
 	for (const auto& station : stations)
 		if (station && !station->IsRemote())
-			station->CaptureMappedSourceAnchors(_syncPhaseMap.SourceCoordinateAtOrigin);
+			station->CaptureMappedSourceAnchors(_syncPhaseMap.SourceCoordinateAtOrigin, _syncPhaseMap.SceneOriginSamps);
 	_captureMappedSourceAnchorsAfterOffset = false;
 }
 
@@ -966,14 +1266,20 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 			_localTransportOffsetMasterLength = masterLength;
 		const auto localTransportOffsetTargetSamps = masterLength == 0ul ? 0 :
 			static_cast<long long>(std::llround(
-				_localTransportOffsetLoopFrac * static_cast<double>(masterLength)));
-		if (localTransportOffsetTargetSamps == _localTransportOffsetTargetSamps)
-			return;
+				-_localTransportOffsetLoopFrac * static_cast<double>(masterLength)));
+		const auto referenceRate = timingClock ? timingClock->MasterRecordingPlaybackRate() : 1.0;
+        if (localTransportOffsetTargetSamps == _localTransportOffsetTargetSamps
+            && _localTransportOffsetTimingVersion == _appliedNinjamTiming.Version
+            && _localTransportOffsetReferenceRate == referenceRate) return;
+        _localTransportOffsetTimingVersion = _appliedNinjamTiming.Version;
+        _localTransportOffsetReferenceRate = referenceRate;
 
 		_localTransportOffsetTargetSamps = localTransportOffsetTargetSamps;
 		for (const auto& station : stations)
 			if (station && !station->IsRemote())
-				station->SetLocalTransportOffsetSamps(localTransportOffsetTargetSamps);
+				station->SetLocalTransportOffsetSamps(localTransportOffsetTargetSamps, referenceRate,
+                        _activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync ? _appliedNinjamTiming.RemoteMasterIntervalLengthSamps : 0ul,
+                        _retainedNinjamSourceLengthSamps);
 	}
 
 	void AudioHost::CloseCallbackAdmission() noexcept
@@ -1011,20 +1317,22 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 	void AudioHost::ApplyPendingGroupMuteAtAudioBoundary() noexcept
 	{
+		auto application = _groupMuteApplication.borrow();
+		ApplyBorrowedGroupMuteAtAudioBoundary(application.get());
+	}
+
+	void AudioHost::ApplyBorrowedGroupMuteAtAudioBoundary(const engine::GroupMuteApplication* application) noexcept
+	{
+		// Caller holds the immutable publication lease for this whole adoption.
+		if (!application || application->Version <= _groupAppliedVersion) return;
+		// Obsolete work is consumed without touching detached members.
+		if (application->TopologyRevision == 0u || (_audioAppliedRigSnapshot &&
+			application->TopologyRevision == _audioAppliedRigSnapshot->TopologyRevision))
 		{
-			auto application = _groupMuteApplication.borrow();
-			if (application && application->Version > _groupAppliedVersion)
-			{
-				// Obsolete work is consumed without touching detached members.
-				if (application->TopologyRevision == 0u || (_audioAppliedRigSnapshot &&
-					application->TopologyRevision == _audioAppliedRigSnapshot->TopologyRevision))
-				{
-					application->ApplyAudio();
-					_groupMuteReceipt.store(application->Version, std::memory_order_release);
-				}
-				_groupAppliedVersion = application->Version;
-			}
+			application->ApplyAudio();
+			_groupMuteReceipt.store(application->Version, std::memory_order_release);
 		}
+		_groupAppliedVersion = application->Version;
 	}
 
 	bool AudioHost::TryEnterCallback() noexcept
@@ -1116,9 +1424,43 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 		ApplyPendingGroupMuteAtAudioBoundary();
 		const auto& stations = stationsSnapshotValue ? *stationsSnapshotValue : _emptyStations;
 		auto* timingClock = _lastAudioTimingClock.get();
-		if (timingClock)
+        auto retainFrom = blockStartSample > _rateHistoryWindow ? blockStartSample - _rateHistoryWindow : 0u;
+        for (const auto& station : stations)
+            if (station && !station->IsRemote()) retainFrom = station->RequiredRateHistoryStart(retainFrom);
+        _playbackRateHistory.RetainFrom(retainFrom);
+        _rateAdmissionFrames = numSamps;
+        bool firstMasterReady = !_playbackAuthoritySuspended;
+        if (_playbackRateHistory.Capacity())
+        {
+            auto candidate = _playbackRate.DescribeBlock(numSamps);
+            const bool remote = _activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync;
+            candidate.RemoteIntervalLengthSamps = remote ? _appliedNinjamTiming.RemoteMasterIntervalLengthSamps : 0u;
+            const auto remoteRate = remote && _retainedNinjamSourceLengthSamps && candidate.RemoteIntervalLengthSamps
+                ? static_cast<double>(_retainedNinjamSourceLengthSamps) / candidate.RemoteIntervalLengthSamps : 1.0;
+            firstMasterReady = firstMasterReady && _playbackRateHistory.CanAppend(blockStartSample, candidate, false);
+            for (const auto& station : stations)
+                if (station && !station->IsRemote()) firstMasterReady = station->CanBeginPlaybackRateBlock(
+                    candidate, blockStartSample, remote, remoteRate, false) && firstMasterReady;
+        }
+		if (timingClock && firstMasterReady)
+		{
+			const auto previousLength = timingClock->SeedSourceLength();
 			for (const auto& station : stations)
 				if (station && !station->IsRemote()) station->ApplyFirstMasterRecordingAtAudioBoundary(*timingClock, blockStartSample);
+			const auto localLength = timingClock->SeedSourceLength();
+			if (localLength > 0ul && localLength != previousLength)
+				AdoptLocalSourceMasterAtAudioBoundary(stations, localLength);
+		}
+        if (_activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync && !_localMasterReference.Length)
+            for (const auto& station : stations)
+                if (station && !station->IsRemote())
+                    if (const auto recorded = station->FirstRecordedMasterReference())
+                    {
+                        _localMasterReference = {recorded->LengthSamps,
+                            static_cast<unsigned int>((recorded->LengthSamps + recorded->Bpi / 2u) / recorded->Bpi),
+                            recorded->Bpi, utils::Timer::QUANTISE_POWER, recorded->RecordingPlaybackRate};
+                        break;
+                    }
 		ApplyLocalMasterTimingAtAudioBoundary(stations, timingClock);
 		ApplyDesiredTimingAtAudioBoundary(blockStartSample, audioStreamParams.SampleRate,
 			stationsSnapshotValue, timingClock);
@@ -1131,15 +1473,64 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 		// speculative capture before the offset is known.
 		CaptureMappedSourceAnchorsAfterOffset(stations);
 
+        auto rateBlock = _playbackRate.DescribeBlock(numSamps);
+        if (timingClock)
+        {
+            rateBlock.MasterPositionWhole = timingClock->AbsoluteSamplePos();
+            rateBlock.MasterPositionFraction = timingClock->MusicalFractionAtAudioBoundary();
+            rateBlock.MasterRecordingRate = timingClock->MasterRecordingPlaybackRate();
+            rateBlock.MasterLength = timingClock->SeedSourceLength();
+        }
+        if (_activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync)
+        {
+            rateBlock.RemoteIntervalLengthSamps = _appliedNinjamTiming.RemoteMasterIntervalLengthSamps;
+            rateBlock.RemoteBpi = _appliedNinjamTiming.BeatsPerInterval;
+        }
+        if (!_playbackRateHistory.Append(blockStartSample, rateBlock))
+        {
+            const auto cutoff = blockStartSample > _rateHistoryWindow ? blockStartSample - _rateHistoryWindow : 0u;
+            for (const auto& station : stations)
+                if (station && !station->IsRemote()) station->CancelRateCapturesBefore(cutoff);
+            _playbackRateHistory.RetainFrom(cutoff);
+            if (!_playbackRateHistory.Append(blockStartSample, rateBlock))
+            {
+                // A discontinuous device epoch cannot retain capture consumers.
+                for (const auto& station : stations)
+                    if (station && !station->IsRemote()) station->CancelRateCapturesBefore(blockStartSample);
+                _playbackRateHistory.Clear();
+                _playbackRateHistory.Append(blockStartSample, rateBlock);
+            }
+        }
+        const bool followingRemote = _activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync;
+        const auto legacyRemoteRate = followingRemote && _retainedNinjamSourceLengthSamps && _appliedNinjamTiming.RemoteMasterIntervalLengthSamps
+            ? static_cast<double>(_retainedNinjamSourceLengthSamps) / _appliedNinjamTiming.RemoteMasterIntervalLengthSamps : 1.0;
+        for (const auto& station : stations)
+            if (station && !station->IsRemote()) station->BeginPlaybackRateBlock(rateBlock, blockStartSample,
+                &_playbackRateHistory, followingRemote, legacyRemoteRate);
+        if (timingClock)
+            timingClock->SetBlockMusicalAdvance(followingRemote ? static_cast<double>(numSamps)
+                : rateBlock.Advance(numSamps, timingClock->MasterRecordingPlaybackRate()), followingRemote ? 1.0 : rateBlock.RateAt(0u));
+        _playbackRate.Commit(rateBlock);
+        _playbackAligning = false;
+        for (const auto& station : stations)
+            if (station && !station->IsRemote() && !station->PlaybackRateAligned()) _playbackAligning = true;
+        PublishPlaybackRateReceipt(timingClock, audioStreamParams.SampleRate);
+
 		const auto captureInputLatency = audioStreamParams.InputLatency != 0u
 			? audioStreamParams.InputLatency : _userConfig.Audio.LatencyIn;
 		const auto earliestPhysicalInput = static_cast<std::uint32_t>(_captureHistoryEpochDeviceSample)
 			- captureInputLatency;
+		const auto recordingGeometry = timingClock && _activeNinjamFollowPolicy != ninjam::NinjamLocalFollowPolicy::NoSync
+			? engine::RemoteTransportGeometry{ _appliedNinjamTiming.RemoteMasterIntervalLengthSamps,
+				_appliedNinjamTiming.BeatsPerInterval, timingClock->SampOffset(),
+				_appliedNinjamTiming.TempoBpm, _appliedNinjamTiming.Generation }
+			: engine::RemoteTransportGeometry{};
 		for (const auto& station : stations)
 			if (station && !station->IsRemote()) station->BeginCaptureAudioBoundary(blockStartSample,
 				timingClock ? timingClock->SceneSamplePos() : 0u,
-				timingClock ? timingClock->AbsoluteSamplePos() : 0u, earliestPhysicalInput);
+				timingClock ? timingClock->AbsoluteSamplePos() : 0u, earliestPhysicalInput, recordingGeometry);
 
+        audio::DacRenderContext dacContext{};
 		if (nullptr != inBuf)
 		{
 			for (auto channel = 0u; channel < audioStreamParams.NumInputChannels; ++channel)
@@ -1157,6 +1548,10 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 				audioStreamParams.InputLatency;
 
 			_channelMixer->FromAdc(inBuf, audioStreamParams.NumInputChannels, numSamps);
+            dacContext = {_channelMixer->ObserveInputHistory(blockStartSample, numSamps, captureInputLatency, true)};
+            for (const auto& station : stations)
+                if (station && !station->IsRemote()) station->SetCaptureInputHistoryAtAudioBoundary(dacContext.History);
+
 
 			_channelMixer->InitPlay(0u, numSamps);
 			_channelMixer->Source()->SetSourceType(Audible::AUDIOSOURCE_MONITOR);
@@ -1189,8 +1584,7 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 			}
 		}
 
-        const audio::DacRenderContext dacContext{_channelMixer->ObserveInputHistory(
-            blockStartSample, numSamps, captureInputLatency, inBuf != nullptr)};
+        if (!inBuf) dacContext = {_channelMixer->ObserveInputHistory(blockStartSample, numSamps, captureInputLatency, false)};
 		_channelMixer->Source()->EndMultiPlay(numSamps);
 
 		_channelMixer->Sink()->Zero(numSamps, Audible::AUDIOSOURCE_LOOPS);
@@ -1261,8 +1655,6 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 			if (_ninjamController)
 			{
-				const auto metronomeEnabled = _ninjamMetronomeEnabled.load(std::memory_order_acquire);
-
 				const auto remoteTiming = _ninjamController->ProcessExportBlock(outBuf,
 					audioStreamParams.NumOutputChannels,
 					inBuf,
@@ -1271,36 +1663,9 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 					audioStreamParams.SampleRate,
 					blockStartSample);
 				publishNinjamTiming(remoteTiming);
-
-				if (metronomeEnabled && liveTiming.IsValid)
-				{
-					ninjam::NinjamMetronomeTimingInput timingInput;
-					timingInput.IntervalPositionSamps = liveTiming.IntervalPositionSamps;
-					timingInput.IntervalLengthSamps = liveTiming.IntervalLengthSamps;
-					timingInput.Bpm = liveTiming.Bpm;
-					timingInput.Bpi = liveTiming.Bpi;
-					timingInput.DeviceSampleRate = liveTiming.DeviceSampleRate;
-					// Clicks and local loop audio share this DAC buffer and hardware
-					// latency. Advancing only the click would separate their onsets.
-					timingInput.NumFrames = numSamps;
-
-					const auto metronomeTiming = ninjam::NinjamMetronomeTiming::Compute(
-						timingInput, _ninjamMetronomeTimingState);
-					if (metronomeTiming.GenerationReset)
-						_ninjamMetronome.Reset();
-					_ninjamMetronome.Mix(outBuf, audioStreamParams.NumOutputChannels, numSamps, metronomeTiming);
-				}
-				else
-				{
-					_ninjamMetronomeTimingState = {};
-					_ninjamMetronome.Reset();
-				}
 			}
-			else
-			{
-				_ninjamMetronomeTimingState = {};
-				_ninjamMetronome.Reset();
-			}
+			MixMetronome(outBuf, audioStreamParams.NumOutputChannels, numSamps,
+				audioStreamParams.SampleRate, liveTiming, timingClock, rateBlock);
 		}
 		else
 		{
@@ -1348,4 +1713,54 @@ void AudioHost::PublishAudioCallbackProgress(std::uint64_t blockStartSample,
 
 		PublishAudioCallbackProgress(blockStartSample, numSamps);
 	}
+}
+
+void audio::AudioHost::SetMetronomeLevel(float level) noexcept
+{
+	if (std::isfinite(level))
+		_metronomeLevel.store(std::clamp(level, 0.0f, 1.0f), std::memory_order_release);
+}
+
+void audio::AudioHost::MixMetronome(float* output, unsigned int channels, unsigned int frames,
+	unsigned int sampleRate, const ninjam::NinjamTiming& remote, const utils::Timer* clock, const PlaybackRateBlock& rateBlock) noexcept
+{
+	if (_metronomeWasRemote != remote.IsConnected)
+	{
+		_metronomeWasRemote = remote.IsConnected;
+		_ninjamMetronomeTimingState = {};
+		_ninjamMetronome.Reset();
+	}
+	ninjam::NinjamMetronomeTimingInput input;
+	input.NumFrames = frames;
+	input.DeviceSampleRate = sampleRate;
+	if (remote.IsConnected)
+	{
+		// Stay local and Reclock never substitute the local proposal for the server click.
+		if (remote.IsValid)
+		{
+			input.IntervalPositionSamps = remote.IntervalPositionSamps;
+			input.IntervalLengthSamps = remote.IntervalLengthSamps;
+			input.Bpi = remote.Bpi;
+		}
+	}
+	else if (clock)
+	{
+		input.IntervalPositionSamps = clock->SampOffset();
+		input.IntervalLengthSamps = clock->SeedSourceLength();
+		const auto grain = clock->QuantiseSamps();
+		// Local BPI is inferred from the established master/grain, independently
+		// of whether quantisation is enabled. Round once; beat boundaries stay rational.
+		if (input.IntervalLengthSamps)
+			input.Bpi = grain ? std::max(1u, static_cast<unsigned int>(
+				(static_cast<std::uint64_t>(input.IntervalLengthSamps) + grain / 2u) / grain)) : 1u;
+	}
+	if (!_ninjamMetronomeEnabled.load(std::memory_order_acquire))
+		input.IntervalLengthSamps = 0u;
+	const auto timing = !remote.IsConnected && clock && input.IntervalLengthSamps
+        ? LocalMetronomeTiming::Compute(rateBlock, clock->SampOffset() + clock->MusicalFractionAtAudioBoundary(),
+            clock->SeedSourceLength(), clock->MasterBeatsPerInterval(), clock->MasterRecordingPlaybackRate(), _ninjamMetronomeTimingState)
+        : ninjam::NinjamMetronomeTiming::Compute(input, _ninjamMetronomeTimingState);
+	if (!timing.Valid || timing.GenerationReset)
+		_ninjamMetronome.Reset();
+	_ninjamMetronome.Mix(output, channels, frames, timing, MetronomeLevel());
 }

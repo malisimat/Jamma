@@ -17,6 +17,11 @@ namespace io
 	class IoInputSubsystem
 	{
 	public:
+		void RequestTriggerLearn(TriggerBindingLearn::Request request) { _midiRouter.RequestTriggerLearn(request); }
+		void EndTriggerLearn() { _midiRouter.EndTriggerLearn(); }
+		std::shared_ptr<const TriggerBindingLearn::Observation> TriggerLearnObservation() const { return _midiRouter.TriggerLearnObservation(); }
+		void ObserveTriggerLearnKey(unsigned int key) { _midiRouter.ObserveTriggerLearnKey(key); }
+		bool VstCcLearnActive() const { return _midiRouter.VstCcLearnActive(); }
 	    struct PumpResult
 		{
 			bool Activated = false;
@@ -61,7 +66,7 @@ namespace io
 			const audio::AudioStreamParams& streamParams,
 			std::mutex& audioMutex);
 
-		PumpResult PumpSerial(std::vector<std::shared_ptr<engine::Station>>& stations,
+		PumpResult PumpSerial(const std::vector<std::shared_ptr<engine::Station>>& stations,
 			const audio::AudioStreamParams& streamParams,
 			std::mutex& audioMutex);
 

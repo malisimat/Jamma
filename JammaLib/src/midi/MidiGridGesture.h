@@ -18,13 +18,17 @@ namespace midi
 	{
 	public:
 		static constexpr std::uint8_t DefaultCreationVelocity = 100u;
-		enum class Kind { None, Paint, Create, Move, TrimLeft, TrimRight, Velocity, SnappedMove };
+		enum class Kind { None, Paint, Create, Move, TrimLeft, TrimRight, Extend, Velocity, SnappedMove, Edge };
 		struct Point
 		{
 			std::uint32_t Sample = 0u;
 			std::uint8_t Pitch = 60u;
 			double U = 0.0;
 			double V = 0.0;
+			// Pointer picking retains sub-sample precision; event edits stay integer.
+			// Direct loop-sample callers may omit it and keep their existing coordinates.
+			std::optional<double> PickSample = std::nullopt;
+			double EdgePosition() const noexcept { return PickSample.value_or(static_cast<double>(Sample)); }
 		};
 		struct PreviewSpan
 		{
@@ -41,6 +45,28 @@ namespace midi
 		{
 			return BeginCaptured(source, point, Kind::SnappedMove);
 		}
+		bool BeginEdge(const MidiLoop::EditState& source, Point point, double pixelsPerSample)
+		{
+			if (!BeginCaptured(source, point, Kind::Edge, pixelsPerSample)) return false;
+			_pixelsPerSample = pixelsPerSample;
+			_edgePointerOffset = _captured.PointerOffset;
+			_edgeHandle = LoopGridGeometry::NoteEditHandle(point.EdgePosition() + _edgePointerOffset, _start, _end, pixelsPerSample);
+			_edgeFree = true; _edgeStart = _start; _edgeEnd = _end; _edgePointer = EdgePointer(point);
+			_preview.push_back({_start, _end, _pitch, true});
+			return true;
+		}
+		bool IsEdge() const noexcept { return _kind == Kind::Edge; }
+		void SetEdgeFree(bool free)
+		{
+			if (!IsEdge() || free == _edgeFree) return;
+			if (_edgeHandle == LoopGridGeometry::EditHandle::Both)
+				_edgeHandle = static_cast<std::uint64_t>(EdgePointer(_last)) * 2u < static_cast<std::uint64_t>(_start) + _end ? LoopGridGeometry::EditHandle::Left : LoopGridGeometry::EditHandle::Right;
+			_edgeFree = free;
+			if (!_preview.empty()) { _edgeStart = _preview.front().Start; _edgeEnd = _preview.front().End; }
+			_edgePointer = EdgePointer(_last);
+			UpdateEdge(_last); // Alt-up snaps with a stationary pointer; Alt-down only rebases.
+			if (!_preview.empty()) { _edgeStart = _preview.front().Start; _edgeEnd = _preview.front().End; }
+		}
 		// Upward-positive relative device units: 3-unit dead zone, 4 units/value.
 		// Foreground raw input excludes cursor recenter messages and OS acceleration.
 		bool UpdateRelative(double dy)
@@ -49,7 +75,7 @@ namespace midi
 			_velocityDelta = std::clamp(_velocityDelta + dy, -1000000.0, 1000000.0);
 			const auto steps = std::abs(_velocityDelta) < 3.0 ? 0 : static_cast<int>(std::clamp(std::trunc(_velocityDelta / 4.0), -127.0, 127.0));
 			_proposedVelocity = std::clamp(_initialVelocity + steps, 1, 127);
-			_working = _before;
+			// Velocity changes only the captured attack byte; the detached source is already copied at begin.
 			_dirty = _proposedVelocity != _initialVelocity;
 			return MidiEditOperations::SetVelocity(_working, _onIndex, _proposedVelocity);
 		}
@@ -68,6 +94,7 @@ namespace midi
 			_working = source;
 			_anchor = point;
 			_last = point;
+			_pixelsPerSample = pixelsPerSample;
 			_channel = channel;
 			_creationVelocity = velocity;
 			_grid = LoopGridGeometry::Resolve(source.LoopLengthSamps,
@@ -84,12 +111,22 @@ namespace midi
 			const auto hit = PickNote(source, point, pixelsPerSample);
 			if (hit)
 			{
+				const auto displayed = std::find_if(_targets.Notes.begin(), _targets.Notes.end(),
+					[&](const auto& note) { return note.On == hit->Index; });
+				if (displayed != _targets.Notes.end())
+					_captured = {displayed->Start, displayed->End, displayed->Pitch,
+						static_cast<std::size_t>(displayed - _targets.Notes.begin())};
 				_onIndex = hit->Index;
 				_start = hit->Start;
 				_end = hit->End;
 				_pitch = hit->Pitch;
-				_kind = hit->Zone == LoopGridGeometry::HitZone::LeftEdge ? Kind::TrimLeft
-					: hit->Zone == LoopGridGeometry::HitZone::RightEdge ? Kind::TrimRight : Kind::Move;
+				switch (hit->Handle)
+				{
+				case LoopGridGeometry::EditHandle::Left: _kind = Kind::TrimLeft; break;
+				case LoopGridGeometry::EditHandle::Right: _kind = Kind::TrimRight; break;
+				case LoopGridGeometry::EditHandle::Both: _kind = Kind::Extend; break;
+				default: _kind = Kind::Move; break;
+				}
 				_preview.push_back({ _start, _end, _pitch, true });
 				return true;
 			}
@@ -107,7 +144,11 @@ namespace midi
 		bool Update(Point point)
 		{
 			if (_kind == Kind::None || _rejected || point.Pitch > 127u) return false;
+			if (IsEdge()) return UpdateEdge(point);
 			point.Sample = std::min(point.Sample, _before.LoopLengthSamps - 1u);
+			_moved |= point.Pitch != _anchor.Pitch || (_pixelsPerSample > 0.0
+				? std::abs(static_cast<double>(point.Sample) - _anchor.Sample) * _pixelsPerSample > 3.0
+				: point.Sample != _anchor.Sample);
 			if (_kind == Kind::Velocity) return true;
 			if (_kind == Kind::SnappedMove)
 			{
@@ -165,6 +206,12 @@ namespace midi
 					pitch = std::clamp(static_cast<int>(_pitch) + static_cast<int>(point.Pitch)
 						- static_cast<int>(_anchor.Pitch), 0, 127);
 				}
+				// Narrow notes have no distinct handles: grow toward the drag.
+				else if (_kind == Kind::Extend)
+				{
+					if (delta < 0) start = std::max<std::int64_t>(0, start + delta);
+					else end = std::min(length, end + delta);
+				}
 				else if (_kind == Kind::TrimLeft)
 					start = std::clamp<std::int64_t>(start + delta, 0, end - 1);
 				else
@@ -187,13 +234,43 @@ namespace midi
 			return _dirty;
 		}
 
+		bool Finish(Point point)
+		{
+			if (!Update(point)) return false;
+			// A click removes a note, including notes too short for a body hit.
+			if ((_kind == Kind::Move || _kind == Kind::TrimLeft || _kind == Kind::TrimRight || _kind == Kind::Extend) && !_moved)
+			{
+				_working = _before;
+				_dirty = MidiEditOperations::RemoveNote(_working, _onIndex);
+				_rejected = !_dirty;
+			}
+			return !_rejected;
+		}
+
 		void Cancel() noexcept
 		{
 			_kind = Kind::None; _grid.reset(); _visited.clear(); _removed.clear(); _targets.Notes.clear();
 			_dirty = false;
+			_moved = false;
 			_captured = {}; _velocityDelta = 0.0;
 			_rejected = false;
 			_preview.clear();
+		}
+		LoopGridGeometry::EditHandle EditHandle() const noexcept
+		{
+			using Handle = LoopGridGeometry::EditHandle;
+			if (_rejected) return Handle::None;
+			if (IsEdge()) return _edgeHandle;
+			if (_kind == Kind::Extend) return _last.Sample == _anchor.Sample ? Handle::Both
+				: _last.Sample < _anchor.Sample ? Handle::Left : Handle::Right;
+			switch (_kind)
+			{
+			case Kind::Move:
+			case Kind::SnappedMove: return Handle::Move;
+			case Kind::TrimLeft: return Handle::Left;
+			case Kind::TrimRight: return Handle::Right;
+			default: return Handle::None;
+			}
 		}
 		Kind Mode() const noexcept { return _kind; }
 		bool Dirty() const noexcept { return _dirty && !_rejected; }
@@ -218,14 +295,15 @@ namespace midi
 		}
 
 	private:
-		bool BeginCaptured(const MidiLoop::EditState& source, Point point, Kind kind)
+		bool BeginCaptured(const MidiLoop::EditState& source, Point point, Kind kind, double pixelsPerSample = 0.0)
 		{
 			Cancel();
 			if (!source.LoopLengthSamps || point.Sample >= source.LoopLengthSamps || point.Pitch > 127u || source.EventCount > MidiLoop::DefaultCapacity) return false;
 			_before = source; _working = source; _anchor = point; _last = point;
 			_grid = LoopGridGeometry::Resolve(source.LoopLengthSamps, source.Quantisation, source.QuantisationTransportStartSamps);
 			_targets = MidiGridTargets::Build(source);
-			_captured = _targets.Resolve(point.Sample, point.Pitch, _grid ? &*_grid : nullptr);
+			_captured = kind == Kind::Edge ? _targets.ResolveEdge(point.EdgePosition(), point.Pitch, pixelsPerSample, source.LoopLengthSamps)
+				: _targets.Resolve(point.Sample, point.Pitch, _grid ? &*_grid : nullptr);
 			if (!_captured.NoteIndex || (kind == Kind::SnappedMove && !_grid)) { Cancel(); return false; }
 			const auto& note = _targets.Notes[*_captured.NoteIndex];
 			if (note.Ambiguous) { Cancel(); _rejected = true; return false; }
@@ -233,12 +311,56 @@ namespace midi
 			_initialVelocity = source.Events[note.On].data2; _proposedVelocity = _initialVelocity;
 			_kind = kind; if (kind == Kind::SnappedMove) _preview.push_back({_start, _end, _pitch, true}); return true;
 		}
+		std::uint32_t EdgePointer(Point point) const noexcept
+		{
+			// Freeze the captured screen occurrence independently of Both choosing an
+			// edge or modifier rebases. Crossing the original onset must not flip it.
+			return point.Sample + _edgePointerOffset;
+		}
+		std::uint32_t SnapEdge(std::uint32_t candidate, std::uint32_t low, std::uint32_t high) const
+		{
+			if (!_grid) return std::clamp(candidate, low, high);
+			auto nearest = std::clamp(candidate, low, high); auto distance = std::uint64_t(-1);
+			for (const auto boundary : _grid->Boundaries)
+			for (auto repeat = 0u; repeat <= (_end > _before.LoopLengthSamps ? 1u : 0u); ++repeat)
+			{
+				const auto value = static_cast<std::uint64_t>(boundary) + static_cast<std::uint64_t>(repeat) * _before.LoopLengthSamps;
+				if (value < low || value > high) continue;
+				const auto delta = value > candidate ? value - candidate : candidate - value;
+				if (delta <= distance) { distance = delta; nearest = static_cast<std::uint32_t>(value); }
+			}
+			return nearest;
+		}
+		bool UpdateEdge(Point point)
+		{
+			const auto at = EdgePointer(point); const auto delta = static_cast<std::int64_t>(at) - _edgePointer;
+			if (_edgeHandle == LoopGridGeometry::EditHandle::Both && delta != 0)
+				_edgeHandle = delta < 0 ? LoopGridGeometry::EditHandle::Left : LoopGridGeometry::EditHandle::Right;
+			auto start = _edgeStart, end = _edgeEnd;
+			if (_edgeHandle == LoopGridGeometry::EditHandle::Left)
+			{
+				const auto low = end > _before.LoopLengthSamps ? end - _before.LoopLengthSamps : 0u;
+				const auto high = std::min(end - 1u, _before.LoopLengthSamps - 1u);
+				start = static_cast<std::uint32_t>(std::clamp<std::int64_t>(_edgeStart + delta, low, high));
+				if (!_edgeFree) start = SnapEdge(start, low, high);
+			}
+			else if (_edgeHandle == LoopGridGeometry::EditHandle::Right)
+			{
+				const auto limit = _end > _before.LoopLengthSamps ? start + _before.LoopLengthSamps : _before.LoopLengthSamps;
+				end = static_cast<std::uint32_t>(std::clamp<std::int64_t>(_edgeEnd + delta, start + 1u, limit));
+				if (!_edgeFree) end = SnapEdge(end, start + 1u, limit);
+			}
+			_working = _before; _last = point; _preview = {{start, end, _pitch, true}};
+			_dirty = start != _start || end != _end;
+			if (_dirty && !MidiEditOperations::MoveOrTrim(_working, _onIndex, start, end, _pitch, true)) return Reject();
+			return true;
+		}
 		struct NoteHit
 		{
 			std::size_t Index;
 			std::uint32_t Start, End;
 			std::uint8_t Pitch;
-			LoopGridGeometry::HitZone Zone;
+			LoopGridGeometry::EditHandle Handle;
 		};
 		static std::optional<NoteHit> PickNote(const MidiLoop::EditState& source,
 			Point point, double pixelsPerSample)
@@ -266,10 +388,9 @@ namespace midi
 				if (distance > 6.0 || (!pixelsPerSample &&
 					(point.Sample < on.sampleOffset || point.Sample >= end))) continue;
 				if (distance > bestDistance) continue;
-				const auto zone = LoopGridGeometry::NoteHitZone(point.Sample * pixelsPerSample,
-					leftPixel, rightPixel);
+				const auto handle = LoopGridGeometry::NoteEditHandle(point.Sample, on.sampleOffset, end, pixelsPerSample);
 				// Last NoteOn in canonical order wins for overlapping channels/notes.
-				result = NoteHit{ i, on.sampleOffset, end, point.Pitch, zone };
+				result = NoteHit{ i, on.sampleOffset, end, point.Pitch, handle };
 				bestDistance = distance;
 			}
 			return result;
@@ -301,10 +422,16 @@ namespace midi
 				}
 				if (note.Ambiguous) return Reject();
 				_removed[note.On] = true;
-				// Rebuild from frozen source identities, deleting in descending order.
+				// Circular releases precede their attacks in source order. Compact
+				// once so removing either endpoint cannot shift another identity.
 				_working = _before;
-				for (std::size_t i = _removed.size(); i-- > 0u;)
-					if (_removed[i] && !MidiEditOperations::RemoveNote(_working, i)) return Reject();
+				auto removed = _removed;
+				for (const auto& sourceNote : _targets.Notes)
+					if (_removed[sourceNote.On] && sourceNote.Off < _before.EventCount)
+						removed[sourceNote.Off] = true;
+				_working.EventCount = 0u;
+				for (std::size_t i = 0u; i < _before.EventCount; ++i)
+					if (!removed[i]) { _working.Tokens[_working.EventCount] = _before.Tokens[i]; _working.Events[_working.EventCount++] = _before.Events[i]; }
 				_dirty = true;
 				AppendPreview(note.Start, note.End, note.Pitch, false);
 				return true;
@@ -327,7 +454,11 @@ namespace midi
 			auto start = cellStart;
 			const auto add = [&](std::uint32_t end) {
 				if (start >= end) return true;
-				if (!MidiEditOperations::CreateExact(_working, start, end, _channel, point.Pitch, _creationVelocity)) return false;
+				// Store the displayed head endpoint, rather than an unmatched tail
+				// that playback would sustain indefinitely across subsequent wraps.
+				const auto noteEnd = end == _before.LoopLengthSamps && start >= _grid->SeamTailStart
+					? end + _grid->SeamHeadEnd : end;
+				if (!MidiEditOperations::CreateExact(_working, start, noteEnd, _channel, point.Pitch, _creationVelocity)) return false;
 				AppendPreview(start, end, point.Pitch, true); _dirty = true;
 				return true;
 			};
@@ -377,6 +508,9 @@ namespace midi
 			return Paint(point);
 		}
 
+		LoopGridGeometry::EditHandle _edgeHandle = LoopGridGeometry::EditHandle::None;
+		bool _edgeFree = false;
+		std::uint32_t _edgeStart = 0u, _edgeEnd = 0u, _edgePointer = 0u, _edgePointerOffset = 0u;
 		MidiLoop::EditState _before{};
 		MidiLoop::EditState _working{};
 		std::optional<LoopGridGeometry> _grid;
@@ -388,12 +522,12 @@ namespace midi
 		Point _anchor{}, _last{};
 		std::size_t _onIndex = 0u, _offIndex = 0u;
 		MidiGridTargets::Target _captured{};
-		double _velocityDelta = 0.0;
+		double _velocityDelta = 0.0, _pixelsPerSample = 0.0;
 		int _initialVelocity = 96, _proposedVelocity = 96;
 		std::uint32_t _start = 0u, _end = 0u;
 		std::uint32_t _createDefaultDuration = 1u;
 		std::uint8_t _pitch = 60u, _channel = 0u;
 		std::uint8_t _creationVelocity = DefaultCreationVelocity;
-		bool _fill = true, _dirty = false, _rejected = false;
+		bool _fill = true, _dirty = false, _rejected = false, _moved = false;
 	};
 }

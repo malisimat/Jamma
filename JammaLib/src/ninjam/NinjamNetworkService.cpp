@@ -53,6 +53,63 @@ namespace ninjam
 		return _timingCoordinator.Disconnect();
 	}
 
+	NinjamTimingUpdate NinjamNetworkService::BeginLocalTiming()
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.BeginLocalTiming();
+	}
+
+    void NinjamNetworkService::BindLocalTimingVersion(std::uint64_t version)
+    { std::scoped_lock lock(_timingMutex); _timingCoordinator.BindLocalTimingVersion(version); }
+
+    NinjamTimingUpdate NinjamNetworkService::RollbackLocalTiming(std::uint64_t version,
+        const std::optional<engine::QuantisationTiming>& localTiming,bool hasLocalContent,utils::Timer& clock,
+        std::chrono::steady_clock::time_point now)
+    { std::scoped_lock lock(_timingMutex); return _timingCoordinator.RollbackLocalTiming(version,localTiming,hasLocalContent,clock,now); }
+
+	NinjamTimingUpdate NinjamNetworkService::PushActivatedLocalTempo(const engine::QuantisationTiming& timing)
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.PushActivatedLocalTempo(timing);
+	}
+
+    NinjamTimingUpdate NinjamNetworkService::RejectUnsupportedFollow(std::uint64_t version, std::uint64_t epoch)
+    {
+        std::scoped_lock lock(_timingMutex);
+        return _timingCoordinator.RejectUnsupportedFollow(version, epoch);
+    }
+
+    NinjamTimingUpdate NinjamNetworkService::SetLocalPlaybackRate(double rate)
+    {
+        std::scoped_lock lock(_timingMutex);
+        return _timingCoordinator.SetLocalPlaybackRate(rate);
+    }
+
+    NinjamTimingUpdate NinjamNetworkService::RequestServerTempo(
+        const engine::QuantisationTiming& timing, std::uint64_t rateRevision)
+    {
+        std::scoped_lock lock(_timingMutex);
+        return _timingCoordinator.RequestServerTempo(timing, rateRevision);
+    }
+
+	NinjamTimingUpdate NinjamNetworkService::RequestSyncToServer()
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.RequestSyncToServer();
+	}
+
+	NinjamLocalTempoState NinjamNetworkService::LocalTempoState() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.LocalTempoState();
+	}
+
+	NinjamLocalFollowPolicy NinjamNetworkService::FollowPolicy() const noexcept
+	{
+		std::scoped_lock lock(_timingMutex);
+		return _timingCoordinator.FollowPolicy();
+	}
+
 	NinjamTimingUpdate NinjamNetworkService::ObserveSessionStatus(
 		const NinjamSessionTimingStatus& status,
 		const std::optional<engine::QuantisationTiming>& localTiming)

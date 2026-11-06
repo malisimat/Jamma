@@ -17,6 +17,8 @@
 #include <optional>
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <cstdint>
 #include "glew/glew.h"
 #include "gl/gl.h"
 #include "gl/glext.h"
@@ -66,7 +68,8 @@ namespace graphics
 		void SetWindowHandle(HWND wnd);
 		HWND GetWindowHandle() const noexcept { return _wnd; }
 		void ShowMessage(LPCWSTR message);
-		int Create(HINSTANCE hInstance, int nCmdShow);
+		// Optional large/small icon resources belong to the application instance; Window owns presentation.
+		int Create(HINSTANCE hInstance, int nCmdShow, unsigned int largeIconResourceId = 0u, unsigned int smallIconResourceId = 0u);
 		Config GetConfig() const;
 		utils::Size2d GetMinSize() const;
 		bool IsFullscreen() const;
@@ -92,6 +95,8 @@ namespace graphics
 		void Swap();
 		void Release();
 		void ReplaceScene(engine::Scene& scene);
+		// UI owner only: mirror the current Scene committed destination, never a pending save.
+		void UpdateSessionTitle();
 		bool ConsumeJamLoadRequest() noexcept;
 		bool ConsumeConsoleToggleRequest() noexcept;
 
@@ -105,14 +110,23 @@ namespace graphics
 		static bool GetMonitorWorkArea(HMONITOR monitor, RECT& workArea) noexcept;
 		static bool GetMonitorWorkAreaForRect(const RECT& rect, RECT& workArea) noexcept;
 		static void ClampToWorkArea(utils::Position2d& position, utils::Size2d& size, const RECT& workArea) noexcept;
-		static ATOM Register(HINSTANCE hInstance);
+		static ATOM Register(HINSTANCE hInstance, unsigned int largeIconResourceId = 0u, unsigned int smallIconResourceId = 0u);
 		static LRESULT CALLBACK WindowProcedure(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept;
 
 	protected:
+		virtual bool _RelativePointerValid() const;
+		virtual bool _IsNativeKeyDown(unsigned int key, bool queuedInput) const;
+		void _ReconcileKeyboardState(bool queuedInput = false);
 		// Resolve the current press, not a delayed asynchronous hover readback.
 		virtual std::optional<unsigned int> _PickPointerPress(utils::Position2d position);
 
 	private:
+		struct ModifierKey { base::Action::Modifiers Flag; unsigned int KeyChar; };
+		static constexpr std::array<ModifierKey, 3u> ModifierKeys{{
+			{ base::Action::MODIFIER_SHIFT, VK_SHIFT },
+			{ base::Action::MODIFIER_CTRL, VK_CONTROL },
+			{ base::Action::MODIFIER_ALT, VK_MENU }
+		}};
 		class SceneDispatchScope
 		{
 		public:
@@ -130,12 +144,17 @@ namespace graphics
 		bool _nativeDestroyPending = false;
 		void _InstallRelativePointerHost();
 		void _UpdateCameraEligibility();
+		void _UpdatePointerCursor();
 		void _ReleaseOwnedMouseCapture();
 		static constexpr UINT PointerRefreshMessage = WM_APP + 0x341u;
-		bool _RelativePointerValid() const;
+		friend class WindowInputTestAccess;
+		void _QueueRelativePointer(utils::Position2d delta) noexcept;
+		void _FlushRelativePointer();
 		void _RestoreRawInput();
 		void _ResamplePointer();
 		void _HandleRawInput(HRAWINPUT input);
+		void _HandleRawMouse(const RAWINPUT& raw);
+		void _DrainRawInput();
 		void LoadResources();
 		void InitScene();
 		void ApplyPendingResize();
@@ -162,6 +181,8 @@ namespace graphics
 		bool _releasingOwnedMouseCapture = false;
 		bool _windowSizeMove = false;
 		int _relativeButton = -1;
+		// UI-owned bounded displacement, consumed once per frame or ordered action.
+		utils::Position2d _pendingRelativeDelta{};
 		POINT _relativeAnchorClient{};
 		POINT _relativeAnchorScreen{};
 		utils::Position2d _relativeAnchor{};
@@ -179,6 +200,9 @@ namespace graphics
 		std::optional<GlDrawContext> _textureContext;
 		std::optional<GlDrawContext> _highlightBlurContext;
 		engine::Scene* _scene;
+		// UI-owned cache; Scene identity prevents reuse across session replacement.
+		std::uint64_t _titleSceneIdentity = 0u;
+		std::wstring _titleJamPath;
 		resources::ResourceLib& _resourceLib;
 		base::Action::Modifiers _modifiers;
 		bool _jamLoadRequested;

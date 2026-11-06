@@ -1,6 +1,8 @@
 #include <iomanip>
 #include <sstream>
 #include "Quantiser.h"
+#include "../audio/PlaybackRate.h"
+#include "HierarchySelection.h"
 
 #include <algorithm>
 #include <cmath>
@@ -143,14 +145,17 @@ void Quantiser::Clear(bool clearTapTempo, bool preserveTiming)
 	}
 
 	_masterLoop.reset();
+    _acceptedMasterIdentity.reset(); _pendingMasterIdentity.reset(); _masterStatus.clear();
 	if (!preserveTiming)
 	{
 		_acceptedRemoteGrid = {};
+		_recordingRemoteGrid = {};
 		_acceptedRemoteGridOriginSamps = 0;
 		_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
 	}
 	_armReclock.store(false, std::memory_order_release);
 	_preReclockTakeIds.clear();
+    _restoredMasterCandidates.clear();
 
 	if (clearTapTempo)
 	{
@@ -166,6 +171,8 @@ void Quantiser::ArmReclock()
 
 void Quantiser::ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& stations)
 {
+    _acceptedMasterIdentity.reset(); _pendingMasterIdentity.reset(); _masterStatus.clear();
+	_pendingLocalMasterTimingVersion = 0u;
 	_reclockGeneration.fetch_add(1u, std::memory_order_acq_rel);
 	_acceptedRemoteGrid = {};
 	_acceptedRemoteGridOriginSamps = 0;
@@ -188,6 +195,26 @@ void Quantiser::ArmReclock(const std::vector<std::shared_ptr<engine::Station>>& 
 			for (const auto& take : station->GetLoopTakes())
 				if (take)
 					_preReclockTakeIds.push_back(take->Id());
+}
+
+bool Quantiser::ResetReclockIfEmpty(const std::vector<std::shared_ptr<Station>>& stations)
+{
+	if (_preReclockTakeIds.empty() || LocalMasterTimingPending()
+		|| !_clock || !_clock->SeedSourceLength()) return false;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+			for (const auto& take : station->GetLoopTakes())
+				if (take && std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id())
+					== _preReclockTakeIds.end()) return false;
+	// Surviving takes from before reclock cannot keep the new clock alive.
+	// Preserve their exclusion when the next recording establishes a master.
+	ArmReclock(stations);
+	SetMidiGrain(0u, "reclock content removed", stations);
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+			for (const auto& take : station->GetLoopTakes())
+				if (take) take->SetMidiBaseGrid(0u, 0u);
+	return true;
 }
 
 void Quantiser::ApplyTiming(const QuantisationTiming& timing, const char* source)
@@ -216,6 +243,7 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 	const char* source,
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
+	AdoptRecordedMaster(stations);
 	_effectiveQuantiseSamps.store(grainSamps, std::memory_order_release);
 	unsigned int takeCount = 0u;
 	for (const auto& station : stations)
@@ -245,25 +273,51 @@ void Quantiser::SetMidiGrain(unsigned int grainSamps,
 
 void Quantiser::SetRemoteMidiGrid(const RemoteTransportGeometry& geometry,
 	std::int64_t originSamps,
-	const std::vector<std::shared_ptr<Station>>& stations)
+	const std::vector<std::shared_ptr<Station>>& stations, bool preserveRecordedMaster, unsigned long legacySourceLength)
 {
+	if (geometry.IntervalLengthSamps > 0ul && geometry.Bpi > 0u)
+	{
+		const bool newBaseline = _recordingRemoteGrid.IntervalLengthSamps > 0ul
+			&& (_recordingRemoteGrid.IntervalLengthSamps != geometry.IntervalLengthSamps
+				|| _recordingRemoteGrid.Bpi != geometry.Bpi || _recordingRemoteGrid.Bpm != geometry.Bpm);
+		_recordingRemoteGrid = geometry;
+		if (newBaseline && !preserveRecordedMaster)
+		{
+            _acceptedMasterIdentity.reset(); _masterStatus.clear();
+			_masterLoop.reset();
+			_masterLoopLengthSamps.store(0ul, std::memory_order_release);
+			_masterOriginalBufferLengthSamps.store(0ul, std::memory_order_release);
+			_preReclockTakeIds.clear();
+			for (const auto& station : stations)
+				if (station && !station->IsRemote())
+					for (const auto& take : station->GetLoopTakes())
+						if (take) _preReclockTakeIds.push_back(take->Id());
+			std::scoped_lock tapTempoLock(_tapTempoMutex);
+			_tapTempo.Clear();
+		}
+	}
 	const auto changed = _acceptedRemoteGrid.IntervalLengthSamps != geometry.IntervalLengthSamps
 		|| _acceptedRemoteGrid.Bpi != geometry.Bpi;
 	_acceptedRemoteGrid = geometry;
+	_acceptedRemoteSourceLength = legacySourceLength;
 	_acceptedRemoteGridOriginSamps = originSamps;
 	_gridSource = geometry.IntervalLengthSamps && geometry.Bpi ? QuantisationGridSource::Remote : QuantisationGridSource::Default;
 	for (const auto& station : stations)
 	{
 		if (!station)
 			continue;
-		station->SetRemoteMidiQuantisationGrid(geometry, originSamps, changed);
+		station->SetRemoteMidiQuantisationGrid(geometry, originSamps, changed, legacySourceLength);
 	}
 }
 
 void Quantiser::InitialiseStationMidiGrid(const std::shared_ptr<Station>& station) const
 {
 	if (station && !station->IsRemote())
-		station->SetRemoteMidiQuantisationGrid(_acceptedRemoteGrid, _acceptedRemoteGridOriginSamps, false);
+	{
+		station->SetDefaultMidiQuantisationFraction(_defaultMidiQuantisationFraction);
+		station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
+		station->SetRemoteMidiQuantisationGrid(_acceptedRemoteGrid, _acceptedRemoteGridOriginSamps, false, _acceptedRemoteSourceLength);
+	}
 }
 
 void Quantiser::SetGlobalPhaseOffsetSamps(std::int32_t offsetSamps,
@@ -292,11 +346,42 @@ std::int32_t Quantiser::ResolvePhaseOffsetDrag(std::int32_t startOffsetSamps,
 	return _ClampPhaseOffset(static_cast<std::int64_t>(startOffsetSamps) + dragSamps);
 }
 
+
+bool Quantiser::CanEditMasterTempo(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+	unsigned int eligible = 0u;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+			for (const auto& take : station->GetLoopTakes())
+				if (take && take->IsCompletedRecording()
+                    && (_recordingRemoteGrid.IntervalLengthSamps == 0ul || take->IsIndependentRecording())
+					&& std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) == _preReclockTakeIds.end())
+					++eligible;
+	return eligible == 1u;
+}
+
+bool Quantiser::HasActivatedLocalMaster(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+	if (_localMasterTimingPending || !_clock || !_clock->SeedSourceLength()) return false;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote())
+		{
+			const auto master = station->RecordedMasterTakeOnOwner();
+			if (master && master->IsCompletedRecording() && !master->FirstMasterActivationPending()
+				&& std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), master->Id()) == _preReclockTakeIds.end())
+				return true;
+		}
+	// A tap promotion uses the explicit local-master activation handshake.
+	return _pendingLocalMasterTimingVersion != 0u && !_localMasterTimingPending;
+}
+
 bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     unsigned int sampleRate,
     const std::vector<std::shared_ptr<Station>>& stations,
-    const io::UserConfig& cfg)
+    const io::UserConfig& cfg, bool editRemoteMaster, const audio::PlaybackRateHistory* rateHistory)
 {
+    if (_localMasterTimingPending) { _masterStatus="Master change is applying"; return false; }
+
     PulseOverlay();
     unsigned int eligible = 0u;
     std::shared_ptr<LoopTake> soleTake;
@@ -304,6 +389,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         if (station && !station->IsRemote())
             for (const auto& take : station->GetLoopTakes())
                 if (take && take->IsCompletedRecording()
+                    && (_recordingRemoteGrid.IntervalLengthSamps == 0ul || take->IsIndependentRecording())
                     && std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) == _preReclockTakeIds.end())
                 {
                     ++eligible;
@@ -318,28 +404,36 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
         _masterOriginalBufferLengthSamps.store(_masterLoop ? _masterLoop->PhysicalLoopLength() : length, std::memory_order_release);
     }
     const auto original = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
-    const auto interval = remote ? _acceptedRemoteGrid.IntervalLengthSamps :
+    const auto interval = remote && !(editRemoteMaster && eligible == 1u) ? _acceptedRemoteGrid.IntervalLengthSamps :
         (eligible == 1u && original ? original : (_clock ? _clock->SeedSourceLength() : 0ul));
     std::optional<QuantisationTiming> timing;
     double requestedDivisions = 0.0;
     double smoothedGap = 0.0;
     {
         std::scoped_lock tapTempoLock(_tapTempoMutex);
-        timing = _tapTempo.TapAtSample(estimatedSampleAt, sampleRate, interval, Policy(cfg));
+        std::optional<double> sourceGap;
+        if (rateHistory && (!remote || (editRemoteMaster && eligible == 1u)))
+        {
+            const auto last = _tapTempo.LastTapSample();
+            if (last && estimatedSampleAt > *last)
+            {
+                const auto reference = eligible == 1u ? soleTake->RecordingPlaybackRate()
+                    : (_clock ? _clock->MasterRecordingPlaybackRate() : 1.0);
+                sourceGap = eligible == 1u ? soleTake->SourceProgressBetweenDeviceSamples(*last, estimatedSampleAt)
+                    : rateHistory->QueryDifference(*last, estimatedSampleAt, reference);
+                if (!sourceGap) _tapTempo.Clear(); // Missing history starts a new tap pair, never guesses.
+            }
+        }
+        timing = _tapTempo.TapAtSample(estimatedSampleAt, sampleRate, interval, Policy(cfg), sourceGap);
         smoothedGap = _tapTempo.EstimatedGapSamps();
         if (smoothedGap > 0.0) requestedDivisions = interval / smoothedGap;
     }
-    if (!timing)
-    {
-        std::cout << "[Quantisation] tap sequence/no update: sample=" << estimatedSampleAt
-            << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible << " authority=" << (remote ? "remote" : "local") << std::endl;
-        return false;
-    }
-    if (eligible != 1u || remote)
+    if (!timing) return false;
+    if (eligible != 1u || (remote && !editRemoteMaster))
     {
         const auto grain = _clock ? _clock->QuantiseSamps() : 0u;
         const auto base = remote ? _acceptedRemoteGrid.Bpi :
-            (grain && _clock ? static_cast<unsigned int>(_clock->SeedSourceLength() / grain) : 0u);
+            (_clock ? _clock->MasterBeatsPerInterval() : 0u);
         if (!base || !interval)
         {
             std::cout << "[Quantisation] tap rejected: no valid base geometry generation=" << ReclockGeneration()
@@ -365,13 +459,18 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
                     {
                         // A frozen master keeps its grain/beat grid; tapping selects
                         // the subdivision itself, also shown by the fraction radio.
-                        take->SetMidiBaseGrid(static_cast<std::uint32_t>(interval), base);
+                        if (remote) take->SetMidiBaseGrid(take->RecordingMasterLengthSamps() ? take->RecordingMasterLengthSamps()
+                            : static_cast<std::uint32_t>(interval), base);
+                        else take->SetTransportMidiBaseGrid(static_cast<std::uint32_t>(interval), base,
+                            _clock ? _clock->MasterRecordingPlaybackRate() : 1.0);
                         auto settings = take->MidiQuantisation();
                         for (const auto fraction : midi::MidiQuantisation::FractionDisplayOrder)
                             if (midi::MidiQuantisation::Divisor(fraction) == selected / base)
                                 settings.Fraction = fraction;
                         take->SetMidiQuantisation(settings);
+                        _defaultMidiQuantisationFraction = settings.Fraction;
                     }
+        SetDefaultMidiQuantisationFraction(_defaultMidiQuantisationFraction, stations, false);
         unsigned int minimumDivisor = 32u;
         unsigned int maximumDivisor = 1u;
         for (const auto& station : stations)
@@ -400,6 +499,40 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
             << " grains=" << timing->Bpi << std::endl;
         return false;
     }
+    if (_localMasterTimingPublisher && editRemoteMaster)
+    {
+        // Pending tap/master requests are rejected before tap sampling above.
+        // Retain the accepted geometry until this one request activates or cancels.
+        if (!_localMasterTimingPending)
+        {
+            _previousMasterLoop = _masterLoop;
+            _previousGridSource = _gridSource.load(std::memory_order_acquire);
+            _previousMasterLoopLengthSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
+            _previousMasterOriginalBufferLengthSamps = _masterOriginalBufferLengthSamps.load(std::memory_order_acquire);
+            _previousActiveGridDivisions = _activeGridDivisions.load(std::memory_order_acquire);
+            _previousEffectiveQuantiseSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
+            _previousSeedUsesPowers = _seedUsesPowers;
+        }
+        if (remote) SetRemoteMidiGrid({}, 0, stations);
+        _pendingMasterTake = soleTake;
+        _pendingMasterIdentity=MasterIdentity{soleTake,{},false,
+            {timing->MasterLoopSamps,original,soleTake->RecordingMasterLengthSamps(),timing->SeedSamps,timing->Bpi,sampleRate,cfg.Loop.SeedUsesPowers,static_cast<unsigned int>(soleTake->GetSampleRate()),soleTake->RecordingGeometry().Bpi,soleTake->VisualLoopLengthSamps()},
+            _MasterTargetLabel(soleTake,{},stations)};
+        _pendingMasterStartedAt=std::chrono::steady_clock::now();
+        SetSeedUsesPowers(cfg.Loop.SeedUsesPowers);
+        _pendingMasterTapEdit = true;
+        _localMasterTimingPending = true;
+        _pendingLocalMasterTimingVersion = _localMasterTimingPublisher(*timing,
+            cfg.Loop.SeedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE,
+            soleTake.get(), _masterLoop.get());
+        if(!_pendingLocalMasterTimingVersion) { CancelLocalMasterTiming(0u); _masterStatus="Master change unavailable"; return false; }
+        _masterLoopLengthSamps.store(timing->MasterLoopSamps, std::memory_order_release);
+        _effectiveQuantiseSamps.store(timing->SeedSamps, std::memory_order_release);
+        _activeGridDivisions.store(timing->Bpi, std::memory_order_release);
+        _gridSource.store(QuantisationGridSource::Tap, std::memory_order_release);
+        _armReclock.store(false, std::memory_order_release);
+        return true;
+    }
     // The recording's physical storage remains intact; Loop::Play only changes
     // its logical boundary and retains the recorded tail for a later resolution.
     for (const auto& loop : soleTake->GetLoops())
@@ -410,6 +543,7 @@ bool Quantiser::HandleTapTempo(std::uint64_t estimatedSampleAt,
     _gridSource.store(QuantisationGridSource::Tap, std::memory_order_release);
     _masterLoopLengthSamps.store(timing->MasterLoopSamps, std::memory_order_release);
     SetMidiGrain(timing->SeedSamps, "tap tempo", stations);
+    _RememberRecordedMaster(soleTake,{},stations,sampleRate);
     std::cout << "[Quantisation] tap geometry accepted: take=" << soleTake->Id()
         << " generation=" << ReclockGeneration() << " sr=" << sampleRate << " eligible=" << eligible
         << " authority=local source=tap physical=" << original << " logical=" << timing->MasterLoopSamps
@@ -494,24 +628,114 @@ void Quantiser::ApplyOverlayAlpha(float alpha,
 	}
 }
 
-bool Quantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& hovering,
-	unsigned int depth,
-	const std::vector<std::shared_ptr<Station>>& stations,
-	unsigned int sampleRate,
-	const io::UserConfig& cfg,
-	bool confirm)
+std::string Quantiser::_MasterTargetLabel(const std::shared_ptr<LoopTake>& take,const std::shared_ptr<Loop>& explicitLoop,
+    const std::vector<std::shared_ptr<Station>>& stations) const
 {
-	if (!hovering)
-		return false;
+    for(const auto& station:stations) if(station)
+    {
+        const auto& takes=station->GetLoopTakes(); const auto found=std::find(takes.begin(),takes.end(),take);
+        if(found!=takes.end()) return station->Name()+" / take "+std::to_string(std::distance(takes.begin(),found)+1)+
+            (explicitLoop ? " / audio "+std::to_string(explicitLoop->LoopChannel()+1u) : "");
+    }
+    return {};
+}
 
-	const auto target = _ResolveInteractionTarget(hovering, depth, stations);
-	const auto masterLength = target ? target->MasterLengthSamps : 0ul;
-	if (masterLength == 0ul)
-		return false;
+void Quantiser::_RememberRecordedMaster(const std::shared_ptr<LoopTake>& take,const std::shared_ptr<Loop>& explicitLoop,
+    const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate)
+{
+    if(!take) return;
+    if(!sampleRate) sampleRate=static_cast<unsigned int>(take->GetSampleRate());
+    const auto length=_masterLoopLengthSamps.load();
+    const auto seed=EffectiveSamps() ? EffectiveSamps() : _clock ? _clock->QuantiseSamps() : 0u;
+    const auto bpi=ActiveGridDivisions() ? ActiveGridDivisions() : seed ? static_cast<unsigned int>(length/seed) : 0u;
+    auto label=_MasterTargetLabel(take,explicitLoop,stations);
+    if(auto timing=TimingFromSeedAndMaster(seed,length,sampleRate)) label+=" - "+std::to_string(static_cast<int>(std::lround(timing->Bpm)))+" BPM / "+std::to_string(bpi)+" BPI";
+    _acceptedMasterIdentity=MasterIdentity{take,explicitLoop,static_cast<bool>(explicitLoop),
+        {length,_masterOriginalBufferLengthSamps.load(),take->RecordingMasterLengthSamps(),seed,bpi,sampleRate,_clock ? _clock->Quantisation()==Timer::QUANTISE_POWER : _seedUsesPowers,static_cast<unsigned int>(take->GetSampleRate()),take->RecordingGeometry().Bpi,explicitLoop ? explicitLoop->LoopLength() : take->VisualLoopLengthSamps()},label};
+    _masterStatus="Current master - "+label;
+}
 
-	auto timing = DeduceSeedTiming(masterLength, sampleRate, Policy(cfg));
-	if (!timing.has_value())
-		return false;
+bool Quantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& hovering,unsigned int depth,
+    const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate,const io::UserConfig& cfg,bool confirm)
+{
+    return SetMasterFromTarget(hovering,depth,stations,sampleRate,cfg,confirm).Outcome != MasterOutcome::Rejected;
+}
+
+bool Quantiser::CanUseMasterTarget(const std::shared_ptr<base::GuiElement>& candidate,unsigned int depth,
+    const std::vector<std::shared_ptr<Station>>& stations) const
+{
+    const auto target=_ResolveInteractionTarget(candidate,depth,stations);
+    if (!target || !target->StationRef || !target->TakeRef || !target->MasterLengthSamps ||
+        target->StationRef->IsRemote() || target->StationRef->MembershipRemoving() || target->TakeRef->IsCaptureCancelled() ||
+        !target->TakeRef->HasCompletedTimingMaterial() || target->TakeRef->HasPendingTriggerCapture()) return false;
+    if(target->RepresentativeLoopRef) return target->RepresentativeLoopRef->CanUseAsTimingReference();
+    return std::any_of(target->TakeRef->GetMidiLoops().begin(),target->TakeRef->GetMidiLoops().end(),
+        [](const auto& stream){return stream && stream->LoopLengthSamps()>0u;});
+}
+
+std::string Quantiser::DescribeMasterTarget(const std::shared_ptr<base::GuiElement>& candidate,unsigned int depth,
+    const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate,const io::UserConfig& cfg) const
+{
+    if(!CanUseMasterTarget(candidate,depth,stations)) return {};
+    const auto target=_ResolveInteractionTarget(candidate,depth,stations);
+    const auto loop=depth==base::DEPTH_LOOP ? target->LoopRef : nullptr;
+    if(_acceptedMasterIdentity && _acceptedMasterIdentity->Take.lock()==target->TakeRef &&
+        _acceptedMasterIdentity->HasExplicitLoop==static_cast<bool>(loop) && (!loop || _acceptedMasterIdentity->ExplicitLoop.lock()==loop) &&
+        _acceptedMasterIdentity->Geometry.Length==target->MasterLengthSamps && _acceptedMasterIdentity->Geometry.Rate==sampleRate)
+        return _acceptedMasterIdentity->Name;
+    auto text=_MasterTargetLabel(target->TakeRef,loop,stations);
+    if(const auto timing=DeduceSeedTiming(target->MasterLengthSamps,sampleRate,Policy(cfg)))
+        text+=" - "+std::to_string(static_cast<int>(std::lround(timing->Bpm)))+" BPM / "+std::to_string(timing->Bpi)+" BPI";
+    return text;
+}
+
+Quantiser::MasterResult Quantiser::SetMasterFromTarget(const std::shared_ptr<base::GuiElement>& hovering,unsigned int depth,
+    const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate,const io::UserConfig& cfg,bool confirm,
+    std::chrono::steady_clock::time_point now,bool sessionAllowed)
+{
+    const auto reject=[&](const std::string& message) { _masterStatus=message; return MasterResult{MasterOutcome::Rejected,message}; };
+    auto target=_ResolveInteractionTarget(hovering,depth,stations);
+    if (!target || !target->StationRef || !target->TakeRef) return reject("Choose a completed local take or loop");
+    if (target->StationRef->IsRemote() || target->StationRef->MembershipRemoving() || target->TakeRef->IsCaptureCancelled() ||
+        !target->TakeRef->HasCompletedTimingMaterial() || target->TakeRef->HasPendingTriggerCapture())
+        return reject("Master requires completed local playback");
+    const auto masterLength=target->MasterLengthSamps;
+    const bool playableMidi=std::any_of(target->TakeRef->GetMidiLoops().begin(),target->TakeRef->GetMidiLoops().end(),
+        [](const auto& stream){return stream && stream->LoopLengthSamps()>0u;});
+    if (!masterLength || (!target->RepresentativeLoopRef && !playableMidi) ||
+        (target->RepresentativeLoopRef && !target->RepresentativeLoopRef->CanUseAsTimingReference()))
+        return reject("Master material is not playable");
+    const auto timing=DeduceSeedTiming(masterLength,sampleRate,Policy(cfg));
+    if (!timing) return reject("Master timing is unavailable");
+    const MasterGeometry geometry{masterLength,target->RepresentativeLoopRef ? target->RepresentativeLoopRef->PhysicalLoopLength() : masterLength,
+        target->TakeRef->RecordingMasterLengthSamps(),timing->SeedSamps,timing->Bpi,sampleRate,cfg.Loop.SeedUsesPowers,
+        static_cast<unsigned int>(target->TakeRef->GetSampleRate()),target->TakeRef->RecordingGeometry().Bpi,
+        depth==base::DEPTH_LOOP && target->LoopRef ? target->LoopRef->LoopLength() : target->TakeRef->VisualLoopLengthSamps()};
+    const auto explicitLoop=depth==base::DEPTH_LOOP ? target->LoopRef : nullptr;
+    const auto matches=[&](const MasterIdentity& identity) {
+        return identity.Take.lock()==target->TakeRef && identity.HasExplicitLoop==static_cast<bool>(explicitLoop) &&
+            (!explicitLoop || identity.ExplicitLoop.lock()==explicitLoop) && identity.Geometry==geometry;
+    };
+    if (_localMasterTimingPending)
+    {
+        if (_pendingMasterIdentity && matches(*_pendingMasterIdentity)) { _masterStatus="Applying - "+_pendingMasterIdentity->Name; return {MasterOutcome::Unchanged,"Already applying this master"}; }
+        return reject("Master change is already applying"+(_pendingMasterIdentity ? " - "+_pendingMasterIdentity->Name : ""));
+    }
+    if (_acceptedMasterIdentity)
+    {
+        const auto& accepted=*_acceptedMasterIdentity; const auto& source=accepted.Geometry;
+        // Remote authority and subdivision grids are not source geometry.
+        const bool same=accepted.Take.lock()==target->TakeRef && accepted.HasExplicitLoop==static_cast<bool>(explicitLoop) &&
+            (!explicitLoop || accepted.ExplicitLoop.lock()==explicitLoop) && source.Length==geometry.Length && source.Physical==geometry.Physical &&
+            source.Baseline==geometry.Baseline && source.SourceBpi==geometry.SourceBpi && source.SourceRate==geometry.SourceRate &&
+            (!source.Rate || source.Rate==geometry.Rate);
+        if(same) { if(!_acceptedMasterIdentity->Geometry.Rate) _acceptedMasterIdentity->Geometry.Rate=sampleRate;
+            _masterStatus="Already master - "+accepted.Name; return {MasterOutcome::Unchanged,_masterStatus}; }
+    }
+    if (!sessionAllowed) return reject("Master change unavailable while session is busy");
+    const auto name=_MasterTargetLabel(target->TakeRef,explicitLoop,stations);
+    MasterIdentity identity{target->TakeRef,explicitLoop,static_cast<bool>(explicitLoop),geometry,
+        name+" - "+std::to_string(static_cast<int>(std::lround(timing->Bpm)))+" BPM / "+std::to_string(timing->Bpi)+" BPI"};
 
 	if (_localMasterTimingPublisher && !_localMasterTimingPending)
 	{
@@ -538,10 +762,12 @@ bool Quantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& h
 		// The target cursor is sampled from retained audio snapshots at the block
 		// boundary, then installed together with the new geometry.
 		_localMasterTimingPending = true;
+        _pendingMasterIdentity=identity; _pendingMasterStartedAt=now;
 		_pendingMasterTake = target->TakeRef;
 		_pendingLocalMasterTimingVersion = _localMasterTimingPublisher(*timing,
 			_seedUsesPowers ? Timer::QUANTISE_POWER : Timer::QUANTISE_MULTIPLE,
 			target->TakeRef.get(), _masterLoop.get());
+        if(!_pendingLocalMasterTimingVersion) { CancelLocalMasterTiming(0u); return reject("Master change unavailable"); }
 		_effectiveQuantiseSamps.store(timing->SeedSamps, std::memory_order_release);
 		_activeGridDivisions.store(timing->Bpi, std::memory_order_release);
 		_gridSource.store(QuantisationGridSource::Default, std::memory_order_release);
@@ -551,15 +777,62 @@ bool Quantiser::TrySetMasterFromHover(const std::shared_ptr<base::GuiElement>& h
 	{
 		ApplyTiming(*timing, "master loop");
 		if (_clock && target->TakeRef)
-			_clock->SetMasterLoopIndexFrac(target->TakeRef->LoopIndexFrac());
+			_clock->SetMasterLoopIndexFrac(target->RepresentativeLoopRef && target->RepresentativeLoopRef->LoopLength()
+				? 1.0 - static_cast<double>(target->RepresentativeLoopRef->PlaybackBodyIndex()) / target->RepresentativeLoopRef->LoopLength()
+				: target->TakeRef->LoopIndexFrac());
 	}
 	if (!_localMasterTimingPublisher)
+    {
+        _acceptedMasterIdentity=identity;
 		SetMidiGrain(timing->SeedSamps, "master loop", stations);
+    }
 	UpdateStationHints(hovering, depth, confirm, stations);
 
-	std::cout << "Master quantisation target set: depth=" << static_cast<int>(depth)
-		<< " length=" << masterLength << std::endl;
-	return true;
+    if (_localMasterTimingPublisher)
+        _masterStatus="Applying - "+name+" - "+std::to_string(static_cast<int>(std::lround(timing->Bpm)))+" BPM / "+std::to_string(timing->Bpi)+" BPI";
+    else { _acceptedMasterIdentity=identity; _masterStatus="Current master - "+name; }
+    return {_localMasterTimingPublisher ? MasterOutcome::Applying : MasterOutcome::Accepted,_masterStatus};
+}
+
+bool Quantiser::PendingMasterTargetValid(const std::vector<std::shared_ptr<Station>>& stations) const
+{
+    if (!_pendingMasterTake) return false;
+    for (const auto& station:stations)
+        if(station && !station->IsRemote() && !station->MembershipRemoving())
+            for(const auto& take:station->GetLoopTakes()) if(take==_pendingMasterTake && !take->IsCaptureCancelled())
+            {
+                if(!take->HasCompletedTimingMaterial() || take->HasPendingTriggerCapture()) return false;
+                if (_masterLoop && (std::find(take->GetLoops().begin(),take->GetLoops().end(),_masterLoop)==take->GetLoops().end() ||
+                    !_masterLoop->CanUseAsTimingReference())) return false;
+                if (!_pendingMasterIdentity) return true; // Existing tap promotion uses the same bounded handshake.
+                const auto& geometry=_pendingMasterIdentity->Geometry;
+                if(take->RecordingMasterLengthSamps()!=geometry.Baseline || take->RecordingGeometry().Bpi!=geometry.SourceBpi ||
+                    static_cast<unsigned int>(take->GetSampleRate())!=geometry.SourceRate ||
+                    (_masterLoop && _masterLoop->PhysicalLoopLength()!=geometry.Physical)) return false;
+                if (_pendingMasterIdentity->HasExplicitLoop)
+                {
+                    const auto loop=_pendingMasterIdentity->ExplicitLoop.lock();
+                    return loop && std::find(take->GetLoops().begin(),take->GetLoops().end(),loop)!=take->GetLoops().end() &&
+                        loop->CanUseAsTimingReference() && loop->LoopLength()==_pendingMasterIdentity->Geometry.SourceLength &&
+                        loop->PhysicalLoopLength()==_pendingMasterIdentity->Geometry.Physical;
+                }
+                return take->VisualLoopLengthSamps()==_pendingMasterIdentity->Geometry.SourceLength;
+            }
+    return false;
+}
+
+void Quantiser::CompleteLocalMasterTiming()
+{
+    if (_pendingMasterIdentity) { _acceptedMasterIdentity=std::move(_pendingMasterIdentity); _masterStatus="Current master - "+_acceptedMasterIdentity->Name; }
+    if(_acceptedMasterIdentity)
+        if(const auto take=_acceptedMasterIdentity->Take.lock())
+        {
+            auto& geometry=_acceptedMasterIdentity->Geometry;
+            geometry.Baseline=take->RecordingMasterLengthSamps(); geometry.SourceBpi=take->RecordingGeometry().Bpi;
+            geometry.SourceLength=_acceptedMasterIdentity->HasExplicitLoop && _masterLoop ? _masterLoop->LoopLength() : take->VisualLoopLengthSamps();
+        }
+    _pendingMasterIdentity.reset(); _pendingMasterTapEdit=false; _localMasterTimingPending=false;
+    _pendingMasterTake.reset(); _previousMasterLoop.reset();
 }
 
 void Quantiser::CancelLocalMasterTiming(std::uint64_t version) noexcept
@@ -572,7 +845,10 @@ void Quantiser::CancelLocalMasterTiming(std::uint64_t version) noexcept
 	_activeGridDivisions.store(_previousActiveGridDivisions, std::memory_order_release);
 	_effectiveQuantiseSamps.store(_previousEffectiveQuantiseSamps, std::memory_order_release);
 	_seedUsesPowers = _previousSeedUsesPowers;
+	_pendingMasterIdentity.reset();
 	_pendingMasterTake.reset();
+	_pendingMasterTapEdit = false;
+	_pendingLocalMasterTimingVersion = 0u;
 	_localMasterTimingPending = false;
 }
 
@@ -582,7 +858,10 @@ void Quantiser::UpdateStationHints(const std::shared_ptr<base::GuiElement>& cand
 	const std::vector<std::shared_ptr<Station>>& stations)
 {
 	ClearStationHints(stations);
+	AdoptRecordedMaster(stations);
 
+	for (const auto& station : stations)
+		if (station) station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
 	const auto seed = EffectiveSamps();
 	if (!_clock || seed == 0u)
 		return;
@@ -647,6 +926,7 @@ std::optional<Quantiser::InteractionTarget> Quantiser::_ResolveInteractionTarget
 
 		for (const auto& station : stations)
 		{
+            if (!station) continue;
 			const auto& takes = station->GetLoopTakes();
 			if (std::find(takes.begin(), takes.end(), resolved.TakeRef) != takes.end())
 			{
@@ -669,11 +949,20 @@ std::optional<Quantiser::InteractionTarget> Quantiser::_ResolveInteractionTarget
 
 		return resolved;
 	case base::DEPTH_LOOP:
+        if (!resolved.LoopRef)
+            for(const auto& station:stations) if(station)
+                for(const auto& take:station->GetLoopTakes()) if(take)
+                    for(const auto& stream:take->GetMidiLoops()) if(stream && stream->Model()==target)
+                    {
+                        resolved.StationRef=station; resolved.TakeRef=take;
+                        resolved.MasterLengthSamps=take->VisualLoopLengthSamps(); return resolved;
+                    }
 		if (!resolved.LoopRef)
 			return std::nullopt;
 
 		for (const auto& station : stations)
 		{
+            if (!station) continue;
 			for (const auto& take : station->GetLoopTakes())
 			{
 				const auto& loops = take->GetLoops();
@@ -726,6 +1015,14 @@ std::shared_ptr<Timer> Quantiser::Clock() const noexcept
 
 std::optional<QuantisationTiming> Quantiser::CurrentTempoTiming(unsigned int sampleRate) const
 {
+	if (_acceptedRemoteGrid.IntervalLengthSamps > 0ul && _acceptedRemoteGrid.Bpi > 0u)
+	{
+		const auto& remote = _acceptedRemoteGrid;
+		const auto seed = static_cast<unsigned int>((static_cast<std::uint64_t>(remote.IntervalLengthSamps)
+			+ remote.Bpi / 2u) / remote.Bpi);
+		return QuantisationTiming{ seed, static_cast<unsigned int>(remote.IntervalLengthSamps),
+			remote.Bpi, remote.Bpm, remote.Bpi };
+	}
 	auto seedSamps = _effectiveQuantiseSamps.load(std::memory_order_acquire);
 	auto masterLoopSamps = _masterLoopLengthSamps.load(std::memory_order_acquire);
 	if (_clock && (seedSamps == 0u || masterLoopSamps == 0ul))
@@ -733,7 +1030,16 @@ std::optional<QuantisationTiming> Quantiser::CurrentTempoTiming(unsigned int sam
 		seedSamps = _clock->QuantiseSamps();
 		masterLoopSamps = _clock->SeedSourceLength();
 	}
-	return TimingFromSeedAndMaster(seedSamps, masterLoopSamps, sampleRate);
+	auto timing = TimingFromSeedAndMaster(seedSamps, masterLoopSamps, sampleRate);
+    if (_clock && _clock->SeedSourceLength() && _clock->MasterBeatsPerInterval())
+    {
+        const auto length = _clock->SeedSourceLength();
+        const auto beats = _clock->MasterBeatsPerInterval();
+        timing = QuantisationTiming{_clock->QuantiseSamps(), static_cast<unsigned int>(length), beats,
+            static_cast<float>(60.0 * sampleRate * beats / length), beats};
+    }
+    if (timing && _clock) timing->Bpm *= static_cast<float>(_clock->AppliedPlaybackRate() / _clock->MasterRecordingPlaybackRate());
+    return timing;
 }
 
 std::optional<Quantiser::TempoStatus> Quantiser::CurrentTempoStatus(unsigned int sampleRate) const
@@ -855,12 +1161,11 @@ void TapTempoTracker::Clear() noexcept
 std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t samplePosition,
 	unsigned int sampleRate,
 	unsigned long masterLoopSamps,
-	const QuantisationPolicy& policy)
+	const QuantisationPolicy& policy, std::optional<double> sourceGap)
 {
-	if (!sampleRate)
+	if (!sampleRate || (sourceGap && (!std::isfinite(*sourceGap) || *sourceGap <= 0.0)))
 	{
 		Clear();
-		std::cout << "[tap] rejected: invalid sample rate\n";
 		return std::nullopt;
 	}
 	if (!_lastTapSample.has_value())
@@ -871,7 +1176,6 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 
 	if (samplePosition <= _lastTapSample.value())
 	{
-		std::cout << "[tap] rejected: non-increasing\n";
 		Clear();
 		_lastTapSample = samplePosition;
 		return std::nullopt;
@@ -884,22 +1188,13 @@ std::optional<QuantisationTiming> TapTempoTracker::TapAtSample(std::uint64_t sam
 	{
 		Clear();
 		_lastTapSample = samplePosition;
-		std::cout << "[tap] sequence restarted: timeout >=2000ms\n";
 		return std::nullopt;
 	}
 
 	_lastTapSample = samplePosition;
 	_estimatedGapSamps = _estimatedGapSamps.has_value() ?
-		((_estimatedGapSamps.value() * 0.5) + (gap * 0.5)) :
-		gap;
-
-	if (sampleRate > 0u)
-	{
-		const auto msPerSamp = 1000.0 / static_cast<double>(sampleRate);
-		std::cout << "[tap] raw=" << static_cast<int>(gap * msPerSamp + 0.5)
-			<< "ms smooth=" << static_cast<int>(_estimatedGapSamps.value() * msPerSamp + 0.5)
-			<< "ms\n";
-	}
+		((_estimatedGapSamps.value() * 0.5) + (sourceGap.value_or(gap) * 0.5)) :
+		sourceGap.value_or(gap);
 
 	return CurrentTiming(masterLoopSamps, sampleRate, policy);
 }
@@ -973,6 +1268,7 @@ void QuantiserController::OnCtrlModifierChanged(bool held,
 	if (held && !OwnsPointer())
 	{
 		_ctrlOverlayContext.reset();
+		_hasShiftClick = false;
 		_capturedMidiTargets.clear();
 		if (context.SelectDepth == base::SelectDepth::DEPTH_LOOP)
 		{
@@ -1011,6 +1307,7 @@ void QuantiserController::Tick(Time now)
 	bool invalid = false;
 	for (const auto& loop : _fractionMidiTargets) invalid = invalid || !_OwnerForMidiLoop(loop);
 	for (const auto& loop : _midiPhaseDragTarget.MidiTargets) invalid = invalid || !_OwnerForMidiLoop(loop);
+	for (const auto& loop : _midiPhaseDragTarget.AudioTargets) invalid = invalid || !_TakeForLoop(loop);
 	for (const auto& take : _fractionDragTargets) invalid = invalid || !_StationForTake(take);
 	for (const auto& take : _midiPhaseDragTarget.TakeTargets) invalid = invalid || !_StationForTake(take);
 	for (const auto& station : _midiPhaseDragTarget.StationTargets)
@@ -1081,7 +1378,7 @@ void QuantiserController::_CaptureContext(const QuantisationInteractionContext& 
 {
 	CtrlOverlayContext captured;
 	captured.Anchor = context.CursorPos;
-	captured.VisibleButtonCount = context.SelectDepth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget && _capturedMidiTargets.empty() ? 0 : _VisibleButtonCount(context);
+	captured.VisibleButtonCount = context.SelectDepth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget && _capturedMidiTargets.empty() ? 1 : _VisibleButtonCount(context);
 	captured.SelectDepth = context.SelectDepth;
 
 	std::vector<unsigned char> hoverPath = context.HoverPath;
@@ -1156,6 +1453,20 @@ std::shared_ptr<GuiElement> QuantiserController::_HoverElement(const Quantisatio
 void QuantiserController::_ApplyOverlayScopes(const QuantisationInteractionContext& context,
 	const ChildResolver& childResolver)
 {
+	const auto target = _ctrlOverlayContext ? _capturedPhaseTarget : _ResolveMidiPhaseDragTarget(context, childResolver);
+	std::string scope = "Global";
+	std::size_t count = 0;
+	switch (target.Kind)
+	{
+	case MidiPhaseDragTargetKind::Station: scope = "Station"; count = target.StationTargets.size(); break;
+	case MidiPhaseDragTargetKind::LoopTake: scope = "Take"; count = target.TakeTargets.size(); break;
+	case MidiPhaseDragTargetKind::MidiLoop:
+	case MidiPhaseDragTargetKind::AudioLoop:
+		scope = "Loop"; count = target.AudioTargets.size() + target.MidiTargets.size(); break;
+	default: break;
+	}
+	if (count > 0) scope += " (" + std::to_string(count) + ")";
+	_overlay.SetScopeLabel(scope);
 	_overlay.SetButtonScope(0,
 		(_ctrlOverlayContext ? _capturedPhaseTarget.Kind == MidiPhaseDragTargetKind::Global : _IsPhaseGlobalTarget(context, childResolver))
 			? graphics::CtrlHandleOverlay::ButtonScope::Global
@@ -1318,6 +1629,18 @@ ActionResult QuantiserController::_BeginMidiPhaseDrag(TouchAction action,
 	_midiPhaseDragStartPosition = action.Position;
 	_midiPhaseDragTarget = _ctrlOverlayContext ? _capturedPhaseTarget : _ResolveMidiPhaseDragTarget(context, childResolver);
 	_midiPhaseDragStartOffsetSamps = _MidiPhaseOffsetForTarget(_midiPhaseDragTarget);
+	const bool reset = action.Touch == TouchAction::TOUCH_MOUSE && _hasShiftClick &&
+		now >= _lastShiftClick && now - _lastShiftClick <= std::chrono::milliseconds(GetDoubleClickTime()) &&
+		std::abs(action.Position.X - _lastShiftClickPosition.X) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+		std::abs(action.Position.Y - _lastShiftClickPosition.Y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
+	_hasShiftClick = !reset;
+	_lastShiftClick = now;
+	_lastShiftClickPosition = action.Position;
+	if (reset)
+	{
+		_midiPhaseDragStartOffsetSamps = 0;
+		_SetMidiPhaseOffsetForTarget(_midiPhaseDragTarget, 0);
+	}
 	_quantisation.SetGestureOverlayHeld(true);
 	_quantisation.ApplyOverlayAlpha(1.0f, _stations);
 	_ShowPhaseFeedback(_feedbackSampleRate);
@@ -1332,6 +1655,7 @@ ActionResult QuantiserController::_UpdateMidiPhaseDrag(TouchMoveAction action,
 	unsigned int sampleRate)
 {
 	const auto delta = action.Position - _midiPhaseDragStartPosition;
+	if (delta.X != 0 || delta.Y != 0) _hasShiftClick = false;
 	const auto offsetSamps = Quantiser::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 		delta.X,
 		sampleRate);
@@ -1351,6 +1675,7 @@ ActionResult QuantiserController::_EndMidiPhaseDrag(TouchAction action,
 	if (_isMidiPhaseDragging)
 	{
 		const auto delta = action.Position - _midiPhaseDragStartPosition;
+		if (delta.X != 0 || delta.Y != 0) _hasShiftClick = false;
 		const auto offsetSamps = Quantiser::ResolvePhaseOffsetDrag(_midiPhaseDragStartOffsetSamps,
 			delta.X,
 			sampleRate);
@@ -1628,9 +1953,16 @@ QuantiserController::MidiPhaseDragTarget QuantiserController::_ResolveMidiPhaseD
 	{
 		target.Kind = MidiPhaseDragTargetKind::MidiLoop;
 		target.MidiTargets = _capturedMidiTargets;
+		target.AudioTargets = context.SelectedAudioLoops;
 		return target;
 	}
-	if (depth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget) return target;
+	if (depth == base::SelectDepth::DEPTH_LOOP && context.LoopDepthHasAudioTarget)
+	{
+		target.Kind = MidiPhaseDragTargetKind::AudioLoop;
+		target.AudioTargets = context.SelectedAudioLoops;
+		if (target.AudioTargets.empty() && context.HoveredAudioLoop) target.AudioTargets.push_back(context.HoveredAudioLoop);
+		return target;
+	}
 
 	if (depth == base::SelectDepth::DEPTH_STATION)
 	{
@@ -1680,6 +2012,8 @@ std::int32_t QuantiserController::_MidiPhaseOffsetForTarget(const MidiPhaseDragT
 {
 	switch (target.Kind)
 	{
+	case MidiPhaseDragTargetKind::AudioLoop:
+		return target.AudioTargets.empty() ? 0 : target.AudioTargets.front()->PlaybackOffsetSamps();
 	case MidiPhaseDragTargetKind::MidiLoop:
 		return target.MidiTargets.empty() ? 0 : target.MidiTargets.front()->GetLoopQuantisationOverride().PhaseOffsetSamps.value_or(0);
 	case MidiPhaseDragTargetKind::Station:
@@ -1697,7 +2031,13 @@ void QuantiserController::_SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget
 {
 	switch (target.Kind)
 	{
+	case MidiPhaseDragTargetKind::AudioLoop:
+		for (const auto& loop : target.AudioTargets) if (loop) loop->SetPlaybackOffsetSamps(offsetSamps);
+		_quantisation.UpdateStationHints(nullptr, base::DEPTH_LOOP, false, _stations);
+		break;
 	case MidiPhaseDragTargetKind::MidiLoop:
+		for (const auto& loop : target.AudioTargets) if (loop) loop->SetPlaybackOffsetSamps(offsetSamps);
+		if (!target.AudioTargets.empty()) _quantisation.UpdateStationHints(nullptr, base::DEPTH_LOOP, false, _stations);
 		for (const auto& loop : target.MidiTargets)
 		{
 			if (const auto owner = _OwnerForMidiLoop(loop))
@@ -1725,6 +2065,7 @@ void QuantiserController::_SetMidiPhaseOffsetForTarget(const MidiPhaseDragTarget
 			settings.PhaseOffsetSamps = offsetSamps;
 			take->SetMidiQuantisation(settings);
 		}
+		_quantisation.UpdateStationHints(nullptr, base::DEPTH_LOOPTAKE, false, _stations);
 		break;
 	case MidiPhaseDragTargetKind::Global:
 	default:
@@ -1763,7 +2104,7 @@ void engine::QuantiserController::_ShowPhaseFeedback(unsigned int sampleRate)
 	if (!_feedbackSink) return;
 	const auto offset = _MidiPhaseOffsetForTarget(_midiPhaseDragTarget);
 	const char* scope = _midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::Global ? "Global" :
-		(_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::Station ? "Station" : (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::MidiLoop ? "Loop" : "Take"));
+		(_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::Station ? "Station" : ((_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::MidiLoop || _midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::AudioLoop) ? "Loop" : "Take"));
 	std::ostringstream text;
 	text << scope << " SHFT " << std::showpos;
 	if (sampleRate > 0u) text << std::fixed << std::setprecision(2) << 1000.0 * offset / sampleRate << " ms (" << offset << " samples)";
@@ -1781,9 +2122,15 @@ void engine::QuantiserController::_ShowPhaseFeedback(unsigned int sampleRate)
 		count = _midiPhaseDragTarget.TakeTargets.size();
 		for (const auto& take : _midiPhaseDragTarget.TakeTargets) if (take) include(take->MidiQuantisation().PhaseOffsetSamps);
 	}
+	else if (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::AudioLoop)
+	{
+		count = _midiPhaseDragTarget.AudioTargets.size();
+		for (const auto& loop : _midiPhaseDragTarget.AudioTargets) if (loop) include(loop->PlaybackOffsetSamps());
+	}
 	else if (_midiPhaseDragTarget.Kind == MidiPhaseDragTargetKind::MidiLoop)
 	{
-		count = _midiPhaseDragTarget.MidiTargets.size();
+		count = _midiPhaseDragTarget.MidiTargets.size() + _midiPhaseDragTarget.AudioTargets.size();
+		for (const auto& loop : _midiPhaseDragTarget.AudioTargets) if (loop) include(loop->PlaybackOffsetSamps());
 		for (const auto& loop : _midiPhaseDragTarget.MidiTargets) if (loop) include(loop->GetLoopQuantisationOverride().PhaseOffsetSamps.value_or(0));
 	}
 	if (minimum != maximum) text << " mixed [" << minimum << ", " << maximum << "] samples";
@@ -1836,15 +2183,257 @@ std::shared_ptr<engine::LoopTake> engine::QuantiserController::_OwnerForMidiLoop
 	return owner;
 }
 
-void engine::Quantiser::DetachStationMaster(const std::shared_ptr<engine::Station>& station)
+void Quantiser::DetachTakeMaster(const std::shared_ptr<LoopTake>& take)
 {
-	// Scene serializes this reference; transport/grid values intentionally survive.
-	if (!station) return;
-	for (const auto& take : station->GetLoopTakeSnapshot())
-		for (const auto& loop : take->GetLoops())
+    if(!take) return;
+    if(_acceptedMasterIdentity && _acceptedMasterIdentity->Take.lock()==take)
+    { _acceptedMasterIdentity.reset(); _masterStatus=_pendingMasterIdentity ? "Applying - "+_pendingMasterIdentity->Name : "Master removed; timing preserved"; }
+    for(const auto& loop:take->GetLoops())
+    {
+        if(loop==_masterLoop) _masterLoop.reset();
+        if(loop==_previousMasterLoop) _previousMasterLoop.reset();
+    }
+}
+
+void Quantiser::ReconcileMasterMembership(const std::vector<std::shared_ptr<Station>>& stations)
+{
+    const auto present=[&](const std::shared_ptr<LoopTake>& target) {
+        for(const auto& station:stations) if(station && !station->IsRemote() && !station->MembershipRemoving())
+            for(const auto& take:station->GetLoopTakeSnapshot()) if(take==target && !take->IsCaptureCancelled()) return true;
+        return false;
+    };
+    if(_acceptedMasterIdentity)
+    {
+        const auto take=_acceptedMasterIdentity->Take.lock();
+        if(!take || !present(take)) { DetachTakeMaster(take); _acceptedMasterIdentity.reset(); _masterStatus=_pendingMasterIdentity ? "Applying - "+_pendingMasterIdentity->Name : "Master removed; timing preserved"; }
+    }
+    const auto loopPresent=[&](const std::shared_ptr<Loop>& loop) {
+        if(!loop) return true;
+        for(const auto& station:stations) if(station && !station->IsRemote() && !station->MembershipRemoving())
+            for(const auto& take:station->GetLoopTakeSnapshot()) if(take && !take->IsCaptureCancelled())
+                if(take->FindStagedAudioLoopById(loop->Id())==loop) return true;
+        return false;
+    };
+    if(!loopPresent(_previousMasterLoop)) _previousMasterLoop.reset();
+    if(!loopPresent(_masterLoop)) { _masterLoop.reset(); if(!_localMasterTimingPending) { _acceptedMasterIdentity.reset(); _masterStatus=_pendingMasterIdentity ? "Applying - "+_pendingMasterIdentity->Name : "Master removed; timing preserved"; } }
+}
+
+void Quantiser::DetachStationMaster(const std::shared_ptr<Station>& station)
+{
+    if(station) for(const auto& take:station->GetLoopTakeSnapshot()) DetachTakeMaster(take);
+}
+
+QuantisationInteractionContext QuantiserController::InteractionContextLocked(utils::Position2d cursor, utils::Size2d viewport,
+	base::SelectDepth depth, std::vector<unsigned char> hover, std::vector<unsigned char> hover3d, unsigned int sampleRate) const
+{
+	QuantisationInteractionContext context;
+	context.CursorPos = cursor;
+	context.ViewportSize = viewport;
+	context.SelectDepth = depth;
+	context.HoverPath = std::move(hover);
+	context.HoverPath3d = std::move(hover3d);
+	context.SampleRate = sampleRate;
+	if (context.SelectDepth == base::DEPTH_LOOP)
+	{
+		bool anySelected = false;
+		auto hovered = HierarchySelection::Resolve(HierarchySelection::BorrowLocked(_stations), context.HoverPath);
+		if (!hovered) hovered = HierarchySelection::Resolve(HierarchySelection::BorrowLocked(_stations), context.HoverPath3d);
+		for (const auto& station : _stations)
+			if (station && !station->IsRemote())
+				for (const auto& take : station->GetLoopTakes())
+				{
+					for (const auto& loop : take->GetLoops())
+						if (loop)
+						{
+							anySelected |= loop->IsSelected();
+							if (loop->IsSelected()) context.SelectedAudioLoops.push_back(loop);
+							if (loop == hovered) context.HoveredAudioLoop = loop;
+						}
+					for (const auto& loop : take->GetMidiLoops())
+						if (auto model = loop->Model())
+						{
+							if (model->IsSelected()) { context.SelectedMidiLoops.push_back(loop); anySelected = true; }
+							if (model == hovered) context.HoveredMidiLoop = loop;
+						}
+				}
+		if (anySelected) { context.HoveredMidiLoop.reset(); context.HoveredAudioLoop.reset(); }
+		context.LoopDepthHasAudioTarget = !context.SelectedAudioLoops.empty() || static_cast<bool>(context.HoveredAudioLoop);
+	}
+	return context;
+}
+
+void engine::Quantiser::SetDefaultMidiQuantisationFraction(midi::MidiQuantisationFraction fraction,
+	const std::vector<std::shared_ptr<Station>>& stations, bool updateExisting)
+{
+	_defaultMidiQuantisationFraction = fraction;
+	for (const auto& station : stations)
+	{
+		if (!station || station->IsRemote()) continue;
+		station->SetDefaultMidiQuantisationFraction(fraction);
+		if (updateExisting) for (const auto& take : station->GetLoopTakes())
+		{
+			auto settings = take->MidiQuantisation();
+			settings.Fraction = fraction;
+			take->SetMidiQuantisation(settings);
+		}
+	}
+}
+
+std::string engine::Quantiser::MasterAudioLoopId() const
+{
+	return _masterLoop ? _masterLoop->Id() : std::string{};
+}
+void engine::Quantiser::RestoreMasterAudioLoopId(const std::string& id,
+	const std::vector<std::shared_ptr<Station>>& stations)
+{
+	if (id.empty()) return;
+	for (const auto& station : stations)
+		if (station && !station->IsRemote()) for (const auto& take : station->GetLoopTakes())
+			if (const auto loop = take ? take->FindStagedAudioLoopById(id) : nullptr)
 			{
-				if (loop == _masterLoop) _masterLoop.reset();
-				// Cancellation must not restore an identity owned by the removed station.
-				if (loop == _previousMasterLoop) _previousMasterLoop.reset();
+				_masterLoop = loop;
+				_masterLoopLengthSamps.store(_clock && _clock->SeedSourceLength() ? _clock->SeedSourceLength() : loop->LoopLength(), std::memory_order_release);
+				_masterOriginalBufferLengthSamps.store(loop->PhysicalLoopLength(), std::memory_order_release);
+                _RememberRecordedMaster(take,loop,stations);
+				for (const auto& member : stations)
+					if (member) member->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
+				return;
 			}
+}
+std::optional<engine::ChosenMasterReference> engine::Quantiser::ExportChosenMasterReference(
+    const std::vector<std::shared_ptr<Station>>& stations) const
+{
+    if(!_acceptedMasterIdentity || _localMasterTimingPending) return {};
+    const auto take=_acceptedMasterIdentity->Take.lock();
+    const auto loop=_acceptedMasterIdentity->ExplicitLoop.lock();
+    if(!take || take->IsCaptureCancelled() || (take->TakeState()!=LoopTake::STATE_PLAYING && (take->TakeState()!=LoopTake::STATE_INACTIVE || std::none_of(_restoredMasterCandidates.begin(),_restoredMasterCandidates.end(),[&](const auto& loaded) { return loaded.lock()==take; }))) || take->HasPendingTriggerCapture() || !take->TimingMaterialForRestore().second || (_acceptedMasterIdentity->HasExplicitLoop && (!loop || !loop->CanUseAsTimingReference()))) return {};
+    std::optional<ChosenMasterReference> result;
+    for(const auto& station:stations)
+        if(station && !station->IsRemote() && !station->MembershipRemoving())
+            for(const auto& member:station->GetLoopTakeSnapshot()) if(member==take)
+            {
+                if(result || station->Id().empty() || take->Id().empty()) return {};
+                if(loop && (loop->Id().empty() || take->FindStagedAudioLoopById(loop->Id())!=loop)) return {};
+                result=ChosenMasterReference{station->Id(),take->Id(),loop ? std::optional<std::string>{loop->Id()} : std::nullopt};
+            }
+    if(result)
+    {
+        unsigned int matches=0u;
+        for(const auto& station:stations) if(station && station->Id()==result->StationId)
+            for(const auto& member:station->GetLoopTakeSnapshot()) if(member && member->Id()==result->TakeId) ++matches;
+        if(matches!=1u) return {};
+    }
+    return result;
+}
+
+void engine::Quantiser::RestoreChosenMasterReference(const std::optional<ChosenMasterReference>& reference,
+    const std::string& legacyAudioId,const std::vector<std::shared_ptr<Station>>& stations,unsigned int sampleRate)
+{
+    _acceptedMasterIdentity.reset(); _masterLoop.reset(); _masterStatus.clear();
+    _restoredMasterCandidates.clear();
+    std::shared_ptr<LoopTake> chosen;
+    std::shared_ptr<Loop> explicitLoop;
+    bool ambiguous=false;
+    for(const auto& station:stations)
+    {
+        if(!station || station->IsRemote() || station->MembershipRemoving()) continue;
+        for(const auto& take:station->GetLoopTakeSnapshot())
+        {
+            if(!take) continue;
+            _restoredMasterCandidates.push_back(take);
+            if(take->IsCaptureCancelled() || (take->TakeState()!=LoopTake::STATE_PLAYING && take->TakeState()!=LoopTake::STATE_INACTIVE) || take->HasPendingTriggerCapture() || !take->TimingMaterialForRestore().second) continue;
+            std::shared_ptr<Loop> leaf;
+            if(reference)
+            {
+                if(reference->StationId.empty() || reference->TakeId.empty() || station->Id()!=reference->StationId || take->Id()!=reference->TakeId) continue;
+                if(reference->AudioLoopId)
+                {
+                    if(reference->AudioLoopId->empty()) continue;
+                    leaf=take->FindStagedAudioLoopById(*reference->AudioLoopId);
+                    if(!leaf || !leaf->CanUseAsTimingReference()) continue;
+                }
+            }
+            else
+            {
+                if(legacyAudioId.empty()) continue;
+                leaf=take->FindStagedAudioLoopById(legacyAudioId);
+                if(!leaf || !leaf->CanUseAsTimingReference()) continue;
+            }
+            if(chosen) { ambiguous=true; continue; }
+            chosen=take; explicitLoop=leaf;
+        }
+    }
+    if(!chosen || ambiguous) return; // Saved transport remains authoritative even without a chosen source.
+    const auto material=chosen->TimingMaterialForRestore();
+    _masterLoop=explicitLoop;
+    // Legacy phase reference is valid only inside the explicitly chosen take.
+    if(!_masterLoop && !legacyAudioId.empty()) _masterLoop=chosen->FindStagedAudioLoopById(legacyAudioId);
+    if(!_masterLoop || !_masterLoop->CanUseAsTimingReference()) _masterLoop=material.first;
+    const auto sourceLength=explicitLoop ? explicitLoop->LoopLength() : material.second;
+    if(!sourceLength) { _masterLoop.reset(); return; }
+    _masterLoopLengthSamps.store(sourceLength);
+    _masterOriginalBufferLengthSamps.store(_masterLoop ? _masterLoop->PhysicalLoopLength() : sourceLength);
+    _RememberRecordedMaster(chosen,explicitLoop,stations,sampleRate);
+    _acceptedMasterIdentity->Geometry.SourceLength=sourceLength;
+    for(const auto& station:stations) if(station) station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
+}
+
+void engine::Quantiser::AdoptRecordedMaster(const std::vector<std::shared_ptr<Station>>& stations)
+{
+	if (_masterLoop || (_acceptedMasterIdentity && !_acceptedMasterIdentity->Take.expired()) || _localMasterTimingPending) return;
+	if (_acceptedRemoteGrid.IntervalLengthSamps > 0ul
+		&& _masterLoopLengthSamps.load(std::memory_order_acquire) == 0ul)
+	{
+		for (const auto& station : stations)
+			if (station && !station->IsRemote())
+				for (const auto& take : station->GetLoopTakes())
+					if (take && std::none_of(_restoredMasterCandidates.begin(),_restoredMasterCandidates.end(),[&](const auto& loaded) { return loaded.lock()==take; }) && take->IsIndependentRecording() && !take->IsCaptureCancelled() && take->IsCompletedRecording()
+						&& std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) == _preReclockTakeIds.end())
+					{
+						_masterLoop = take->GetLoops().empty() ? nullptr : take->GetLoops().front();
+						const auto length = take->VisualLoopLengthSamps();
+						_masterLoopLengthSamps.store(length, std::memory_order_release);
+						_masterOriginalBufferLengthSamps.store(_masterLoop ? _masterLoop->PhysicalLoopLength() : length,
+							std::memory_order_release);
+                        _RememberRecordedMaster(take,{},stations);
+						return;
+					}
+	}
+	for (const auto& station : stations)
+	{
+		if (!station || station->IsRemote()) continue;
+		const auto take = station->RecordedMasterTakeOnOwner();
+		if (!take || std::any_of(_restoredMasterCandidates.begin(),_restoredMasterCandidates.end(),[&](const auto& loaded) { return loaded.lock()==take; }) || std::find(_preReclockTakeIds.begin(), _preReclockTakeIds.end(), take->Id()) != _preReclockTakeIds.end()) continue;
+		const auto takes = station->GetLoopTakes();
+		if (std::find(takes.begin(), takes.end(), take) == takes.end()) continue;
+		for (const auto& loop : take->GetLoops()) if (loop && loop->LoopLength())
+		{
+			_masterLoop = loop;
+			_masterLoopLengthSamps.store(loop->LoopLength(), std::memory_order_release);
+			_masterOriginalBufferLengthSamps.store(loop->PhysicalLoopLength(), std::memory_order_release);
+            _RememberRecordedMaster(take,{},stations);
+			return;
+		}
+        if(take->VisualLoopLengthSamps()>0ul && !take->GetMidiLoops().empty())
+        {
+            _masterLoopLengthSamps.store(take->VisualLoopLengthSamps());
+            _masterOriginalBufferLengthSamps.store(take->VisualLoopLengthSamps());
+            _RememberRecordedMaster(take,{},stations); return;
+        }
+	}
+}
+
+std::int32_t engine::Quantiser::_MasterAudioReferenceOffsetSamps() const noexcept
+{
+	if (!_masterLoop || !_masterLoop->LoopLength()) return 0;
+	auto offset = static_cast<long long>(std::llround(_masterLoop->AppliedPlaybackOffsetSamps()))
+		% static_cast<long long>(_masterLoop->LoopLength());
+	if (offset > std::numeric_limits<std::int32_t>::max()) offset -= _masterLoop->LoopLength();
+	if (offset < std::numeric_limits<std::int32_t>::min()) offset += _masterLoop->LoopLength();
+	return static_cast<std::int32_t>(offset);
+}
+
+void engine::Quantiser::RefreshMasterAudioReference(const std::shared_ptr<Station>& station) const
+{
+    if (station) station->SetMasterAudioReferenceOffsetSamps(_MasterAudioReferenceOffsetSamps());
 }

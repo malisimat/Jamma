@@ -19,8 +19,10 @@
 #include "Json.h"
 #include "Timer.h"
 #include "../midi/MidiQuantisation.h"
+#include "../midi/MidiChannelRoute.h"
 #include "../audio/AudioMixer.h"
 #include "../engine/PerformanceGroups.h"
+#include "../engine/QuantisationTiming.h"
 
 namespace io
 {
@@ -40,7 +42,7 @@ namespace io
 		};
 
 		static std::optional<JamFile> FromStream(std::stringstream ss);
-		static bool ToStream(JamFile jam, std::stringstream& ss);
+		static bool ToStream(JamFile jam, std::stringstream& ss, std::string* error = nullptr);
 		static const std::string DefaultJson;
 		static constexpr unsigned int CurrentFormatMajor = 0u;
 		static constexpr unsigned int CurrentFormatMinor = 3u;
@@ -50,6 +52,10 @@ namespace io
 		static constexpr std::size_t MaxLoopsPerTake = 1024u;
 		static constexpr std::size_t MaxMidiStreamsPerTake = 128u;
 		static constexpr std::size_t MaxAudioRouteChannels = 1024u;
+		static constexpr std::size_t MaxActiveRackPlugins = 32u;
+		// Recovery payloads may exceed active rack limits, but imports stay bounded.
+		static constexpr std::size_t MaxMidiRouteRecoveryIdsPerChannel = 4096u;
+		static constexpr std::size_t MaxMidiRouteRecoveryBytes = 1024u * 1024u;
 		static constexpr std::size_t MaxTriggerHistoryPerTrigger = 64u;
 		static constexpr unsigned long MaxLoopLengthSamps = 0x7fffffffu;
 
@@ -107,6 +113,8 @@ namespace io
 			// Returns an empty vector when State is empty or malformed.
 			std::vector<std::uint8_t> DecodeState() const;
 		};
+		static bool ValidSavedRouting(const std::vector<VstEntry>& entries,
+			const std::array<midi::MidiChannelRoute, 16>& routes, bool allowMissingIdentities = false);
 
 		struct Loop
 		{
@@ -118,6 +126,7 @@ namespace io
 			unsigned long MasterLoopCount;
 			// Current-schema body phase. Index is retained only for legacy readers.
 			unsigned long BodyPlayIndex = 0;
+			std::int32_t PlaybackOffsetSamps = 0;
 			double Level;
 			double Speed;
 			unsigned int MuteGroups;
@@ -125,6 +134,9 @@ namespace io
 			bool Muted;
 			LoopMix Mix;
 			std::vector<VstEntry> VstChain;
+			// Each rack owns its channel choices independently.
+			std::vector<int> AllowedMidiChannels{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+			std::array<midi::MidiChannelRoute, 16> MidiChannelRoutes{};
 
 			static std::optional<Loop> FromJson(Json::JsonPart json);
 		};
@@ -142,6 +154,7 @@ namespace io
 			std::uint8_t Channel = 0;
 			std::uint8_t Controller = 0;
 			std::string TargetScope = "station";
+			std::string TargetPluginId; // v0.4 sidecars; authoritative when present.
 			unsigned int TargetPluginIndex = 0;
 			unsigned int TargetLoopIndex = 0;
 			unsigned int TargetParameterIndex = 0;
@@ -164,14 +177,6 @@ namespace io
 			std::string Id;
 		};
 
-		struct MidiRoute
-		{
-			// OutputIndex is the flattened take/stream index. Live routes use IsLive.
-			unsigned int OutputIndex = 0;
-			bool IsLive = false;
-			unsigned int PluginIndex = 0;
-		};
-
 		struct LoopTake
 		{
 			std::string Name;
@@ -179,14 +184,21 @@ namespace io
 			std::vector<double> BusLevels;
 			std::vector<Loop> Loops;
 			std::vector<VstEntry> VstChain;
+			// Each rack owns its channel choices independently.
+			std::vector<int> AllowedMidiChannels{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+			std::array<midi::MidiChannelRoute, 16> MidiChannelRoutes{};
 			bool MidiQuantEnabled = false;
 			int MidiQuantFraction = static_cast<int>(midi::MidiQuantisationFraction::Quarter);
 			std::int32_t TakePhaseOffsetSamps = 0;
 			unsigned long MidiPlayIndex = 0;
+			std::optional<std::int64_t> MidiSourcePosition;
 			unsigned long MidiPlayLength = 0;
 			std::uint64_t MidiQuantTransportStart = 0;
 			std::optional<std::uint64_t> BaseIntervalSamps;
 			std::optional<std::uint32_t> BaseDivisions;
+			double RecordingPlaybackRate = 1.0;
+			unsigned long RecordingMasterLengthSamps = 0ul;
+			unsigned int RecordingBeatsPerInterval = 0u;
 			std::vector<MidiStream> MidiStreams;
 			// One destination-bus list per audio input (loop) mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;
@@ -207,8 +219,9 @@ namespace io
 			std::vector<LoopTake> LoopTakes;
 			std::vector<VstEntry> VstChain;
 			std::int32_t StationPhaseOffsetSamps = 0;
+			bool Muted = false; // Retained station intent; absent in legacy sessions.
 			std::vector<int> AllowedMidiChannels;
-			std::vector<MidiRoute> MidiRoutes;
+			std::array<midi::MidiChannelRoute, 16> MidiChannelRoutes{};
 			// One destination-output list per station bus mixer.
 			std::vector<std::vector<unsigned long>> AudioRoutes;
 			bool HasAudioRoutes = false;
@@ -246,8 +259,14 @@ namespace io
 		unsigned long TimerTicks = 0;
 		unsigned int QuantiseSamps = 1;
 		GlobalMidiQuantState GlobalMidiQuantStateValue = GlobalMidiQuantState::Off;
+		std::string MasterAudioLoopId;
+        std::optional<engine::ChosenMasterReference> ChosenMaster;
+		midi::MidiQuantisationFraction DefaultMidiQuantFraction = midi::MidiQuantisationFraction::Quarter;
 		std::int32_t GlobalPhaseOffsetSamps = 0;
 		double TransportOffsetLoopFrac = 0.0;
+		double PlaybackRate = 1.0;
+		double MasterRecordingPlaybackRate = 1.0;
+        unsigned int MasterBeatsPerInterval = 0u;
 		utils::Timer::QuantisationType Quantisation = utils::Timer::QUANTISE_OFF;
 		// A loopless session has no local master geometry. Its first successful
 		// recording establishes the master length, grain, and BPI.
@@ -257,6 +276,9 @@ namespace io
 		unsigned long MasterLengthSamps = 1;
 		std::uint64_t AbsoluteSamplePos = 0;
 	private:
+		static std::optional<std::vector<int>> ParseAllowedMidiChannels(const Json::JsonPart& json);
+		static bool ParseMidiChannelRoutes(const Json::JsonPart& json, std::array<midi::MidiChannelRoute, 16>& routes);
+		static double ParsePlaybackRate(const Json::JsonPart& json, const char* key);
 		static std::optional<double> ParseFiniteNumber(const Json::JsonValue& value) noexcept;
 	};
 }

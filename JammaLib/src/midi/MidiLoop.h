@@ -15,6 +15,8 @@
 #include "../../include/Constants.h"
 #include "MidiEvent.h"
 #include "MidiQuantisation.h"
+#include "../base/PublishedAudioSnapshot.h"
+#include "../audio/PlaybackRate.h"
 
 namespace vst
 {
@@ -24,6 +26,15 @@ namespace vst
 namespace midi
 {
 	using namespace graphics;
+
+	// Transient articulation provenance; never serialized or encoded in MIDI flags.
+	// Sample mapping stays with MidiIndexedOutputSink; delivery adjusts only endpoint deltas.
+	struct MidiVoiceEvent
+	{
+		std::uint64_t Token = 0u;
+		std::uint32_t Start = 0u, Duration = 0u, LoopLength = 0u;
+        double SourceFrameResidual = 0.0;
+	};
 
 	// Sink for MIDI playback. Implementations should not allocate or block.
 	class IMidiSink
@@ -36,6 +47,8 @@ namespace midi
 			OnEvent(ev);
 			return true;
 		}
+		virtual bool TryOnVoiceEvent(const MidiEvent& ev, const MidiVoiceEvent&) noexcept
+		{ return TryOnEvent(ev); }
 	};
 
 	class IMidiOutputSink
@@ -48,6 +61,8 @@ namespace midi
 			OnEvent(outputIndex, ev);
 			return true;
 		}
+		virtual bool TryOnVoiceEvent(unsigned int outputIndex, const MidiEvent& ev, const MidiVoiceEvent&) noexcept
+		{ return TryOnEvent(outputIndex, ev); }
 	};
 
 
@@ -57,6 +72,17 @@ namespace midi
 		Recording,
 
 		Playing
+	};
+
+	// Non-callback persistence metadata. Scene serializes writes with wire/bind,
+	// dispatch construction and paused export. IDs remain valid after removal;
+	// an unavailable target must never be reinterpreted as its compacted index.
+	struct AutomationTargetIdentity
+	{
+		std::string Scope;
+		std::string PluginId;
+		unsigned int PluginIndex = 0u;
+		unsigned int LoopIndex = 0u;
 	};
 
 	// Metadata describing how a CC controller is wired to a hosted plugin
@@ -73,6 +99,7 @@ namespace midi
 		// and the wire/delete key handlers). No atomic needed.
 		vst::IVstPlugin* TargetPlugin{ nullptr };
 		unsigned int     TargetParameterIndex{ 0u };
+		AutomationTargetIdentity SavedTarget;
 
 		static constexpr std::uint32_t kInactive = 0u;
 
@@ -113,15 +140,14 @@ namespace midi
 		static constexpr std::size_t MaxPoints = 512u;
 
 		AutomationMapping Mapping;
-		std::array<std::pair<float, float>, MaxPoints> Points{}; // (frac, value)
-		std::size_t PointCount = 0u;
-
-		// Seqlock generation counter. The MIDI thread (the only writer of Points /
-		// PointCount) bumps this to an odd value before mutating the buffer and back
-		// to an even value afterwards. Both the audio thread (GetAutomationValueAtCursor)
-		// and the render thread (SnapshotAutomationLanePoints) participate in a bounded
-		// retry loop so neither ever observes a half-shifted buffer.
-		std::atomic<std::uint32_t> Revision{ 0u };
+		struct PointSet
+		{
+			std::array<std::pair<float, float>, MaxPoints> Points{}; // (frac, value)
+			std::size_t PointCount = 0u;
+		};
+		// MIDI/UI writers publish immutable point sets. Audio borrows without
+		// shared ownership; render/export use the off-callback owning load.
+		base::PublishedAudioSnapshot<const PointSet> PublishedPoints;
 	};
 
 	// In-memory MIDI loop. Records sample-offset-stamped events relative to the
@@ -132,13 +158,15 @@ namespace midi
 	//   - All storage is preallocated. RecordEvent / ReadBlock perform no heap allocation.
 	//   - When event capacity is reached during recording, further events are dropped
 	//     (Drop-newest; the recorded loop is what it is).
-	//   - Loop wrap releases paired held notes; unmatched attacks continue until
+	//   - Loop wrap releases unmerged held notes; merged attacks continue until
 	//     a played release or an explicit full flush.
 	class MidiLoop
 	{
 	public:
 		static constexpr std::size_t DefaultCapacity = 4096;
 		static constexpr std::size_t TotalNoteSlots = 16u * 128u; // channel * note
+		using VoiceToken = std::uint64_t;
+		using VoiceTokens = std::array<VoiceToken, DefaultCapacity>;
 		static constexpr std::size_t MaxAutomationLanes = 8u;
 		struct AutomationLaneExport
 		{
@@ -149,6 +177,7 @@ namespace midi
 		// Transient identity at the export boundary. The sidecar receives an
 		// explicit owner scope and plugin index, never this raw pointer.
 			const vst::IVstPlugin* TargetPlugin = nullptr;
+			AutomationTargetIdentity SavedTarget;
 			std::array<std::pair<float, float>, AutomationLane::MaxPoints> Points{};
 			std::size_t PointCount = 0u;
 		};
@@ -176,13 +205,22 @@ namespace midi
 	public:
 		struct EditState
 		{
+			std::uint32_t SeamMergeWindowSamps = 0u;
 			std::array<MidiEvent, DefaultCapacity> Events{};
+			VoiceTokens Tokens{}; // Transient NoteOn identity; never exported as MIDI bytes.
 			std::size_t EventCount = 0u;
 			std::uint32_t LoopLengthSamps = 0u;
 			std::uint64_t Revision = 0u;
 			std::uint64_t SourceRevision = 0u;
 			MidiQuantisationSettings Quantisation{};
 			std::uint64_t QuantisationTransportStartSamps = 0u;
+		};
+
+		struct ProjectedNote
+		{
+			MidiNote Note;
+			std::size_t On, Off;
+			bool Ambiguous = false;
 		};
 
 	private:
@@ -197,18 +235,42 @@ namespace midi
 			std::array<std::uint8_t, TotalNoteSlots> Velocity{};
 			std::array<std::uint8_t, TotalNoteSlots> Flags{};
 			std::array<std::uint16_t, TotalNoteSlots> ContinuationRoot{};
+			std::array<std::uint16_t, TotalNoteSlots> Owner{};
 		};
 
+		enum class PublicationKind { Recovery, EditorEdit };
+		struct VoiceOwner
+		{
+			std::uint32_t Start = 0u, Duration = 0u;
+			std::uint16_t SourceOn = 0u;
+			std::uint8_t RawKind = 0u, PlaybackKind = 0u, ReleaseVelocity = 0u;
+			bool Ambiguous = false;
+		};
+		struct SourceVoice
+		{
+			std::uint16_t SourceOn, Owner;
+			std::uint8_t Channel, Pitch;
+			bool Ambiguous;
+		};
 		struct PlaybackSnapshot
 		{
 			std::array<MidiEvent, DefaultCapacity> Raw{};
-			std::array<MidiEvent, DefaultCapacity> Quantised{};
-			std::array<std::uint8_t, DefaultCapacity> RawUnmatchedStarts{};
-			std::array<std::uint8_t, DefaultCapacity> QuantisedUnmatchedStarts{};
-			std::array<std::uint16_t, DefaultCapacity> QuantisedContinuationRoots{};
+			VoiceTokens Tokens{};
+			std::array<std::uint16_t, DefaultCapacity> RawOwners{};
+			std::array<std::uint16_t, 2u * DefaultCapacity> PlaybackOwners{};
+			std::vector<VoiceOwner> Owners; // At most DefaultCapacity + 1, indexed while leased.
+			std::vector<SourceVoice> Voices; // At most one per raw NoteOn, owner-prepared.
+			std::uint64_t RecoveryEpoch = 0u;
+			std::array<MidiEvent, 2u * DefaultCapacity> Quantised{};
+			std::array<std::uint8_t, 2u * DefaultCapacity> RawUnmatchedStarts{};
+			std::array<std::uint8_t, 2u * DefaultCapacity> QuantisedUnmatchedStarts{};
+			std::array<std::uint16_t, 2u * DefaultCapacity> QuantisedContinuationRoots{};
+			std::vector<ProjectedNote> Notes; // Owner-prepared drawing and edit identities.
 			ChaseState RawChaseHead{};
 			ChaseState QuantisedChaseHead{};
 			std::size_t EventCount = 0u;
+			std::size_t PlaybackEventCount = 0u;
+			std::uint32_t SeamMergeWindowSamps = 0u;
 			std::uint32_t LoopLengthSamps = 0u;
 			std::uint64_t Revision = 0u;
 			std::uint64_t SourceRevision = 0u;
@@ -216,11 +278,13 @@ namespace midi
 			// Quantised also holds seam-merged playback when quantisation is off.
 			bool PlaybackViewActive = false;
 			MidiQuantisationSettings Quantisation{};
+			MidiQuantisationSettings PlaybackQuantisation{};
 			std::uint64_t QuantisationTransportStartSamps = 0u;
 		};
 
 	public:
-		MidiLoop() noexcept;
+		explicit MidiLoop(float sampleRate = static_cast<float>(constants::DefaultSampleRate),
+			unsigned int midiSeamMergeWindowMs = constants::DefaultMidiSeamMergeWindowMs) noexcept;
 		// Job owner assigns once before stream publication; audio never accesses it.
 		const std::string& Id() const noexcept { return _groupId; }
 		void SetGroupId(std::string id) { _groupId = std::move(id); }
@@ -230,6 +294,8 @@ namespace midi
 		// Append an event during recording. `ev.sampleOffset` is the offset (in samples)
 		// since StartRecord(). Returns false if capacity was exceeded (event dropped).
 		bool RecordEvent(const MidiEvent& ev) noexcept;
+		bool MapRecordedCaptureSamples(const audio::PlaybackRateHistory& history,
+			std::uint64_t physicalOrigin, const audio::SourcePosition& sourceOrigin, double recordingRate) noexcept;
 		// Append an event during non-RT build/finalization flows (for example,
 		// MIDI overdub render). Uses the same fixed-capacity drop-newest behavior
 		// as RecordEvent.
@@ -245,6 +311,9 @@ namespace midi
 		// MIDI owner only, before EndRecord: select physical [0,L), then rotate
 		// complete note endpoints into content coordinates. No publication occurs.
 		bool NormalizeTriggerCapture(std::uint32_t loopLengthSamps, std::int64_t rotation);
+		// MIDI owner only, after capture rotation: notes held throughout capture
+		// span the content window with a final-sample release before retriggering.
+		void ClampFullLoopCaptureNotes(std::uint32_t length, const MidiNoteSnapshot& held) noexcept;
 		// Finalize the recording with an explicit loop length in samples and transition
 		// to Playing. Events whose offset >= loopLengthSamps are kept in storage but will
 		// not be emitted (they are outside the playable window).
@@ -254,24 +323,23 @@ namespace midi
 		void Reset() noexcept;
 		// Non-RT save/load transfer. Call SnapshotForExport only at an established
 		// quiescent scene boundary: event storage has a single MIDI-writer owner.
-		// Automation points use their bounded lane seqlock and return false rather
-		// than exposing a torn lane. anchorCorrection is folded into the exported
-		// origin so restored takes can begin with correction zero.
+		// Automation points use immutable published lane views. anchorCorrection is
+		// folded into the exported origin so restored takes begin at correction zero.
 		bool SnapshotForExport(ExportState& state,
-			std::int32_t anchorCorrection = 0) const noexcept;
+			std::int32_t anchorCorrection = 0) const;
 		// Restores raw event order exactly; unlike ReplaceRecordedEvents this does
 		// not sort simultaneous events. Runtime plugin pointers are deliberately
 		// cleared and must be rebound by the Station after VST resolution.
-		bool RestoreFromExport(const ExportState& state) noexcept;
+		bool RestoreFromExport(const ExportState& state);
 		// Bind a resolved runtime plugin after restoring a pointer-free lane DTO.
 		bool BindAutomationLaneTarget(std::size_t laneIdx,
-			vst::IVstPlugin* plugin) noexcept;
+			vst::IVstPlugin* plugin, const std::string& identity = {});
 
 		// Play any events that fall within [globalSample, globalSample + numSamples).
 		// Time mapping: loopOffset = globalSample % LoopLengthSamps().
 		// Emitted events' `sampleOffset` is rewritten to the absolute global sample at
 		// which the sink should treat them as occurring. If the block crosses a loop
-		// boundary, paired held notes are flushed at the wrap sample; unmatched notes continue.
+		// boundary, unmerged held notes are flushed at the wrap sample; merged notes continue.
 		// Callback owner requests a full voice reset and destination-state chase.
 		void RequestRelocationChase() noexcept
 			{ _relocationChaseRequested = true; ++_relocationGeneration; }
@@ -298,7 +366,10 @@ namespace midi
 		std::uint32_t AutomationGlobalSampleOrigin() const noexcept { return _automationGlobalSampleOrigin; }
 		std::uint64_t DroppedEventCount() const noexcept { return _dropped; }
 		std::uint64_t Revision() const noexcept;
-		std::optional<std::uint64_t> PublishedRevisionAtAudioBoundary() const noexcept;
+		struct PlaybackPublication { std::uint64_t Revision, RecoveryEpoch; };
+		std::optional<PlaybackPublication> PublishedStateAtAudioBoundary() const noexcept;
+		// A bounded token lookup into the current leased image. No snapshot pointer escapes.
+		bool ReconcileQueuedVoice(MidiVoiceEvent& voice, MidiEvent& event, std::int32_t& endpointDelta) const noexcept;
 		// Notes that have been emitted as NoteOn but whose NoteOff has not yet been played.
 		// Used by the ditch path to flush stuck notes before the loop is discarded.
 		std::bitset<TotalNoteSlots> HeldNotes() const noexcept;
@@ -311,7 +382,7 @@ namespace midi
 		bool SnapshotForEdit(EditState& state) const noexcept;
 		// Owner thread only, serialized by LoopTake::_midiCaptureMutex. A failed
 		// publication leaves the completed source and playback unchanged.
-		bool PublishEdit(const EditState& state) noexcept;
+		bool PublishEdit(const EditState& state, EditState* accepted = nullptr, std::uint64_t* acceptedRevision = nullptr) noexcept;
 		// Job-side diagnostics: read the event currently published for playback.
 		bool TryGetPlaybackEvent(std::size_t index, MidiEvent& ev) const noexcept;
 		void AttachModel(std::shared_ptr<MidiModel> model) noexcept;
@@ -326,9 +397,9 @@ namespace midi
 
 		// Write a control point for lane laneIdx at fractional loop position frac
 		// (0..1). If a point already exists at (approximately) frac the value is
-		// updated in place; otherwise the point is inserted in frac order. Real-time
-		// safe: fixed-capacity storage, no allocation. Points beyond capacity are
-		// dropped (drop-newest). Called on the MIDI thread during recording.
+		// updated in place; otherwise the point is inserted in frac order. This
+		// non-audio MIDI-pump writer allocates an immutable copy; the callback only
+		// borrows it. Points beyond capacity are dropped (drop-newest).
 		void SetAutomationValueAtFrac(std::size_t laneIdx, double frac, float value) noexcept;
 
 		// Replace automation in the sample-domain half-open window
@@ -343,8 +414,10 @@ namespace midi
 		// Cursor-advancing read on lane laneIdx: advances cursorIdx forward to the
 		// correct bracket for frac, returns the piecewise-linearly interpolated
 		// value. Resets the cursor on loop wrap (detected when frac steps backward).
-		// Amortised O(1) per block. Returns 0 when the lane has no points.
-		float GetAutomationValueAtCursor(std::size_t laneIdx, double frac, std::uint16_t& cursorIdx) const noexcept;
+		// Amortised O(1) per block. Empty lanes yield zero; a failed bounded
+		// borrow yields no value so the caller can keep its previous parameter.
+		std::optional<float> GetAutomationValueAtCursor(std::size_t laneIdx, double frac,
+			std::uint16_t& cursorIdx) const noexcept;
 
 		// Clear a lane's mapping and control points (non-audio thread; delete key).
 		void ClearAutomationLane(std::size_t laneIdx) noexcept;
@@ -369,18 +442,19 @@ namespace midi
 		// Non-audio thread only.
 		bool WireEditorAutomationLane(std::size_t laneIdx,
 			vst::IVstPlugin* plugin,
-			unsigned int paramIdx) noexcept;
+			unsigned int paramIdx, const std::string& identity = {});
 
-		// Render-thread consistent read of a lane's control points via the lane
-		// seqlock. Copies up to maxPoints (frac, value) pairs into out and returns
-		// the count actually copied. Returns 0 for an invalid lane. Safe to call
-		// concurrently with MIDI-thread writes (retries on a torn read).
+		// Render-thread read of an immutable lane view. Copies up to maxPoints
+		// (frac, value) pairs into out and returns the count actually copied.
 		std::uint16_t SnapshotAutomationLanePoints(std::size_t laneIdx,
 			std::pair<float, float>* out, std::size_t maxPoints) const noexcept;
 
 		// Whether a lane currently has a mapping wired. Used by the renderer to gate
 		// and highlight active automation bands.
 		bool IsAutomationLaneActive(std::size_t laneIdx) const noexcept;
+		// Off-callback owner pump: reclaim retired point sets after audio borrows end,
+		// including when no further automation edit is published.
+		void CollectAutomationPointSnapshots();
 
 		// Non-destructive start-time quantisation. Non-RT publication builds immutable
 		// event buffers and publishes a raw pointer for audio-thread readers. Retained
@@ -404,12 +478,15 @@ namespace midi
 		static MidiQuantisationSettings ResolveQuantisation(const MidiQuantisationSettings& inherited,
 			const QuantisationOverride& overrides) noexcept;
 		const MidiQuantisationSettings& Quantisation() const noexcept { return _quantisation; }
+		void UseTakePhaseTrajectory() noexcept { _takePhaseTrajectory = true; }
 		bool IsQuantisationActive() const noexcept;
 
-		// Update the sample rate used to project the ms-based automation merge
-		// window into normalised frac space. Should be called whenever the audio
-		// device sample rate changes, mirroring the pattern used for audio Loop.
-		void SetSampleRate(float sampleRate) noexcept { _sampleRate = sampleRate; }
+		// Owner-side format refresh: project automation timing and the optional ms-based
+		// seam policy at the current rate, then republish existing playback once.
+		// Sample-only updates retain the seam policy; audio reads the prepared snapshot.
+		void SetSampleRate(float sampleRate, std::optional<unsigned int> midiSeamMergeWindowMs = std::nullopt) noexcept;
+		// Same owner-side view as playback, retaining source indices for editor gestures.
+		static std::vector<ProjectedNote> BuildEditorNotes(const EditState& source);
 
 		static constexpr std::size_t NoteSlot(std::uint8_t channel, std::uint8_t note) noexcept
 		{
@@ -434,10 +511,9 @@ namespace midi
 		static bool ShouldSuppressContinuedAttack(bool continuing, bool merged,
 			std::uint8_t startKind, std::uint16_t soundingRoot, std::uint16_t attackRoot) noexcept;
 		static void AdvanceChaseState(ChaseState& state, const MidiEvent& event,
-			std::uint8_t startKind, std::uint16_t root) noexcept;
+			std::uint8_t startKind, std::uint16_t root, std::uint16_t owner) noexcept;
 		static void BuildChaseHead(PlaybackSnapshot& snapshot, bool quantised) noexcept;
 		bool ChaseAtCursor(std::uint32_t sample, const PlaybackSnapshot& snapshot, IMidiSink& sink) noexcept;
-		static void ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept;
 		class OwnerPublicationGuard
 		{
 		public:
@@ -455,13 +531,16 @@ namespace midi
 			std::uint32_t length, std::uint64_t revision,
 			const MidiQuantisationSettings& quantisation,
 			std::uint64_t transportStart, bool sourceChanged = true,
-			bool inheritActiveGrid = false, bool ownerGateHeld = false) noexcept;
+			bool inheritActiveGrid = false, bool ownerGateHeld = false,
+			PublicationKind kind = PublicationKind::Recovery, const VoiceTokens* tokens = nullptr) noexcept;
 		// Owner-side completion only. An active callback reader releases its pool
 		// slot independently; never call this from an audio callback.
 		void PublishCompletionWithRetry(const MidiEvent* raw, std::size_t count,
 			std::uint32_t length, std::uint64_t revision) noexcept;
 		// Owner-side only: merge overlapping notes from adjacent source repeats.
+		static void ClassifyUnmatchedStarts(PlaybackSnapshot& snapshot) noexcept;
 		static bool MergePlaybackSeamNotes(PlaybackSnapshot& snapshot);
+		void ReconcileHeldVoices(std::uint32_t sample, const PlaybackSnapshot& snapshot, IMidiSink& sink) noexcept;
 		const PlaybackSnapshot* AcquirePlaybackSnapshot() const noexcept;
 		void ReleasePlaybackSnapshot() const noexcept;
 
@@ -513,8 +592,14 @@ namespace midi
 		std::uint64_t _preparedOwnerTransportStartSamps = 0u;
 		mutable std::atomic<std::uint32_t> _playbackReaders{ 0u };
 		std::uint64_t _callbackRevision = 0u;
+		std::uint64_t _callbackRecoveryEpoch = 0u;
+		std::uint64_t _nextRecoveryEpoch = 0u, _nextVoiceToken = 0u; // Serialized publication owner.
+		std::array<VoiceToken, TotalNoteSlots> _heldToken{}; // Accepted attacks only, callback owned.
+		std::array<std::uint16_t, TotalNoteSlots> _heldOwner{}, _reconcileOwner{};
+		std::array<std::uint8_t, TotalNoteSlots> _reconcileVelocity{};
 		std::size_t _eventCount;
 		float _sampleRate;
+		unsigned int _midiSeamMergeWindowMs;
 		std::uint32_t _loopLengthSamps;
 		// TODO(latency): the loop-relative phase anchor used for MIDI/automation
 		// playback does not yet account for this take's VST chain latency -- see
@@ -527,6 +612,8 @@ namespace midi
 		std::atomic<MidiLoopState> _state;
 		std::atomic<std::uint32_t> _completedLengthForEditor{ 0u };
 		std::bitset<TotalNoteSlots> _held;
+		std::bitset<16> _sustainHeld; // Callback-owned accepted pedal downs.
+		std::bitset<16> _pendingSustainReleases; // Callback-owned bounded release retry.
 		// Callback-only state, cleared by played releases and full flushes.
 		std::bitset<TotalNoteSlots> _continuing;
 		std::bitset<TotalNoteSlots> _mergedContinuing; // Callback only; subset of _continuing.
@@ -543,6 +630,7 @@ namespace midi
 		std::atomic<std::shared_ptr<MidiModel>> _model;
 		std::uint64_t _sourceRevision = 0u;
 		MidiQuantisationSettings _quantisation;
+		bool _takePhaseTrajectory = false;
 		MidiQuantisationSettings _inheritedQuantisation;
 		QuantisationOverride _loopQuantisationOverride;
 		std::optional<bool> _forcedQuantisationEnabled;

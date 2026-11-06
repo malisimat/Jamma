@@ -3,6 +3,6 @@
     "testMate.cpp.discovery.loadOnStartup": true,
     "testMate.cpp.log.logpanel": true,
     "gtest-adapter.debugConfig": [
-        "Launch Jamma (Debug x64)"
+        "Run JammaLib GoogleTests (Debug x64)"
     ]
 }

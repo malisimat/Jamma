@@ -248,3 +248,35 @@ TEST(GraphicsMidiModel, SinglePitchHeightIsCappedInTakeCoordinatesAndShrinksWith
 			EXPECT_GT(renderedHeight, 0.0f);
 		}
 }
+
+TEST(GraphicsMidiModel, FreeEditorPicksClippedSliverEndCapFromSide)
+{
+	graphics::MidiModel model{graphics::MidiModelParams{}};
+	model.UpdateModel({{99999u, 1u, 0u, 60u, 100u}}, 100000u);
+	model.SetEditorMorph(1.0f);
+	model.SetEditorPitchRange(60, 24);
+	const auto radius = static_cast<float>(std::clamp(70.0 * std::log(100000.0) - 600.0, 50.0, 400.0));
+	const auto z = -(0.5f / 24.0f * 2.0f - 1.0f) * radius * 0.78f;
+	const auto y = 3.0f + 100.0f / 127.0f * 4.0f;
+	const auto hit = model.PickEditorNote({radius + 20.0f, y, z}, {-40.0f, 0, 0});
+	ASSERT_TRUE(hit);
+	EXPECT_EQ(hit->Sample, 99999u);
+	EXPECT_EQ(hit->Pitch, 60u);
+	EXPECT_FALSE(model.PickEditorNote({radius + 20.0f, y + 20.0f, z}, {-40.0f, 0, 0}));
+	model.SetEditorMorph(0.5f);
+	EXPECT_FALSE(model.PickEditorNote({radius + 20.0f, y, z}, {-40.0f, 0, 0}));
+}
+
+TEST(GraphicsMidiModel, FreeEditorPicksNearestNoteFace)
+{
+	graphics::MidiModel model{graphics::MidiModelParams{}};
+	model.UpdateModel({{100u, 100u, 0u, 60u, 30u}, {100u, 100u, 1u, 60u, 127u}}, 1000u);
+	model.SetEditorMorph(1.0f);
+	model.SetEditorPitchRange(60, 24);
+	const auto radius = 50.0f;
+	const auto z = -(0.5f / 24.0f * 2.0f - 1.0f) * radius * 0.78f;
+	const auto hit = model.PickEditorNote({-35.0f, 30.0f, z}, {0, -60, 0});
+	ASSERT_TRUE(hit);
+	EXPECT_EQ(hit->Sample, 150u);
+	EXPECT_EQ(hit->Pitch, 60u);
+}

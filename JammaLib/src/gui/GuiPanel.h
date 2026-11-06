@@ -28,6 +28,17 @@ namespace gui
 		static constexpr unsigned int ControlHeight = 36u;
 		static constexpr unsigned int TextPadding = 8u;
 	};
+	// A value forwarded between GUI owners; all bounds use viewport coordinates.
+	// Reserve the final part of a collapse for docking Inputs above the retracted
+	// body. Reversing the same progress lowers Inputs before revealing that body.
+	struct GuiTopPanelLayout
+	{
+		static constexpr float DockingPhase = 0.25f;
+		utils::Size2d Viewport{};
+		utils::Rect2d PresentedBounds{}, ExpandedBounds{}, CollapsedBounds{};
+		float Progress = 1.0f;
+		bool Expanded = true;
+	};
 	// UI-owned binding adapter. Tree indices stay local; command identity stays
 	// explicit, and the weak owner prevents a binding extending Scene lifetime.
 	class GuiCommandReceiver : public base::ActionReceiver

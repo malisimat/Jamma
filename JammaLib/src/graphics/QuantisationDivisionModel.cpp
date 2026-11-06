@@ -155,6 +155,7 @@ void QuantisationDivisionModel::SetLoopTakeVisuals(const std::vector<engine::Qua
 	std::vector<float> transforms;
 	std::vector<float> bands;
 	std::vector<float> fillHalfWidths;
+	std::vector<float> midiColours;
 	transforms.reserve(visuals.size() * 16u);
 	bands.reserve(visuals.size() * 8u);
 	fillHalfWidths.reserve(visuals.size() * 8u);
@@ -203,6 +204,7 @@ void QuantisationDivisionModel::SetLoopTakeVisuals(const std::vector<engine::Qua
 			transforms.push_back(radiusScale);
 			bands.push_back(static_cast<float>(division % 2u));
 			fillHalfWidths.push_back(fillHalfWidth);
+			midiColours.push_back(visual.ContainsMidiLoops ? 1.0f : 0.0f);
 		}
 	}
 
@@ -210,7 +212,8 @@ void QuantisationDivisionModel::SetLoopTakeVisuals(const std::vector<engine::Qua
 	SetInstanceAttributes({
 		{ 3u, 4u, std::move(transforms) },
 		{ 4u, 1u, std::move(bands) },
-		{ 5u, 1u, std::move(fillHalfWidths) }
+		{ 5u, 1u, std::move(fillHalfWidths) },
+		{ 6u, 1u, std::move(midiColours) }
 	}, instanceCount);
 }
 

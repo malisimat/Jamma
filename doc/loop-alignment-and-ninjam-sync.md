@@ -1,5 +1,11 @@
 # Loop alignment and NINJAM sync
 
+Global playback rate adds a continuous audible source trajectory to the timing
+maps described here. A map supplies target
+geometry and alignment; it does not overwrite an active fractional cursor on
+every callback. Accepted authority can therefore be **Aligning** before audible
+phase reaches **Following** tolerance.
+
 This document explains the timing model used when Jamma follows a NINJAM
 transport.
 
@@ -8,8 +14,9 @@ transport.
 When sync is active:
 
 1. NINJAM provides a remote interval, tempo, beat count, and current phase.
-2. The audio callback maps elapsed remote time onto Jamma's local source ruler.
-3. Each local audio or MIDI loop follows that ruler using its own length and
+2. The audio callback applies accepted remote timing and maps elapsed time into
+   each recording baseline.
+3. Each local audio or MIDI loop follows its baseline using its own length and
    saved phase.
 4. A timing update changes phase and tempo; it does not resize or rewrite
    local loops.
@@ -64,17 +71,20 @@ stretching: when the rates differ, a source sample may be repeated or skipped.
 
 ## Why each loop keeps its own phase
 
-The sync map is common timing geometry, not a common loop cursor. Each loop
-stores an anchor that relates its current phase to the common source coordinate:
+A sync map describes timing geometry, not a common loop cursor. Takes recorded
+under accepted remote authority retain their source-master interval and BPI.
+Legacy recordings retain AudioHost's shared source map. Each loop stores an
+anchor relating its current phase to the appropriate source coordinate:
 
 ```text
 anchor = local_source_coordinate - loop_phase (mod loop_length)
 loop_phase = local_source_coordinate - anchor (mod loop_length)
 ```
 
-The result is that one common correction moves every loop by the same musical
-amount, while each loop wraps according to its own length. An audio loop and a
-MIDI loop therefore stay aligned without forcing their lengths to match.
+A correction moves entities recorded under the same baseline by the same source
+amount; recordings from other baselines interpret the accepted remote phase in
+their own source units. Each loop still wraps by its own length, preserving audio,
+MIDI and intentional offsets without forcing lengths to match.
 
 When a map is first established, playable loops capture anchors. Later timing
 corrections and map rebases retain those anchors. A loop without an anchor may
@@ -151,6 +161,15 @@ to `[-1, 1]`.
 Because it is independent of NINJAM authority, the offset can still be applied
 while disconnected or after entering `NoSync`.
 
+Negative **Local phase offset (loops)** values advance local audio and MIDI
+playback into later recorded content, making events sound earlier; positive
+values delay them. The source-cursor displacement is `-offset * master_length`,
+also used for new-take alignment. Returning to zero restores the original
+alignment. Local monitoring, NINJAM local audio export and editor playheads follow
+that displacement, including the local master. The shared transport origin,
+metronome, NINJAM timing, remote stations and MIDI editor's blue master-start
+tick stay fixed. The displayed and saved control values retain their sign.
+
 ## Implementation boundaries
 
 The main ownership boundaries are:
@@ -185,3 +204,115 @@ The core behavior is covered by the timing tests in
 [`NinjamTimingIntegration_Tests.cpp`](../test/JammaLib_Tests/src/ninjam/NinjamTimingIntegration_Tests.cpp)
 and
 [`LoopTakeTiming_Tests.cpp`](../test/JammaLib_Tests/src/engine/LoopTakeTiming_Tests.cpp).
+
+## Changing server timing while connected
+
+Before any local take exists, accepted BPM/BPI changes replace both remote timing
+and the empty session's source ruler. A first recording therefore uses the current
+server tempo rather than the tempo observed at join. Recording or retained takes
+prevent an empty-session ruler replacement.
+
+**Reclock** now suspends local playback's remote follow without disconnecting.
+Remote observations and the remote metronome continue. The next completed local
+master establishes local timing; only after its audio activation is acknowledged
+does Jamma request that BPM and full BPI using the existing server admin/vote path.
+A tap sequence with one eligible completed take since fresh/reclock reinterprets
+that master and requests its timing too. While a master change is Applying, further taps are busy and leave its preparation
+and server intent unchanged. After acceptance a new tap sequence may request new timing. With additional eligible takes, taps continue to
+select subdivisions instead of changing the server.
+
+A fresh observation confirming both requested BPM and BPI resumes following.
+Jamma aligns local playback with projected server phase; this may audibly jump
+playback. The metronome always remains a reference to actual server timing, not
+the proposed local timing. Other takes retain their own lengths and relative
+offsets. A declined vote, exhausted retry, deadline or invalid/lost remote timing
+leaves playback local; a sent request alone never means the server accepted it.
+The Timing settings page displays whether playback follows the server, is local,
+is waiting for a new master, or is waiting for a server request/observation.
+
+**Sync to server** cancels a pending local tempo request and the previous follow
+choice, including Stay local. It waits for a fresh validated observation even if
+the server BPM/BPI is unchanged, then follows that timing. It does not request a
+server tempo change or erase recorded material/source geometry. Reclock and Sync
+to server therefore have distinct purposes: propose a new local master to the
+server, or follow the server's current timing.
+
+Follow revision and any explicit local source-master interval are retained in
+every complete desired publication. A latest-value mailbox may skip intermediate
+NoSync/replacement values without losing the need to reset stale map anchors.
+
+## Recordings after an accepted remote tempo change
+
+Accepting new remote BPM/BPI establishes the reference for future independent
+recordings. It resets recorded-master eligibility like Reclock, while retaining
+the live remote clock, beat grid and metronome. It does not clear Timer, infer
+server tempo from the next take or send another server vote. The first completed
+independent take becomes the new recorded-master reference; older takes and their
+overdubs do not take that role. Acknowledgement of an explicit local reclock/tap
+request retains the master just established locally.
+
+At actual capture admission, each new take freezes the full accepted source
+interval/BPI. A take recorded at 128 BPM plays at normal recorded speed while the
+remote tempo remains 128 BPM, even if older 113 BPM material remains present.
+It still consumes every accepted remote phase/drift correction; normal recorded
+speed does not mean free-running playback. Subsequent remote changes discipline
+it using the same integer map/anchor behavior as earlier recordings, expressed in
+its own source units. This also works across repeated tempo changes and after
+all previous takes are ditched, without needing another remote geometry change.
+
+Overdub/punch retains the source take's baseline. NoSync clears active maps and
+anchors without erasing source geometry or moving cursors. Optional JAM take
+fields `recordingMasterLengthSamps` and `recordingBeatsPerInterval` preserve the
+baseline across save/load; missing/invalid pairs use the legacy shared-map path.
+Source sample counts follow the existing material loader's unchanged sample
+counts when device sample rate changes; active follow maps are reset.
+
+Remote recording lengths use rational boundaries from the full interval/BPI,
+including complete intervals with odd BPI. Rounded beat samples remain a local
+grain representation and cannot replace authoritative remote interval lengths or
+beat counts. Disconnected local-grain inference and quantization-off duration
+remain on their existing paths. BlockSync and ContinuousSync retain their existing
+map/anchor advancement; this change does not introduce a new stretching algorithm.
+
+Verbose PlaybackTake diagnostics include `recordingMaster` and `recordingBpi`.
+Zero means the legacy shared source map applies; a nonzero value identifies the
+take's own recording ruler, so the global PlaybackTrace map is not mistakenly
+interpreted as the rate for every take.
+
+## Metronome
+
+The metronome defaults off locally. Once the first master establishes Timer's
+interval, it accents the master start and divides that interval into local BPI
+beats, using rounded rational sample boundaries. Reclock silences the local
+click until the next master establishes timing. The Level slider below the
+toggle scales monitor output from silence to the original click level.
+
+An actual NINJAM session entry enables the metronome once, remembering the local
+toggle; departure restores that choice. Changing the toggle while connected
+lasts for that session. Remote observations and tempo retries do not enable it
+again. Connected clicks always use actual server geometry and phase, including
+Stay local and Reclock; unavailable remote timing remains silent. Clicks are
+mixed after NINJAM export and are never sent to the server.
+
+A completed local take (including muted MIDI material), or an explicit completed
+audio leaf, can be chosen with **Use as master** or Shift-click. The same accepted
+source with unchanged source geometry is a no-op even while a different remote
+ruler/subdivision is active. The same pending choice is also a no-op; a different
+choice is busy until activation or bounded cancellation completes. Assignment
+suspends follow only after eligibility is accepted. Cancellation restores prior
+follow intent and request deadlines; it does not rewind fresh server observations.
+
+JAM saves retain the accepted Station/Take reference and optional explicit audio
+leaf separately from the transport ruler. Missing or invalid references preserve
+saved timing without guessing a chosen source from its length. Legacy audio
+references remain supported. Saving waits while a master change is Applying;
+Reset may still cancel it through the existing quiescent boundary.
+
+## Pause and resume
+
+The main settings panel opens on Timing. Its **Pause** button stops the audio
+device stream, freezing local transport, loop playback and recording, monitoring,
+and NINJAM audio processing. **Resume** restarts that stream from the retained
+local position; server-follow timing may realign it to the live server.
+Pause is temporary: it is not saved in a JAM or rig, and loading a session starts
+running. The button is unavailable while device or session operations are busy.

@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 #include <glm/glm.hpp>
@@ -17,11 +18,10 @@
 #include "../base/DrawContext.h"
 #include "../base/GuiElement.h"
 #include "../engine/Loop.h"
-#include "../spectral/AudioSpectralEditor.h"
+#include "../spectral/SpectralEditor.h"
 #include "../engine/LoopTake.h"
 #include "../engine/Station.h"
 #include "../graphics/Camera.h"
-#include "../gui/GuiButton.h"
 #include "../gui/GuiLabel.h"
 #include "../gui/GuiNumericInput.h"
 #include "../resources/ResourceLib.h"
@@ -71,6 +71,11 @@ namespace midi
 		void UpdateUi(const glm::mat4& viewProjection);
 		void ApplyToModels();
 		void Draw(base::DrawContext& ctx);
+		// Caller holds Host::SceneMutex; receives committed selection identities, never hover.
+		void SelectionCommittedLocked(std::span<const std::shared_ptr<base::GuiElement>> selected);
+        void ResetSession();
+		void ClearSelectionHistory() { _selectionHistory.clear(); }
+        std::span<const std::weak_ptr<base::GuiElement>> CommittedSelectionHistoryLocked() const noexcept { return _selectionHistory; }
 		bool FindCandidate(std::shared_ptr<engine::LoopTake>& take,
 			std::shared_ptr<engine::Loop>& audioLoop,
 			std::shared_ptr<MidiLoop>& midiLoop) const;
@@ -89,6 +94,11 @@ namespace midi
 		bool IsEditingText() const noexcept { return _channelInput->HasFocus(); }
 		utils::Position2d ChannelControlPosition() const { return _channelInput->Position(); }
 		bool SelectMidiChannel(unsigned int channel); // Human-facing channel 1..16.
+		LoopGridGeometry::EditHandle EditHandle() const noexcept
+		{ return !IsReady() || _orbitDragging ? LoopGridGeometry::EditHandle::None
+			: _gesture ? _gesture->EditHandle() : _editHandle; }
+		bool NumericCursorAt(utils::Position2d point) const
+		{ return IsReady() && (_channelDragging || (_channelInput->IsVisible() && _channelInput->HitTest(_channelInput->ParentToLocal(point)))); }
 		bool OwnsPointer() const noexcept { return _pointerOwned; }
 		bool IsOrbitDragging() const noexcept { return _orbitDragging; }
 		float Morph() const noexcept { return _blend; }
@@ -99,6 +109,7 @@ namespace midi
 		std::shared_ptr<engine::LoopTake> Take() const noexcept { return _take.lock(); }
 
 	private:
+		friend class LoopGridEditorTestAccess;
 		enum class State { Closed, Opening, Active, Closing };
 		struct CursorEntry
 		{
@@ -107,9 +118,8 @@ namespace midi
 		};
 
 		static actions::ActionResult _Eaten();
-		static utils::Position2d _ButtonPosition(utils::Size2d size);
 		static float _MidiRadius(std::uint32_t lengthSamps) noexcept;
-		static std::shared_ptr<MidiLoop> _InitialMidiLoop(const engine::LoopTake& take);
+		static std::shared_ptr<MidiLoop> _InitialMidiLoop(const engine::LoopTake& take, bool selectedOnly = true);
 
 		void _Layout();
 		void _SetFeedback(const std::string& message);
@@ -118,6 +128,8 @@ namespace midi
 			const std::shared_ptr<engine::Loop>& audioLoop,
 			const std::shared_ptr<MidiLoop>& midiLoop) const;
 		bool _Validate() const;
+		bool _IsSelectedMemberLocked(const std::shared_ptr<base::GuiElement>& target) const;
+		std::vector<std::weak_ptr<base::GuiElement>> _selectionHistory;
 		void _AcquireRevisionCursor(const std::shared_ptr<MidiLoop>& midiLoop);
 		void _FitPitchRange(const std::shared_ptr<MidiLoop>& midiLoop);
 		glm::mat4 _ModelMatrix() const;
@@ -150,7 +162,6 @@ namespace midi
 		void _UpdateIdleHover();
 		void _ClearIdleHover(bool clearCache = false);
 		void _CheckGesture();
-		bool _HandleButton(actions::TouchAction action);
 
 	private:
 		Host _host;
@@ -159,14 +170,14 @@ namespace midi
 		std::weak_ptr<engine::Station> _station;
 		std::weak_ptr<engine::LoopTake> _take;
 		std::weak_ptr<engine::Loop> _audioLoop;
-		spectral::AudioSpectralEditor _audioEditor;
+		spectral::SpectralEditor _audioEditor;
 		// UI-only controls/capture. Worker requests copy values; Close cancels capture.
-		spectral::AudioSpectralControls _audioControls;
+		spectral::SpectralControls _audioControls;
 		bool _audioNavigation = false;
         bool _audioPan = false;
 		bool _audioBandPreview = false;
 		utils::Position2d _audioViewPointerAnchor{};
-		graphics::AudioSpectralViewport _audioCapturedViewport, _audioCapturedTimeViewport;
+		graphics::SpectralViewport _audioCapturedViewport, _audioCapturedTimeViewport;
 		bool _audioStroke = false;
 		std::deque<bool> _pendingAudioUndo; // At most sixteen release-adjacent history keys.
 		bool _audioBroadband = false;
@@ -193,9 +204,9 @@ namespace midi
 		bool _orbitDragging = false;
 		float _blend = 0.0f;
 		float _audioSurfaceBlend = 0.0f;
-		bool _buttonPressed = false;
-		bool _buttonShowsClose = false;
+		LoopGridGeometry::EditHandle _editHandle = LoopGridGeometry::EditHandle::None;
 		bool _pointerOwned = false;
+		double _freeDragOffsetU = 0.0, _freeDragOffsetV = 0.0;
 		int _pointerButton = -1;
 		bool _relativePointer = false;
 		bool _pitchView = false;
@@ -203,6 +214,7 @@ namespace midi
 		utils::Position2d _pitchViewPointerAnchor{};
 		std::uint64_t _gestureModelGeneration = 0u;
 		bool _previewDirty = false;
+		bool _altEdgeAvailable = false;
 		// UI-owned: retain pixels so camera and pitch-range changes refresh stationary hover.
 		std::optional<utils::Position2d> _idleHoverPointer;
 		bool _idleHoverCacheValid = false;
@@ -219,7 +231,6 @@ namespace midi
 		std::shared_ptr<actions::MidiEditRevisionCursor> _revisionCursor;
 		std::vector<CursorEntry> _revisionCursors;
 		std::string _feedbackText;
-		std::shared_ptr<gui::GuiButton> _button;
 		std::shared_ptr<gui::GuiLabel> _feedback;
 		std::shared_ptr<gui::GuiLabel> _modeLabel;
 		std::shared_ptr<gui::GuiNumericInput> _channelInput;

@@ -207,8 +207,9 @@ RigCoordinator::SnapshotPtr RigCoordinator::RefreshRuntimeAvailability(unsigned 
 	return snapshot;
 }
 
-RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& candidateRig)
+RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& candidateRig, EditReceiptPtr* receipt)
 {
+	if (receipt) receipt->reset();
 	bool enabled = true;
 	if (!_editsEnabled.compare_exchange_strong(enabled, false, std::memory_order_acq_rel)) return EditResult::EditsDisabled;
 	const auto revision = _AllocateRevision();
@@ -225,7 +226,9 @@ RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& ca
 		_editsEnabled.store(true, std::memory_order_release);
 		return EditResult::ValidationFailed;
 	}
-	if (candidateRig.User != accepted->Rig.User)
+	auto lifecycleSettings = candidateRig.User;
+	lifecycleSettings.Loop.MidiSeamMergeWindowMs = accepted->Rig.User.Loop.MidiSeamMergeWindowMs;
+	if (lifecycleSettings != accepted->Rig.User)
 	{
 		_editsEnabled.store(true, std::memory_order_release);
 		return EditResult::ReinitialisationRequired;
@@ -233,7 +236,58 @@ RigCoordinator::EditResult RigCoordinator::SubmitCandidate(const io::RigFile& ca
 	auto snapshot = _BuildSnapshot(revision, candidateRig, _stationDescriptors, _stations,
 		accepted->AvailableAdcChannels, accepted->AvailableMidiDevices, _triggerParams, accepted);
 	if (!snapshot) { _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
+	if (receipt)
+	{
+		_editReceipt = std::make_shared<EditReceipt>(revision);
+		*receipt = _editReceipt;
+	}
 	_staged.store(snapshot, std::memory_order_release);
+	return EditResult::Pending;
+}
+
+RigCoordinator::EditResult RigCoordinator::SubmitStationRename(
+	const std::shared_ptr<Station>& station, std::uint64_t expectedRevision, const std::string& name)
+{
+	const auto accepted = Accepted();
+	const auto found = std::find(_stations.begin(), _stations.end(), station);
+	if (!accepted || accepted->Revision != expectedRevision || !station || station->IsRemote() ||
+		found == _stations.end() || name.empty() || name.find_first_of("\r\n\0", 0, 3) != std::string::npos ||
+		name.find_first_not_of(" \t") == std::string::npos)
+		return EditResult::ValidationFailed;
+	if (station->Name() == name) return EditResult::ValidationFailed;
+	for (const auto& other : _stations)
+		if (other != station && other->Name() == name) return EditResult::ValidationFailed;
+	auto rig = accepted->Rig;
+	for (size_t i = 0; i < rig.Triggers.size(); ++i)
+	{
+		if (accepted->Triggers[i].BoundReceiver == station) rig.Triggers[i].StationTarget = name;
+		else if (!accepted->Triggers[i].BoundReceiver && rig.Triggers[i].StationTarget == name)
+			return EditResult::ValidationFailed;
+	}
+	// Reuse rig validation for the exact UTF-8 name contract, even in an empty rig.
+	auto validation = rig;
+	io::RigFile::Trigger probe;
+	probe.Id = "station-name-validation";
+	probe.Name = name;
+	validation.Triggers = { probe };
+	if (!io::RigFile::Validate(validation)) return EditResult::ValidationFailed;
+	bool enabled = true;
+	if (!_editsEnabled.compare_exchange_strong(enabled, false, std::memory_order_acq_rel))
+		return EditResult::EditsDisabled;
+	if (_shuttingDown.load(std::memory_order_acquire)) return EditResult::TransitionRejected;
+	auto descriptors = _stationDescriptors;
+	descriptors[static_cast<size_t>(found - _stations.begin())].Name = name;
+	auto snapshot = _BuildSnapshot(_AllocateRevision(), rig, descriptors, _stations,
+		accepted->AvailableAdcChannels, accepted->AvailableMidiDevices, _triggerParams, accepted);
+	if (!snapshot) { _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
+	for (size_t i = 0; i < snapshot->Triggers.size(); ++i)
+		if (snapshot->Triggers[i].BoundReceiver != accepted->Triggers[i].BoundReceiver)
+		{ _editsEnabled.store(true, std::memory_order_release); return EditResult::ValidationFailed; }
+	auto prepared = std::const_pointer_cast<RigSnapshot>(snapshot);
+	prepared->RenamedStation = station;
+	prepared->StationName = name;
+	prepared->StationDescriptors = std::move(descriptors);
+	_staged.store(std::move(snapshot), std::memory_order_release);
 	return EditResult::Pending;
 }
 
@@ -288,6 +342,7 @@ RigCoordinator::EditResult RigCoordinator::CompleteTransition(std::uint64_t revi
 		return EditResult::TransitionRejected;
 	if (!acceptedAtAudioBoundary || _shuttingDown.load(std::memory_order_acquire))
 	{
+		_CompleteEditReceipt(revision, EditOutcome::Rejected);
 		_staged.store({}, std::memory_order_release);
 		_editsEnabled.store(!_shuttingDown.load(std::memory_order_acquire), std::memory_order_release);
 		return EditResult::TransitionRejected;
@@ -366,8 +421,14 @@ bool RigCoordinator::PromoteAcknowledged()
 		_stations = *pending->Stations;
 		_stationDescriptors = pending->StationDescriptors;
 	}
+	if (pending->RenamedStation)
+	{
+		pending->RenamedStation->SetName(pending->StationName);
+		_stationDescriptors = pending->StationDescriptors;
+	}
 	auto old = _accepted.exchange(pending, std::memory_order_acq_rel);
 	_pending.store({}, std::memory_order_release);
+	_CompleteEditReceipt(pending->Revision, EditOutcome::Accepted);
 	if (old)
 	{
 		std::scoped_lock lock(_retiringMutex);
@@ -391,6 +452,7 @@ void RigCoordinator::Shutdown() noexcept
 
 void RigCoordinator::ReleaseAfterReadersStopped()
 {
+	if (_editReceipt) _CompleteEditReceipt(_editReceipt->Revision, EditOutcome::Rejected);
 	_pending.store({}, std::memory_order_release);
 	_staged.store({}, std::memory_order_release);
 	_accepted.store({}, std::memory_order_release);
@@ -398,6 +460,13 @@ void RigCoordinator::ReleaseAfterReadersStopped()
 	_retiring.clear();
 	_stations.clear();
 	_stationDescriptors.clear();
+}
+
+void RigCoordinator::_CompleteEditReceipt(std::uint64_t revision, EditOutcome outcome) noexcept
+{
+	if (!_editReceipt || _editReceipt->Revision != revision) return;
+	_editReceipt->Outcome.store(outcome, std::memory_order_release);
+	_editReceipt.reset();
 }
 
 bool RigCoordinator::MergeHardwarePreferences(const std::optional<io::UserConfig::AudioSettings>& audio,

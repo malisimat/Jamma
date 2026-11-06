@@ -2,6 +2,7 @@
 #include "io/Json.h"
 #include "io/RigFile.h"
 #include <sstream>
+#include <limits>
 
 using io::Json;
 using io::RigFile;
@@ -426,5 +427,25 @@ TEST(RigFile, MigratesLegacyZeroAndDiagnosesNonzeroOrConflictingGlobalPredelay)
 			json.insert(triggerId, "\"preDelayMs\":0,");
 			EXPECT_FALSE(RigFile::FromStream(std::stringstream(json)));
 		}
+	}
+}
+
+TEST(RigFile, MidiSeamWindowDefaultsValidatesAndRoundTrips)
+{
+	auto rig = RigFileTest::Read(RigFileTest::Trigger());
+	ASSERT_TRUE(rig); EXPECT_EQ(200u,rig->User.Loop.MidiSeamMergeWindowMs);
+	for (const auto ms : {0u,30u,200u,500u,(std::numeric_limits<unsigned int>::max)()})
+	{
+		rig->User.Loop.MidiSeamMergeWindowMs=ms;
+		std::stringstream saved; ASSERT_TRUE(RigFile::ToJsonStream(*rig,saved));
+		const auto restored=RigFile::FromStream(std::move(saved));
+		ASSERT_TRUE(restored); EXPECT_EQ(ms,restored->User.Loop.MidiSeamMergeWindowMs);
+	}
+	for (const auto value : {"-1","4294967296","30.5","true","null","\"30\""})
+	{
+		auto json=RigFile::DefaultJson;
+		const auto at=json.find("\"midiSeamMergeWindowMs\":200"); ASSERT_NE(std::string::npos,at);
+		json.replace(at,std::string("\"midiSeamMergeWindowMs\":200").size(),std::string("\"midiSeamMergeWindowMs\":")+value);
+		EXPECT_FALSE(RigFile::FromStream(std::stringstream(json))) << value;
 	}
 }

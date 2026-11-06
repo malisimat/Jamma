@@ -1,0 +1,56 @@
+# MIDI channel routing at Station, LoopTake and Loop depths
+
+Each rack has its own channel buttons and cables controlling live and recorded MIDI reaching that rack. UI and saved channel numbers are 1-16; event channels are 0-15. Take/output indices identify playback sources, not MIDI channels.
+
+- Disabled: admit no new events to that rack on that channel. Existing recorded material stays stored.
+- Enabled with no cables: broadcast once to every MIDI-capable rack plugin.
+- Enabled with cables: send only to the selected identities. Unavailable identities remain cables and are silent until recovered; they do not cause broadcast.
+
+Disabling clears the channel's cables. Re-enabling starts in broadcast mode and does not replay suppressed attacks or reconstruct held physical notes. Removing the last cable also returns to broadcast. A cancelled, invalid or stale cable gesture leaves the prior state intact.
+
+New Station, LoopTake and audio Loop owners enable all 16 channels without cables. Loading restores saved channel choices, including an empty enabled set. The supported JAM representation is `allowedmidichannels` plus `midiChannelRoutes` (16 objects containing `plugins` identity lists). Obsolete output-index/live-plugin maps and the separate explicit-empty mode are no longer supported or migrated. Recorded material on a saved disabled channel is silent at that rack until enabled. Child masks and routes are saved on their owning take or audio Loop. New owners use all channels; this feature adds no legacy migration mode.
+
+Channel selections never compound. For example, a Station accepting channels 4 and 5 still passes wired input channels 2 and 3 to a Take accepting those channels, and the Take passes every wired channel to its audio Loops. A parent filter or cable edit retires only its own destinations, without releasing child notes or pedals. Device wiring determines which Station hierarchy receives input; the rack masks do not change physical input history or recording admission.
+
+At LoopTake depth, the modern MIDI expander beside the take fader opens that take's grid and VST rack. At Loop depth, select one audio Loop to use its grid and rack; multiple or no selected audio Loops leave the target unavailable. The right expander still opens audio channel faders and routing. All/None and plugin cables work on the currently named rack owner.
+
+A Take rack receives its own recorded MIDI streams. An audio Loop rack receives the streams of its containing Take; audio channel indices are not MIDI stream identities. The Station rack continues to receive all of its takes. Configuring instruments at several depths layers them. A pure MIDI Take renders its Take instruments without creating dummy audio recordings. Individual MIDI-stream racks are not part of audio Loop selection.
+
+Rack routing is published with the enabled mask in one immutable audio snapshot. Per-destination/channel retirement counters preserve removal history across skipped publications, so disable/re-enable cannot revive a queued recorded attack. Delivery retires only obsolete ownership and retains bounded release retries to the old processor. Recorded MIDI retains destination suffix latency compensation and non-realtime flags; live MIDI stays immediate. Trigger routing and external MIDI output remain independent of rack routing.
+
+Live ingress rejects attacks/controllers with no destination in the accepted whole-hierarchy snapshot before they consume queue capacity or the 64-event block budget. Note-offs and sustain-up remain admitted to release existing ownership. Queued attacks/controllers carry the accepted graph generation and wait if an in-flight callback still holds an older graph; a bounded producer snapshot-read failure conservatively admits input using the published generation floor. Physical history and recording observation remain independent of this playback admission.
+
+Whole-hierarchy delivery is admitted off the audio callback with bounded rack, destination, source and binding counts. If a proposed update exceeds those limits, Rack info explains that it has not been applied; the previous complete render/routing topology continues until the configuration is reduced. Pending edited configuration can still be saved. Input forwarding itself shares prepared destination/source views rather than copying event queues per hierarchy level.
+
+Ordinary note edits preserve the articulation actually accepted by each playback source. MidiLoop assigns transient loop-local tokens to raw attacks; sort, trim and undo carry those sidecars, while saved MIDI bytes and flags remain unchanged. A covered start/end extension keeps its sounding voice; deletion, changed channel/pitch or lost current coverage releases only that voice. Velocity affects future attacks. A new onset already behind the source cursor waits for its next occurrence. Source/grid replacement and explicit relocation retain full recovery, including skipped publications; canceled grid preparation cannot become an ordinary edit's recovery lineage.
+
+Recorded destination queues carry the same transient articulation provenance through the existing source-to-device mapping. An unrelated edit retains queued short-note attacks/releases even when the source cursor has passed their end. A deleted or moved queued attack is discarded; a queued release follows the accepted articulation's revised endpoint, including circular start extensions, after the source has already accepted its old release. Delivery adjusts endpoint deltas in the already mapped clock and retains destination ownership and partial-release retries. Preparation is off callback; adoption is bounded by 4096 source articulations and 2048 output slots, and each of at most 1024 scheduled entries per destination uses a bounded binary token lookup. No snapshot pointer escapes its reader lease.
+
+Broadcast excludes destinations already supplied MIDI by an upstream plugin when such a connection exists. The current host has no plugin-to-plugin MIDI forwarding: `VstChain` processes rack audio, `IVstPlugin` exposes MIDI input only, and `Vst3Plugin` sets `processData.outputEvents` to null. Consequently all MIDI-capable rack plugins are independent direct broadcast recipients today. Audio order alone must never be used to infer MIDI supply. Adding plugin MIDI output/forwarding in future must prepare that actual connection topology and exclude its supplied destinations from direct broadcast.
+
+## VST rack order
+
+Drag a row's `=` handle onto another row to move it to that final slot position.
+Slot buttons still open editors; sockets and cables still edit MIDI routing.
+Release outside the visible rack, press Escape, right-click, or lose pointer
+capture to cancel. A changed owner or rack revision also cancels the gesture.
+Take racks show the take's slots, or the single selected loop's slots at Loop
+depth. The order is saved with each owning station, take or loop.
+
+Moving a slot retains its plugin instance, editor, state and automation identity.
+Explicit MIDI cables continue to address the same identities, including unavailable
+slots. Multiple instruments remain additive; effects process the accumulated bus
+in slot order. Intermediate or non-producing arrangements are allowed. A failed
+slot remains silent and recoverable; unsupported layouts are never reinterpreted.
+
+## MIDI editor edge timing
+
+With the MIDI editor open, Alt+primary (without Ctrl/Shift) captures a highlighted note edge while the time grid stays enabled. The other endpoint stays fixed. Release Alt while holding the mouse to snap only that edge to the nearest valid local/remote rational boundary and continue snapped dragging. Press Alt again to resume free movement from the current preview. Release the mouse first to commit the free edge; later Alt release does not change it. A stationary edge click is a no-op. Tiny notes choose an edge on the first drag direction and retain it.
+
+Free edge edits convert both paired endpoints to ExactTiming after resolving the original source pair. Display/source phase conversion, channel, velocity and transient attack identity remain intact. The accepted mouse-up publishes one revision and undo entry; modifier transitions affect detached preview only. Escape, input/focus loss, channel/viewport changes and stale source identity cancel through the existing editor path. Ctrl+primary remains snapped note move and right-button editing retains velocity behavior. Off-grid notes retain their normal hit/delete/move behavior.
+
+## Retained station mute
+
+Station mute retains intent even when the station is empty. An explicit station click still changes existing take/loop user flags; recording a new take, finishing overdub/punch or auditioning a replacement source cannot defeat the retained parent condition. New takes inherit the condition before membership publication. Recorded audio is gated at the final take mixers (including take-plugin output), and recorded MIDI uses normal held-note/pedal cleanup with retries. An already-muted parent initializes a new final mixer at zero so its first block is silent. Capture, playback phase, bounce source samples and the Station live monitoring/rack route continue independently. Empty-station display includes retained intent; deleting all takes retains it, while explicit Station reset clears it.
+
+JAM Station `muted` saves retained intent, defaults to false when absent, and is installed before restored takes. It is not Rig configuration. Child exports exclude inherited parent mute. Groups save Station raw intent separately from child user/source state: recording source suppression remains persistently recallable under the existing policy, while inherited Station mute never becomes a child user flag. All mute previews combine the parent gate. Global mute changes existing child flags while preserving current/latest desired retained Station intent; it does not invent a parent barrier that would prevent selected-take inversion/audition. Global unmute clears parent and child intent, including empty stations; recall includes empty stations; the existing prepared application carries pinned Station/take/loop owners with the same version/topology admission and target bound. Pending desired flags, including Station owners, govern group stores and repeated selected inversion before an audio receipt.

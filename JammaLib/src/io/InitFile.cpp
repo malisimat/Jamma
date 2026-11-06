@@ -6,9 +6,18 @@
 ///////////////////////////////////////////////////////////
 
 #include "InitFile.h"
+#include "TextReadWriter.h"
 
 using namespace io;
 using audio::BehaviourParams;
+
+std::optional<InitFile> InitFile::Read(const std::wstring& path)
+{
+	TextReadWriter reader;
+	auto contents = reader.Read(path, 1000000u);
+	if (!contents) return std::nullopt;
+	return FromStream(std::stringstream(std::move(std::get<0>(*contents))));
+}
 
 const std::string InitFile::DefaultJson(std::string roamingPath)
 {
@@ -174,6 +183,18 @@ std::optional<InitFile> InitFile::FromStream(std::stringstream ss)
 					ini.Logging.Event = std::get<std::string>(loggingJson.KeyValues["event"]);
 			}
 
+			auto ninjamIter = loggingJson.KeyValues.find("ninjam");
+			if (ninjamIter != loggingJson.KeyValues.end())
+			{
+				if (loggingJson.KeyValues["ninjam"].index() == 4)
+					ini.Logging.Ninjam = std::get<std::string>(loggingJson.KeyValues["ninjam"]);
+			}
+			else
+			{
+				// Preserve verbose NINJAM diagnostics for existing defaults files.
+				ini.Logging.Ninjam = ini.Logging.Event;
+			}
+
 			auto uiIter = loggingJson.KeyValues.find("ui");
 			if (uiIter != loggingJson.KeyValues.end())
 			{
@@ -205,6 +226,7 @@ bool InitFile::ToStream(InitFile ini, std::stringstream& ss)
 	logging.KeyValues["audio"] = ini.Logging.Audio;
 	logging.KeyValues["event"] = ini.Logging.Event;
 	logging.KeyValues["ui"] = ini.Logging.Ui;
+	logging.KeyValues["ninjam"] = ini.Logging.Ninjam;
 	root.KeyValues["logging"] = logging;
 
 	return Json::ToStream(root, ss);

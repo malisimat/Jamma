@@ -190,6 +190,8 @@ namespace midi
 			return cells;
 		}
 
+		// Shared by pointer feedback and the note shader (values are shader-facing).
+		enum class EditHandle { None = 0, Move = 1, Left = 2, Right = 3, Both = 4 };
 		enum class HitZone { LeftEdge, Body, RightEdge };
 		static HitZone NoteHitZone(double pointerX, double leftX, double rightX,
 			double minimumEdgePixels = 6.0) noexcept
@@ -203,6 +205,17 @@ namespace midi
 			if (pointerX - leftX <= edge)
 				return HitZone::LeftEdge;
 			return rightX - pointerX <= edge ? HitZone::RightEdge : HitZone::Body;
+		}
+
+		static EditHandle NoteEditHandle(double sample, double start, double end, double pixelsPerSample) noexcept
+		{
+			if (pixelsPerSample > 0.0 && (end - start) * pixelsPerSample <= 12.0) return EditHandle::Both;
+			switch (NoteHitZone(sample * pixelsPerSample, start * pixelsPerSample, end * pixelsPerSample))
+			{
+			case HitZone::LeftEdge: return EditHandle::Left;
+			case HitZone::RightEdge: return EditHandle::Right;
+			default: return EditHandle::Move;
+			}
 		}
 
 		static bool ValidNoteSpan(std::uint32_t start, std::uint32_t duration,

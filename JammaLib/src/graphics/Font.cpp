@@ -2,6 +2,7 @@
 #include "Font.h"
 #include "GlDeleteQueue.h"
 #include "../resources/ResourcePaths.h"
+#include "../utils/StringUtils.h"
 #include <iterator>
 #include <limits>
 
@@ -34,7 +35,7 @@ std::optional<std::unique_ptr<Font>> Font::Load(FontOptions::FontSize size,
 	std::weak_ptr<ShaderResource> shader)
 {
 	auto datafilename = GetFontFilename();
-	std::ifstream inputFile(datafilename.c_str(), std::ios::binary);
+	std::ifstream inputFile(utils::DecodeUtf8(datafilename), std::ios::binary);
 	if (!inputFile)
 	{
 		std::cout << "[LOAD] failed to open font resource " << datafilename << "\n";
@@ -66,6 +67,8 @@ std::string Font::GetFontName(FontOptions::FontSize size)
 {
 	switch (size)
 	{
+	case FontOptions::FONT_COMPACT:
+		return "font_compact";
 	case FontOptions::FONT_TINY:
 		return "font_tiny";
 	case FontOptions::FONT_SMALL:
@@ -86,6 +89,7 @@ std::string Font::GetFontFilename()
 
 unsigned int Font::GetPixelHeightForSize(FontOptions::FontSize size)
 {
+	if (size == FontOptions::FONT_COMPACT) return 10u;
 	return FontOptions::BasePixelHeight + (unsigned int)size;
 }
 
@@ -96,6 +100,8 @@ FontOptions::FontSize Font::GetClosestSizeForPixelHeight(unsigned int desiredPix
 
 	for (auto size : FontOptions::FontSizes)
 	{
+		// Compact text is opt-in for narrow rack controls, not automatic sizing.
+		if (size == FontOptions::FONT_COMPACT) continue;
 		const unsigned int pixelHeight = GetPixelHeightForSize(size);
 		const unsigned int distance = (pixelHeight > desiredPixelHeight)
 			? (pixelHeight - desiredPixelHeight)
@@ -305,7 +311,13 @@ GLuint Font::InitVertexArray(const std::string& str, GLenum usage, GLuint* outPo
 	return vao;
 }
 
-void Font::Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars)
+bool Font::CanDraw() const noexcept
+{
+	const auto shader = _shader.lock();
+	return _atlasTexture != 0u && !_glyphs.empty() && shader && shader->GetId() != 0u;
+}
+
+void Font::Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars, glm::vec3 color)
 {
 	auto shader = _shader.lock();
 	if (!shader)
@@ -319,6 +331,7 @@ void Font::Draw(GlDrawContext& ctx, GLuint vertexArray, unsigned int numChars)
 	}
 
 	ctx.SetUniform("TextureSampler", 0u);
+	ctx.SetUniform("TextColor", color);
 	glUseProgram(shader->GetId());
 	shader->SetUniforms(ctx);
 	glBindVertexArray(vertexArray);

@@ -116,7 +116,7 @@ FILE* WavReadWriter::OpenSoundIn(char *fileName, struct SoundHeader *hdr)
 	// Check file name for .wav extension
 	if (fileName[strlen(fileName) - 1] == 'v')
 	{
-		myfile = _fsopen(fileName, "rb", _SH_DENYNO);
+		myfile = _wfsopen(utils::DecodeUtf8(fileName).c_str(), L"rb", _SH_DENYNO);
 
 		if (myfile == NULL)
 		{
@@ -143,7 +143,7 @@ FILE *WavReadWriter::OpenSoundOut(char *fileName, struct SoundHeader *hdr)
 	// Check file name for .wav extension
 	if (fileName[strlen(fileName) - 1] == 'v')
 	{
-		err = fopen_s(&myfile, fileName, "wb");
+		err = _wfopen_s(&myfile, utils::DecodeUtf8(fileName).c_str(), L"wb");
 
 		if (err != 0)
 		{

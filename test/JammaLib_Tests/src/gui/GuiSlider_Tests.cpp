@@ -2,9 +2,11 @@
 #include "resources/ResourceLib.h"
 #include "gui/GuiSlider.h"
 #include "gui/GuiRack.h"
+#include "gui/SceneSettingsControls.h"
 #include "audio/AudioMixer.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 using base::ActionReceiver;
@@ -26,14 +28,17 @@ public:
 public:
 	virtual actions::ActionResult OnAction(actions::GuiAction action) override
 	{
+		++_actionCount;
 		_value = std::get<actions::GuiAction::GuiDouble>(action.Data).Value;
 		return { true, "", "", actions::ACTIONRESULT_DEFAULT, nullptr, std::weak_ptr<base::GuiElement>() };
 	};
 	
 	bool IsExpected() { return _expected == _value; }
 	double Value() const { return _value; }
+	unsigned int ActionCount() const { return _actionCount; }
 
 private:
+	unsigned int _actionCount = 0u;
 	double _expected;
 	double _value;
 };
@@ -449,14 +454,14 @@ struct FaderClickTestData
 	static std::shared_ptr<GuiSlider> Fader(double gain)
 	{
 		auto params = DecibelSliderTestData::Params();
-		params.InitValue = gain; params.ResetToUnityOnDoubleClick = true;
+		params.InitValue = gain; params.DefaultValue = 1.0;
 		return std::make_shared<GuiSlider>(params);
 	}
 };
 
 TEST(GuiSlider, DoubleClickGainResetUsesExactUnityAndPreservesUndo)
 {
-	for (const auto gain : { 0.0, 0.25, 4.0, 1.0 })
+	for (const auto gain : { 0.0, 0.25, 4.0 })
 	{
 		auto slider = FaderClickTestData::Fader(gain);
 		auto receiver = std::make_shared<MockedSliderReceiver>(1.0); slider->SetReceiver(receiver);
@@ -475,12 +480,218 @@ TEST(GuiSlider, DoubleClickGainResetUsesExactUnityAndPreservesUndo)
 	}
 }
 
+TEST(GuiSlider, SemanticDefaultsRemainExactAcrossScalesAndQuantisation)
+{
+	for (const auto scenario : {0, 1, 2})
+	{
+		auto params = scenario == 1 ? DecibelSliderTestData::Params() :
+			GuiSliderParams::PanelHorizontal("", 120u);
+		params.Min = scenario == 1 ? 0.0 : -1.0;
+		params.InitValue = scenario == 1 ? 2.0 : -0.75;
+		params.DefaultValue = scenario == 1 ? 0.4 : scenario == 2 ? 0.3 : 0.5;
+		params.Steps = scenario == 2 ? 4u : 0u;
+		auto slider = std::make_shared<GuiSlider>(params);
+		auto receiver = std::make_shared<MockedSliderReceiver>(0.0);
+		slider->SetReceiver(receiver);
+		const auto point = utils::Position2d{10, 10};
+		const auto first = FaderClickTestData::Click(slider, 0, point);
+		EXPECT_FALSE(first.Undo); EXPECT_EQ(0u, receiver->ActionCount());
+		const auto reset = FaderClickTestData::Click(slider, 100, point);
+		EXPECT_DOUBLE_EQ(*params.DefaultValue, slider->Value());
+		EXPECT_DOUBLE_EQ(*params.DefaultValue, receiver->Value());
+		EXPECT_EQ(1u, receiver->ActionCount()); ASSERT_TRUE(reset.Undo);
+		EXPECT_TRUE(reset.Undo->Undo()); EXPECT_DOUBLE_EQ(params.InitValue, slider->Value());
+		// Restored/last-used values never replace the semantic default.
+		slider->SetValue(params.InitValue, true);
+		FaderClickTestData::Click(slider, 200, point);
+		FaderClickTestData::Click(slider, 300, point);
+		EXPECT_DOUBLE_EQ(*params.DefaultValue, slider->Value());
+	}
+}
+
+TEST(GuiSlider, HeldSecondPressDoesNotReset)
+{
+	auto slider = FaderClickTestData::Fader(0.25);
+	auto receiver = std::make_shared<MockedSliderReceiver>(0.0); slider->SetReceiver(receiver);
+	FaderClickTestData::Click(slider, 0);
+	slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_DOWN, 100));
+	const auto release = slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_UP, 10000));
+	EXPECT_FALSE(release.Undo); EXPECT_EQ(0u, receiver->ActionCount());
+	EXPECT_DOUBLE_EQ(0.25, slider->Value());
+}
+
+TEST(GuiSlider, AlreadyDefaultDoubleClickEmitsNoActionOrUndo)
+{
+	auto slider = FaderClickTestData::Fader(1.0);
+	auto receiver = std::make_shared<MockedSliderReceiver>(0.0); slider->SetReceiver(receiver);
+	FaderClickTestData::Click(slider, 0);
+	const auto reset = FaderClickTestData::Click(slider, 100);
+	EXPECT_TRUE(reset.IsEaten); EXPECT_FALSE(reset.Undo);
+	EXPECT_EQ(0u, receiver->ActionCount()); EXPECT_DOUBLE_EQ(1.0, slider->Value());
+}
+
+TEST(GuiSlider, InvalidSemanticDefaultsCannotPublishInvalidValues)
+{
+	for (const auto value : {-1.0, 11.0, std::numeric_limits<double>::infinity(),
+		std::numeric_limits<double>::quiet_NaN()})
+	{
+		auto params = DecibelSliderTestData::Params();
+		params.InitValue = 0.25; params.DefaultValue = value;
+		auto slider = std::make_shared<GuiSlider>(params);
+		auto receiver = std::make_shared<MockedSliderReceiver>(0.0); slider->SetReceiver(receiver);
+		FaderClickTestData::Click(slider, 0);
+		const auto release = FaderClickTestData::Click(slider, 100);
+		EXPECT_FALSE(release.Undo); EXPECT_EQ(0u, receiver->ActionCount());
+		EXPECT_DOUBLE_EQ(0.25, slider->Value());
+	}
+}
+
+TEST(GuiSlider, CancellationAndMismatchedPointerCannotCompleteReset)
+{
+	for (const auto scenario : {0, 1, 2, 3})
+	{
+		auto slider = FaderClickTestData::Fader(0.25);
+		auto receiver = std::make_shared<MockedSliderReceiver>(0.0); slider->SetReceiver(receiver);
+		FaderClickTestData::Click(slider, 0);
+		slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_DOWN, 100));
+		if (scenario == 0)
+		{
+			auto cancel = DecibelSliderTestData::Move(50);
+			cancel.Origin = TouchMoveAction::Provenance::CaptureCancellation;
+			slider->OnAction(cancel);
+		}
+		else if (scenario == 1)
+		{
+			auto wrong = FaderClickTestData::Pointer(TouchAction::TOUCH_UP, 110);
+			wrong.Touch = TouchAction::TOUCH_FINGER;
+			slider->OnAction(wrong);
+		}
+		else if (scenario == 2)
+		{
+			auto wrong = FaderClickTestData::Pointer(TouchAction::TOUCH_UP, 110);
+			wrong.Index = 1;
+			slider->OnAction(wrong);
+		}
+		else slider->ClearPointerState();
+		const auto release = slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_UP, 120));
+		EXPECT_FALSE(release.Undo); EXPECT_DOUBLE_EQ(0.25, slider->Value());
+		EXPECT_EQ(0u, receiver->ActionCount());
+		FaderClickTestData::Click(slider, 200); // Cancellation also forgets the first click.
+		EXPECT_DOUBLE_EQ(0.25, slider->Value());
+	}
+}
+
+class AcceptedSliderReceiver : public MockedSliderReceiver
+{
+public:
+	AcceptedSliderReceiver(const std::shared_ptr<GuiSlider>& slider) : MockedSliderReceiver(0.0), _slider(slider) {}
+	actions::ActionResult OnAction(GuiAction action) override
+	{
+		auto result = MockedSliderReceiver::OnAction(action);
+		if (auto slider = _slider.lock()) slider->SetValue(0.75, true);
+		return result;
+	}
+private:
+	std::weak_ptr<GuiSlider> _slider;
+};
+
+class ClampedSliderReceiver : public MockedSliderReceiver
+{
+public:
+	ClampedSliderReceiver(const std::shared_ptr<GuiSlider>& slider) : MockedSliderReceiver(0.0), _slider(slider) {}
+	actions::ActionResult OnAction(GuiAction action) override
+	{
+		auto result = MockedSliderReceiver::OnAction(action);
+		if (auto slider = _slider.lock()) slider->SynchronizeValueFromOwner(std::min(Value(), 0.5));
+		return result;
+	}
+private:
+	std::weak_ptr<GuiSlider> _slider;
+};
+
+TEST(GuiSlider, AcceptedOwnerClampDuringDragKeepsUndoAndCancellationBaseline)
+{
+	for (const bool cancel : {false, true})
+	{
+		auto params = GuiSliderParams::PanelHorizontal("", 110u); params.InitValue = 0.25;
+		auto slider = std::make_shared<GuiSlider>(params);
+		auto receiver = std::make_shared<ClampedSliderReceiver>(slider); slider->SetReceiver(receiver);
+		slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_DOWN, 0, {10, 10}));
+		TouchMoveAction move; move.Position = {110, 10}; slider->OnAction(move);
+		EXPECT_DOUBLE_EQ(0.5, slider->Value()); EXPECT_EQ(1u, receiver->ActionCount());
+		if (cancel)
+		{
+			slider->ClearPointerState();
+			EXPECT_DOUBLE_EQ(0.25, slider->Value()); EXPECT_EQ(2u, receiver->ActionCount());
+			slider->ClearPointerState(); EXPECT_EQ(2u, receiver->ActionCount());
+		}
+		const auto release = slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_UP, 10, move.Position));
+		if (cancel) EXPECT_FALSE(release.Undo);
+		else
+		{
+			EXPECT_EQ(1u, receiver->ActionCount()); ASSERT_TRUE(release.Undo);
+			EXPECT_TRUE(release.Undo->Undo()); EXPECT_DOUBLE_EQ(0.25, slider->Value());
+			EXPECT_EQ(2u, receiver->ActionCount());
+		}
+	}
+}
+
+TEST(GuiSlider, QuantisedSignedSliderPreservesOffGridRestoreWithoutPointerMotion)
+{
+	auto params = GuiSliderParams::PanelHorizontal("", 410u);
+	params.Min = -1.0; params.Max = 1.0; params.Steps = 400u; params.InitValue = 0.1234;
+	auto slider = std::make_shared<GuiSlider>(params);
+	slider->OnAction(FaderClickTestData::Pointer(TouchAction::TOUCH_DOWN, 0, {10, 10}));
+	TouchMoveAction move; move.Position = {10, 10}; slider->OnAction(move);
+	EXPECT_DOUBLE_EQ(0.1234, slider->Value());
+	slider->ClearPointerState(); EXPECT_DOUBLE_EQ(0.1234, slider->Value());
+}
+
+TEST(GuiSlider, OwnerCanSynchronizeAcceptedResetWithoutRecursion)
+{
+	auto slider = FaderClickTestData::Fader(0.25);
+	auto receiver = std::make_shared<AcceptedSliderReceiver>(slider); slider->SetReceiver(receiver);
+	FaderClickTestData::Click(slider, 0);
+	const auto reset = FaderClickTestData::Click(slider, 100);
+	EXPECT_EQ(1u, receiver->ActionCount()); EXPECT_DOUBLE_EQ(1.0, receiver->Value());
+	EXPECT_DOUBLE_EQ(0.75, slider->Value()); ASSERT_TRUE(reset.Undo);
+}
+
+TEST(GuiSlider, MetronomeLevelOwnerResetsRestoredLevelToUnity)
+{
+	gui::SceneSettingsControls controls(0u, 0.0, io::JamFile::GlobalMidiQuantState{});
+	const auto slider = controls.MetronomeLevel();
+	slider->SetValue(0.2, true);
+	auto receiver = std::make_shared<MockedSliderReceiver>(1.0); slider->SetReceiver(receiver);
+	FaderClickTestData::Click(slider, 0, {10, 10});
+	FaderClickTestData::Click(slider, 100, {10, 10});
+	EXPECT_DOUBLE_EQ(1.0, slider->Value()); EXPECT_EQ(1u, receiver->ActionCount());
+}
+
+TEST(GuiSlider, PlaybackRateDoubleClickSurvivesOwnerRefresh)
+{
+	gui::SceneSettingsControls controls(0u, 0.0, io::JamFile::GlobalMidiQuantState{});
+	const auto entries = controls.SettingsEntries();
+	const auto entry = std::find_if(entries.begin(), entries.end(), [](const auto& item) { return item.Label == "Playback rate"; });
+	ASSERT_NE(entries.end(), entry);
+	const auto slider = std::dynamic_pointer_cast<GuiSlider>(entry->Control);
+	ASSERT_TRUE(slider);
+	auto receiver = std::make_shared<MockedSliderReceiver>(0.0); slider->SetReceiver(receiver);
+	controls.RefreshPlaybackRate(0.5, 0.5, false, false, 0.0, 0u);
+	FaderClickTestData::Click(slider, 0, {10, 10});
+	controls.RefreshPlaybackRate(0.5, 0.5, false, false, 0.0, 0u);
+	FaderClickTestData::Click(slider, 100, {10, 10});
+	EXPECT_DOUBLE_EQ(0.0, slider->Value());
+	EXPECT_DOUBLE_EQ(1.0, std::exp2(receiver->Value()));
+	EXPECT_EQ(1u, receiver->ActionCount());
+}
+
 TEST(GuiSlider, DoubleClickRequiresNearbyTimedClicksAndGainOptIn)
 {
 	for (const auto scenario : { 0, 1, 2, 3, 4 })
 	{
 		auto params = DecibelSliderTestData::Params();
-		params.InitValue = 0.25; params.ResetToUnityOnDoubleClick = scenario != 0;
+		params.InitValue = 0.25; if (scenario != 0) params.DefaultValue = 1.0;
 		auto slider = std::make_shared<GuiSlider>(params);
 		FaderClickTestData::Click(slider, 0);
 		if (scenario == 3) { slider->SetVisible(false); slider->SetVisible(true); }

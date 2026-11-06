@@ -55,6 +55,21 @@ namespace gui
 			params.MinSize = { SecondaryMinWidth, DefaultHeight };
 			return params;
 		}
+		static GuiToggleParams RackExpander(bool facesLeft)
+		{
+			GuiToggleParams params;
+			params.Texture = "arrow";
+			params.OverTexture = "arrow_over";
+			params.DownTexture = "arrow_down";
+			params.ToggledTexture = "arrowup2";
+			params.ToggledOverTexture = "arrowup2_over";
+			params.ToggledDownTexture = "arrowup2_down";
+			params.TextureShader = "texture";
+			params.Rot90 = true;
+			// Rotation swaps texture axes, so vertical UV flip reverses the on-screen horizontal arrow.
+			params.FlipV = facesLeft;
+			return params;
+		}
 		GuiToggleParams() :
 			GuiButtonParams(),
 			ToggleIndex(0u),
@@ -94,7 +109,6 @@ namespace gui
 
 	public:
 		virtual void SetSize(utils::Size2d size) override;
-		virtual void Draw(base::DrawContext& ctx) override;
 
 		virtual actions::ActionResult OnAction(actions::TouchAction action) override;
 		virtual actions::ActionResult OnAction(actions::KeyAction action) override;
@@ -105,6 +119,7 @@ namespace gui
 		void SetToggleIndex(unsigned int index) { _toggleIndex = index; }
 
 	protected:
+		graphics::Image& _CurrentTexture() override;
 		virtual void _InitResources(resources::ResourceLib& resourceLib, bool forceInit) override;
 		virtual void _ReleaseResources() override;
 		virtual void _OnToggleChange(bool bypassUpdates);

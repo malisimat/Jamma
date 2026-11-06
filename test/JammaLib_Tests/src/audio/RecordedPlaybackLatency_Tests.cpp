@@ -160,6 +160,10 @@ TEST(RecordedPlaybackLatency, RoutineDisciplineCorrectionPreservesQueuedImpulse)
 class RecordedLatencyImpulsePlugin final : public vst::IVstPlugin
 {
 public:
+	RecordedLatencyImpulsePlugin(vst::RenderRole role = vst::RenderRole::Effect,
+		unsigned int delay = LatencySamps, bool acceptsMidi = true)
+		: ReportedLatencySamps(static_cast<int>(delay)), _role(role), _delay(delay), _acceptsMidi(acceptsMidi) {}
+
 	bool PreInit(const std::wstring&) override { return true; }
 	bool Load(const std::wstring&, float, unsigned int, unsigned int,
 		vst::HostedLayoutMode = vst::HostedLayoutMode::Exact) override
@@ -196,11 +200,12 @@ public:
 						{
 							sample += 1.0f;
 							LastAttackSample = _events[eventIndex].sampleOffset;
+							if (AttackCount == 0u) FirstAttackSample = LastAttackSample;
 							++AttackCount;
 						}
 				_ring[channel][_writeIndex] = sample;
 				channels[channel][index] = _ring[channel][
-					(_writeIndex + _ring[channel].size() - LatencySamps) % _ring[channel].size()];
+					(_writeIndex + _ring[channel].size() - _delay) % _ring[channel].size()];
 			}
 			_writeIndex = (_writeIndex + 1u) % _ring[0].size();
 		}
@@ -230,15 +235,30 @@ public:
 	utils::Size2d GetEditorSize() const noexcept override { return { 0u, 0u }; }
 	bool IsLoaded() const noexcept override { return _loaded; }
 	const std::string& Name() const noexcept override { return _name; }
+	vst::RenderRole Role() const noexcept override { return _role; }
+	vst::MidiInputCapabilities MidiInput() const noexcept override { return {_acceptsMidi, _acceptsMidi, _acceptsMidi}; }
 	void SetBypassed(bool value) noexcept override { _bypassed = value; }
 	bool IsBypassed() const noexcept override { return _bypassed; }
 	int GetLatencySamples() const noexcept override { return ReportedLatencySamps; }
+	void QueueLatencyChange(unsigned int latency) noexcept { _pendingLatency = static_cast<int>(latency); }
+	void PollPendingChanges() const noexcept override
+	{
+		if (_pendingLatency < 0) return;
+		ReportedLatencySamps = _pendingLatency;
+		_delay = static_cast<unsigned int>(_pendingLatency);
+		_pendingLatency = -1;
+	}
 
 	static constexpr unsigned int LatencySamps = 29u;
-	int ReportedLatencySamps = static_cast<int>(LatencySamps);
+	mutable int ReportedLatencySamps = static_cast<int>(LatencySamps);
 	std::uint32_t LastAttackSample = 0u;
+	std::uint32_t FirstAttackSample = 0u;
 	unsigned int AttackCount = 0u;
 private:
+	vst::RenderRole _role;
+	mutable unsigned int _delay;
+	mutable int _pendingLatency = -1;
+	bool _acceptsMidi;
 	bool _loaded = false;
 	bool _bypassed = false;
 	bool _processed = false;
@@ -270,7 +290,7 @@ TEST(RecordedPlaybackLatency, CapturedAudioAndMidiImpulsesMeetAtTheDac)
 	load.JobActionType = actions::JobAction::JOB_LOADVST;
 	load.VstPath = L"fake-recorded-latency.dll";
 	load.PreInitPlugin = plugin;
-	station->OnAction(load);
+	if(!load.VstManaged) EXPECT_TRUE(station->StageVstJob(load)); station->OnAction(load);
 	engine::LoopTakeParams takeParams;
 	takeParams.Size = { 100, 100 };
 	takeParams.FadeSamps = constants::DefaultFadeSamps;
@@ -342,7 +362,7 @@ TEST(RecordedPlaybackLatency, RapidReferenceChangeWaitsForAudioTransitionBeforeM
 	load.JobActionType = actions::JobAction::JOB_LOADVST;
 	load.VstPath = L"fake-transition.dll";
 	load.PreInitPlugin = plugin;
-	station->OnAction(load);
+	if(!load.VstManaged) EXPECT_TRUE(station->StageVstJob(load)); station->OnAction(load);
 	engine::LoopTakeParams takeParams;
 	takeParams.Size = { 100, 100 };
 	auto take = std::make_shared<engine::LoopTake>(takeParams,
@@ -396,7 +416,7 @@ static void VerifyRecordedCaptureOriginWithHardwareRuler(bool returningOutput,
 	load.JobActionType = actions::JobAction::JOB_LOADVST;
 	load.VstPath = L"fake-capture-ruler.dll";
 	load.PreInitPlugin = plugin;
-	station->OnAction(load);
+	if(!load.VstManaged) EXPECT_TRUE(station->StageVstJob(load)); station->OnAction(load);
 	engine::LoopTakeParams takeParams;
 	takeParams.Size = { 100, 100 };
 	takeParams.FadeSamps = constants::DefaultFadeSamps;
@@ -533,7 +553,7 @@ static void VerifySerialRenderedPath(bool indexedStationDestination)
 		job.JobActionType = actions::JobAction::JOB_LOADVST;
 		job.VstPath = path;
 		job.PreInitPlugin = plugin;
-		target->OnAction(job);
+		if constexpr (requires { target->StageVstJob(job); }) { if(!job.VstManaged) EXPECT_TRUE(target->StageVstJob(job)); } target->OnAction(job);
 		target->CommitChanges();
 		return plugin;
 	};
@@ -544,7 +564,7 @@ static void VerifySerialRenderedPath(bool indexedStationDestination)
 	if (indexedStationDestination)
 	{
 		secondStationEffect = loadDelay(station, L"fake-station-synth.dll");
-		station->SetMidiVstRoute(0u, 1u);
+		ASSERT_TRUE(station->SetMidiChannelRoute(0u, {{secondStationEffect->StateId()}}, station->RackRevision()));
 	}
 	station->AddTake(take);
 	station->CommitChanges();
@@ -591,7 +611,7 @@ TEST(RecordedPlaybackLatency, IndexedStationMidiSkipsUpstreamPluginDelay)
 	VerifySerialRenderedPath(true);
 }
 
-TEST(RecordedPlaybackLatency, ThreeLevelLatencySaturatesWithoutWrapping)
+TEST(RecordedPlaybackLatency, ExcessiveStationLatencyIsRejectedWithoutWrappingChildSum)
 {
 	audio::MergeMixBehaviourParams merge;
 	engine::StationParams stationParams;
@@ -618,7 +638,7 @@ TEST(RecordedPlaybackLatency, ThreeLevelLatencySaturatesWithoutWrapping)
 		job.JobActionType = actions::JobAction::JOB_LOADVST;
 		job.VstPath = pluginPath;
 		job.PreInitPlugin = plugin;
-		target->OnAction(job);
+		if constexpr (requires { target->StageVstJob(job); }) { if(!job.VstManaged) EXPECT_TRUE(target->StageVstJob(job)); } target->OnAction(job);
 		target->CommitChanges();
 	};
 	loadMaxLatency(loop, L"fake-max-loop.dll");
@@ -628,8 +648,13 @@ TEST(RecordedPlaybackLatency, ThreeLevelLatencySaturatesWithoutWrapping)
 	station->CommitChanges();
 	EXPECT_EQ((std::numeric_limits<unsigned int>::max)() - 1u,
 		take->RecordedPlaybackLatencySamps());
-	EXPECT_EQ((std::numeric_limits<unsigned int>::max)(),
+	// Unsupported Station rack latency is rejected before publication. The
+	// unchanged legacy child paths retain their exact non-wrapping sum.
+	EXPECT_EQ((std::numeric_limits<unsigned int>::max)() - 1u,
 		station->RecordedPlaybackLatencySamps());
+	EXPECT_EQ(0, station->CurrentVstLatencySamps());
+	EXPECT_TRUE(station->GetVstRackSlot().Failed);
+	EXPECT_FALSE(station->RackDiagnostic().empty());
 	EXPECT_FALSE(station->CanConfigureRecordedPlaybackCompensation(
 		(std::numeric_limits<unsigned int>::max)()));
 	EXPECT_FALSE(station->ConfigureRecordedPlaybackCompensation(
@@ -1157,7 +1182,231 @@ TEST(RecordedPlaybackLatency, TemporaryWideFadeChecksRequestedSeamAndOneWrapOnly
     EXPECT_FALSE(pending->CanUseTemporaryPlayback((std::numeric_limits<unsigned long>::max)(),1));
     pending->SetBodyPlayIndex(0);
     const auto before=reads;
-    std::array<float,4> output{};
-    EXPECT_EQ(0u,pending->ReadBlock(output.data(),-static_cast<int>(constants::MaxLoopFadeSamps),4,&dac,trigger,-8));
-    EXPECT_EQ(before,reads); // legacy out-of-body offset remains recorded-only
+    std::array<float,4> output{},normalized{};
+    // Signed offsets normalize on the logical body ruler (Step8), including DAC
+    // temporary reads. -F maps to phase16 here, whose four samples are proven.
+    constexpr auto offset=-static_cast<int>(constants::MaxLoopFadeSamps);
+    const auto body=(length-constants::MaxLoopFadeSamps%length)%length;
+    ASSERT_EQ(16u,body); ASSERT_TRUE(pending->CanUseTemporaryPlayback(body,4u));
+    recorded->SetBodyPlayIndex(0u);
+    ASSERT_EQ(4u,recorded->ReadBlock(normalized.data(),offset,4u));
+    ASSERT_EQ(4u,pending->ReadBlock(output.data(),offset,4u,&dac,trigger,-8));
+    EXPECT_EQ(normalized,output); EXPECT_EQ(before+4u,reads);
+}
+
+
+class RecordedChildLatencyFixture
+{
+public:
+	static constexpr unsigned int BlockSize = 128u;
+	static constexpr unsigned int MusicalSample = 37u;
+	static constexpr unsigned int LoopLength = 256u;
+	static constexpr unsigned int Reference = 100u;
+
+	explicit RecordedChildLatencyFixture(bool withAudio)
+	{
+		audio::MergeMixBehaviourParams merge;
+		engine::StationParams stationParams;
+		stationParams.Name = "child-latency";
+		stationParams.Size = {200u,200u};
+		Station = std::make_shared<engine::Station>(stationParams,
+			engine::Station::GetMixerParams(stationParams.Size,merge));
+		Station->SetupBuffers(BlockSize);
+		Station->SetNumBusChannels(1u);
+		Station->SetNumDacChannels(1u);
+		Station->SetAllowedMidiChannels({});
+		engine::LoopTakeParams takeParams;
+		takeParams.Id = "child-latency-take";
+		takeParams.Size = {100u,100u};
+		Take = std::make_shared<engine::LoopTake>(takeParams,
+			engine::LoopTake::GetMixerParams(takeParams.Size,merge));
+		Take->Record({},Station->Name(),{0u},{"source"},{},0u,0u);
+		EXPECT_TRUE(Take->RecordMidiEvent(midi::MidiEvent::MakeNoteOn(MusicalSample,0u,60u,100u),"source",MusicalSample));
+		EXPECT_TRUE(Take->RecordMidiEvent(midi::MidiEvent::MakeNoteOff(MusicalSample+1u,0u,60u),"source",MusicalSample+1u));
+		Take->Play(0u,LoopLength,0u);
+		if (withAudio)
+		{
+			Loop = MakeRecordedLatencyImpulseLoop(MusicalSample);
+			Take->AddLoop(Loop);
+		}
+		Take->CommitChanges();
+		Station->AddTake(Take);
+		Station->CommitChanges();
+	}
+
+	template<class Owner>
+	std::shared_ptr<RecordedLatencyImpulsePlugin> Install(const std::shared_ptr<Owner>& owner,
+		vst::RenderRole role, unsigned int latency, bool acceptsMidi = false)
+	{
+		auto plugin = std::make_shared<RecordedLatencyImpulsePlugin>(role,latency,acceptsMidi);
+		actions::JobAction job;
+		job.JobActionType = actions::JobAction::JOB_LOADVST;
+		job.VstPath = L"fake-child-latency.dll";
+		job.PreInitPlugin = plugin;
+		if constexpr (requires { owner->StageVstJob(job); }) EXPECT_TRUE(owner->StageVstJob(job));
+		owner->OnAction(job);
+		owner->CommitChanges();
+		EXPECT_TRUE(plugin->IsLoaded());
+		return plugin;
+	}
+
+	template<class Owner>
+	void Connect(const std::shared_ptr<Owner>& owner,
+		std::initializer_list<std::shared_ptr<RecordedLatencyImpulsePlugin>> plugins)
+	{
+		std::array<midi::MidiChannelRoute,16> routes{};
+		for (const auto& plugin : plugins) routes[0].PluginIds.push_back(plugin->StateId());
+		owner->SetAllowedMidiChannels({1});
+		EXPECT_TRUE(owner->SetMidiChannelRoutes(routes,owner->RackRevision()));
+		owner->CommitChanges();
+		Station->CommitChanges();
+	}
+
+	std::vector<float> Render(unsigned int blocks = 4u)
+	{
+		std::vector<float> samples;
+		for (auto block = 0u; block < blocks; ++block)
+		{
+			auto sink = std::make_shared<RecordedLatencyCaptureBus>(BlockSize);
+			Station->Zero(BlockSize,base::Audible::AUDIOSOURCE_LOOPS);
+			Station->WriteBlock(sink,nullptr,0,BlockSize,block*BlockSize);
+			Station->EndMultiPlay(BlockSize);
+			samples.insert(samples.end(),sink->Sink->Samples.begin(),sink->Sink->Samples.end());
+		}
+		return samples;
+	}
+
+	static void ExpectImpulses(const std::vector<float>& samples,
+		std::initializer_list<unsigned int> positions, float amplitude)
+	{
+		for (auto sample = 0u; sample < samples.size(); ++sample)
+		{
+			const auto expected = std::find(positions.begin(),positions.end(),sample) != positions.end() ? amplitude : 0.0f;
+			EXPECT_NEAR(expected,samples[sample],1.0e-4f) << "output sample " << sample;
+		}
+	}
+
+	std::shared_ptr<engine::Station> Station;
+	std::shared_ptr<engine::LoopTake> Take;
+	std::shared_ptr<engine::Loop> Loop;
+};
+
+TEST(RecordedPlaybackLatency, ChildLoopInstrumentMeetsSourceAudioBeforeAncestorEffectsWithoutDoubleDelay)
+{
+	RecordedChildLatencyFixture fixture(true);
+	fixture.Install(fixture.Loop,vst::RenderRole::Effect,7u);
+	const auto instrument = fixture.Install(fixture.Loop,vst::RenderRole::Instrument,11u,true);
+	fixture.Install(fixture.Loop,vst::RenderRole::Effect,13u);
+	fixture.Install(fixture.Take,vst::RenderRole::Effect,17u);
+	fixture.Install(fixture.Station,vst::RenderRole::Effect,19u);
+	fixture.Take->SetAllowedMidiChannels({});
+	fixture.Connect(fixture.Loop,{instrument});
+	ASSERT_TRUE(fixture.Station->ConfigureRecordedPlaybackCompensation(fixture.Reference));
+	const auto samples = fixture.Render();
+	const auto output = fixture.MusicalSample + fixture.Reference;
+	// Material crosses 7+13+17+19 samples; the injected voice crosses 11+13+17+19.
+	// Their separate compensation must merge them at exactly the same sample.
+	fixture.ExpectImpulses(samples,{output,output+fixture.LoopLength},2.0f);
+	EXPECT_EQ(2u,instrument->AttackCount);
+	EXPECT_EQ(fixture.MusicalSample + fixture.Reference - 60u,instrument->FirstAttackSample);
+}
+
+TEST(RecordedPlaybackLatency, PureMidiTakeInstrumentSkipsUpstreamAndAdditiveAncestorLatency)
+{
+	RecordedChildLatencyFixture fixture(false);
+	fixture.Install(fixture.Take,vst::RenderRole::Effect,5u);
+	const auto instrument = fixture.Install(fixture.Take,vst::RenderRole::Instrument,11u,true);
+	fixture.Install(fixture.Take,vst::RenderRole::Effect,13u);
+	fixture.Install(fixture.Station,vst::RenderRole::Effect,17u);
+	fixture.Install(fixture.Station,vst::RenderRole::Instrument,31u);
+	fixture.Install(fixture.Station,vst::RenderRole::Effect,19u);
+	fixture.Connect(fixture.Take,{instrument});
+	ASSERT_TRUE(fixture.Take->GetLoops().empty());
+	EXPECT_EQ(60u,fixture.Station->RecordedPlaybackLatencySamps());
+	ASSERT_TRUE(fixture.Station->ConfigureRecordedPlaybackCompensation(fixture.Reference));
+	const auto samples = fixture.Render();
+	const auto output = fixture.MusicalSample + fixture.Reference;
+	fixture.ExpectImpulses(samples,{output,output+fixture.LoopLength},1.0f);
+	EXPECT_EQ(2u,instrument->AttackCount);
+	EXPECT_EQ(fixture.MusicalSample + fixture.Reference - 60u,instrument->FirstAttackSample);
+}
+
+TEST(RecordedPlaybackLatency, ParallelTakeInstrumentsUseTheirOwnSuffixAndMeetAtDac)
+{
+	RecordedChildLatencyFixture fixture(false);
+	fixture.Install(fixture.Take,vst::RenderRole::Effect,7u);
+	const auto first = fixture.Install(fixture.Take,vst::RenderRole::Instrument,11u,true);
+	const auto second = fixture.Install(fixture.Take,vst::RenderRole::Instrument,31u,true);
+	fixture.Install(fixture.Take,vst::RenderRole::Effect,13u);
+	fixture.Install(fixture.Station,vst::RenderRole::Effect,17u);
+	fixture.Connect(fixture.Take,{first,second});
+	EXPECT_EQ(61u,fixture.Station->RecordedPlaybackLatencySamps());
+	ASSERT_TRUE(fixture.Station->ConfigureRecordedPlaybackCompensation(fixture.Reference));
+	const auto samples = fixture.Render();
+	const auto output = fixture.MusicalSample + fixture.Reference;
+	fixture.ExpectImpulses(samples,{output,output+fixture.LoopLength},2.0f);
+	EXPECT_EQ(2u,first->AttackCount);
+	EXPECT_EQ(2u,second->AttackCount);
+	EXPECT_EQ(fixture.MusicalSample + fixture.Reference - 41u,first->FirstAttackSample);
+	EXPECT_EQ(fixture.MusicalSample + fixture.Reference - 61u,second->FirstAttackSample);
+}
+
+TEST(RecordedPlaybackLatency, LiveChildNotesKeepNaturalLatencyWhileRecordedNotesUseReference)
+{
+	RecordedChildLatencyFixture fixture(false);
+	const auto instrument = fixture.Install(fixture.Take,vst::RenderRole::Instrument,11u,true);
+	fixture.Install(fixture.Take,vst::RenderRole::Effect,13u);
+	fixture.Install(fixture.Station,vst::RenderRole::Effect,17u);
+	fixture.Connect(fixture.Take,{instrument});
+	ASSERT_TRUE(fixture.Station->ConfigureRecordedPlaybackCompensation(fixture.Reference));
+	ASSERT_TRUE(fixture.Station->TryEnqueueImmediateLiveMidi(midi::MidiEvent::MakeNoteOn(5u,0u,64u,100u)));
+	ASSERT_TRUE(fixture.Station->TryEnqueueImmediateLiveMidi(midi::MidiEvent::MakeNoteOff(6u,0u,64u)));
+	const auto samples = fixture.Render(2u);
+	fixture.ExpectImpulses(samples,{5u+41u,fixture.MusicalSample+fixture.Reference},1.0f);
+	EXPECT_EQ(2u,instrument->AttackCount);
+	EXPECT_EQ(5u,instrument->FirstAttackSample);
+	EXPECT_EQ(fixture.MusicalSample + fixture.Reference - 41u,instrument->LastAttackSample);
+}
+
+
+TEST(RecordedPlaybackLatency, DynamicInstrumentLatencyRefreshesReferenceAndDestinationPathAtEveryDepth)
+{
+	for (auto depth = 0u; depth < 3u; ++depth)
+	{
+		SCOPED_TRACE(depth);
+		RecordedChildLatencyFixture fixture(true);
+		fixture.Install(fixture.Loop,vst::RenderRole::Effect,5u);
+		fixture.Install(fixture.Take,vst::RenderRole::Effect,7u);
+		fixture.Install(fixture.Station,vst::RenderRole::Effect,11u);
+		std::shared_ptr<RecordedLatencyImpulsePlugin> instrument;
+		if (depth == 0u)
+		{
+			instrument = fixture.Install(fixture.Station,vst::RenderRole::Instrument,0u,true);
+			fixture.Connect(fixture.Station,{instrument});
+		}
+		else if (depth == 1u)
+		{
+			instrument = fixture.Install(fixture.Take,vst::RenderRole::Instrument,0u,true);
+			fixture.Connect(fixture.Take,{instrument});
+		}
+		else
+		{
+			instrument = fixture.Install(fixture.Loop,vst::RenderRole::Instrument,0u,true);
+			fixture.Connect(fixture.Loop,{instrument});
+		}
+		EXPECT_EQ(23u,fixture.Station->RecordedPlaybackLatencySamps());
+		instrument->QueueLatencyChange(100u);
+		// The job-side plugin poll and rack refresh are the same path Scene uses.
+		// No rack edit or forced structural publication may mask a stale path cache.
+		fixture.Station->PollPlaybackPluginChanges();
+		fixture.Station->RefreshRackLatency();
+		const auto reference = 100u + (depth == 0u ? 0u : depth == 1u ? 11u : 18u);
+		ASSERT_EQ(reference,fixture.Station->RecordedPlaybackLatencySamps());
+		ASSERT_TRUE(fixture.Station->ConfigureRecordedPlaybackCompensation(reference));
+		const auto samples = fixture.Render();
+		const auto output = fixture.MusicalSample + reference;
+		fixture.ExpectImpulses(samples,{output,output+fixture.LoopLength},2.0f);
+		EXPECT_EQ(2u,instrument->AttackCount);
+		EXPECT_EQ(fixture.MusicalSample,instrument->FirstAttackSample);
+	}
 }

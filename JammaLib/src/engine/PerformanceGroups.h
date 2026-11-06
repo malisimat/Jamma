@@ -18,13 +18,14 @@ namespace engine
         std::string StationId;
         std::string TakeId;
         std::string EntityId;
+        bool operator==(const GroupTargetId&) const = default;
     };
 
     struct GroupMuteState
     {
         GroupTargetId Target;
         bool Muted = false;
-        bool EffectiveMuted = false;
+        bool EffectiveMuted = false; // Child user/source state excludes Station inheritance; preview combines its raw gate.
     };
 
     struct GroupSelectionState
@@ -64,6 +65,7 @@ namespace engine
     public:
         static bool AudibleTake(const MuteGroupSnapshot& snapshot, const GroupTargetId& target)
         {
+            if (StationMuted(snapshot, target.StationId)) return false;
             for (const auto& state : snapshot.Targets)
                 if (state.Target.Kind == GroupTargetKind::Take && state.Target.StationId == target.StationId
                     && state.Target.TakeId == target.TakeId) return !state.Muted && !state.EffectiveMuted;
@@ -71,6 +73,7 @@ namespace engine
         }
         static bool Contains(const MuteGroupSnapshot& snapshot, const GroupTargetId& target)
         {
+            if (StationMuted(snapshot, target.StationId)) return false;
             for (const auto& state : snapshot.Targets)
                 if (!state.Muted && !state.EffectiveMuted && Matches(target, state.Target)) return true;
             return false;
@@ -84,6 +87,7 @@ namespace engine
         static bool ContainsLive(const MuteGroupSnapshot& snapshot, const GroupTargetId& target,
             const std::vector<GroupTargetId>& liveTargets)
         {
+            if (StationMuted(snapshot, target.StationId)) return false;
             for (const auto& state : snapshot.Targets)
                 if (!state.Muted && !state.EffectiveMuted && Matches(target, state.Target)
                     && IsLive(state.Target, liveTargets)) return true;
@@ -97,6 +101,12 @@ namespace engine
             return false;
         }
     private:
+        static bool StationMuted(const MuteGroupSnapshot& snapshot, const std::string& stationId)
+        {
+            for (const auto& state : snapshot.Targets)
+                if (state.Target.Kind == GroupTargetKind::Station && state.Target.StationId == stationId) return state.Muted;
+            return false;
+        }
         static bool IsLive(const GroupTargetId& target, const std::vector<GroupTargetId>& liveTargets)
         {
             for (const auto& live : liveTargets)
